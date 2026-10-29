@@ -1,0 +1,35 @@
+\section{Problem setting and methods}
+\label{sec:method}
+\paragraph{Setting.}
+A benchmark has $N$ items. We have a binary source matrix $Y^S\in\{0,1\}^{m\times N}$ ($m$ source models). A target model $t$ has an unknown full-benchmark accuracy $a_t=\frac1N\sum_{i=1}^N y_{ti}$. A \emph{coreset} $C\subset[N]$ with $|C|=n\ll N$ is chosen using $Y^S$ only; we then observe $y_{tC}$ and output $\hat a_t$. A method is thus a pair (\emph{design}, \emph{estimator}). The same coreset is used for all targets in a split (as in practice, where one subset is run for every checkpoint). Error is measured against the true $a_t$.
+
+\subsection{Designs (how to choose $C$)}
+Each design returns $C$ and population weights $w_i$ with $\sum_{i\in C}w_i\approx1$; for inclusion probability $\pi_i$, $w_i=1/(N\pi_i)$.
+\textbf{Random}: simple random sample without replacement.
+\textbf{Difficulty-stratified}: sort items by source-model accuracy $\bar p_i=\frac1m\sum_j y_{ji}$ and take a systematic sample of size $n$ along this order (equal $\pi_i=n/N$; implicit stratification).
+\textbf{Anchor points}~\citep{vivek2024anchor}: $k$-means with $k=n$ on the item response vectors $Y^S_{\cdot i}$, one medoid per cluster, weighted by cluster size$/N$.
+\textbf{D-optimal (information-based)}: greedily maximise $\log\det$ of the Fisher information of the fitted IRT model, a stand-in for IRT-information selection~\citep{kipnis2025metabench}.
+\textbf{VA-PPS} (variance-aware PPS; ours): $\pi_i=\min\{1,\,n q_i\}$ (water-filled so that $\sum_i\pi_i=n$) with $q_i\propto(1-\lambda)/N+\lambda\, s_i/\sum_k s_k$, $s_i=\sqrt{v_i}$, where $v_i$ is the mean squared residual of the fitted source IRT model on item $i$ (items on which source models are predictable carry little residual variance). Items are drawn by fixed-size systematic sampling along the difficulty order using $\pi_i$, which gives exactly $n$ items, stratification by difficulty, and known $\pi_i$. We use $\lambda=1$ (pure Neyman-type allocation) as the main variant and $\lambda=0.5$ (uniform floor) in ablations.
+
+\begin{proposition}[Neyman allocation for residual correction]\label{prop:neyman}
+Let $r_i=y_{ti}-f_i$ be the residuals of any fixed predictor $f$, and let item $i$ be included independently with probability $\pi_i$ (Poisson sampling). Then $\hat a=\frac1N\sum_i f_i+\frac1N\sum_{i\in C}r_i/\pi_i$ is unbiased for $a_t$ with variance $N^{-2}\sum_i(\pi_i^{-1}-1)r_i^2$. Under $\sum_i\pi_i=n$ and $\pi_i\le1$, this is minimised by $\pi_i\propto|r_i|$ (capped at 1).
+\end{proposition}
+\noindent\emph{Proof.} Unbiasedness: $\mathbb E[\mathbb 1_{i\in C}/\pi_i]=1$. Variance: independent Bernoulli inclusions give $\mathrm{Var}(\mathbb 1_i r_i/\pi_i)=r_i^2(1-\pi_i)/\pi_i$. Minimising $\sum_i r_i^2/\pi_i$ s.t.\ $\sum_i\pi_i=n$ by Lagrange gives $\pi_i\propto|r_i|$; items hitting the cap $\pi_i=1$ are fixed and the remainder re-scaled. $\square$
+
+\noindent Since $r_i$ is unknown for the target, VA-PPS uses $\sqrt{v_i}$, an estimate of $\sqrt{\mathbb E_j r_{ji}^2}$ from source models; this is only a proxy and is not variance-optimal for a target that differs from the sources (the uniform floor $\lambda<1$ protects against $v_i\approx 0$ items on which a shifted target errs). The systematic (rather than Poisson) draw yields fixed $n$; Proposition~\ref{prop:neyman} then holds only approximately, and we evaluate the design empirically.
+
+\subsection{Estimators (how to predict $a_t$)}
+Let $W=\sum_{i\in C}w_i$.
+\textbf{Mean}: $\hat a=\sum_{i\in C}w_iy_{ti}/W$ (the Hajek mean; the plain accuracy on the coreset for equal weights).
+\textbf{Linear calibration}: regress source full accuracies on source coreset accuracies, apply to the target's coreset accuracy.
+\textbf{Ridge}: ridge regression (RidgeCV, penalty chosen by efficient leave-one-out on the source models) from a source model's coreset responses $y_{jC}\in\{0,1\}^n$ to its full accuracy; a representative of the ``learn a map from the coreset to the score'' family (cf.\ Lasso/PCA-type predictors).
+\textbf{IRT family.} We fit a multidimensional 2PL model $P(y_{ji}=1)=\sigma(\theta_j^\top\alpha_i+\beta_i)$ with $\theta_j,\alpha_i\in\mathbb R^d$ on $Y^S$ by L-BFGS with $\ell_2$ penalties (details in Appendix~\ref{app:impl}); for a target we compute the MAP ability $\hat\theta_t$ from $y_{tC}$ (prior $\mathcal N(0,4I)$) and $z_{ti}=\hat\theta_t^\top\alpha_i+\beta_i$, $\hat p_{ti}=\sigma(z_{ti})$. Then:
+\emph{IRT (pure)}: $\hat a=\frac1N\sum_i\hat p_{ti}$.
+\emph{Plug-in} (tinyBenchmarks-style imputation~\citep{polo2024tiny}): $\hat a=\frac1N(\sum_{i\in C}y_{ti}+\sum_{i\notin C}\hat p_{ti})$.
+\emph{IRT-AIPW}: $\hat a=\frac1N\sum_i\hat p_{ti}+\sum_{i\in C}w_i(y_{ti}-\hat p_{ti})$, the model-assisted/AIPW form~\citep{sarndal1992model,robins1994estimation,angelopoulos2023ppi}.
+\emph{Cal-IRT} (ours): per-target recalibration of the logit, $\tilde p_{ti}=\sigma(s_tz_{ti}+c_t)$ with $(s_t,c_t)$ maximising the coreset log-likelihood with a small ridge penalty $\frac12((s-1)^2+c^2)$ towards $(1,0)$ (Platt-style~\citep{platt1999probabilistic}); $\hat a=\frac1N\sum_i\tilde p_{ti}$. The intercept $c_t$ absorbs a global shift in difficulty between the target and the source population, which is what ``stronger target models'' produce. It costs two parameters estimated from $n$ responses.
+\emph{ShrinkCal-IRT} (ours): a pretest/positive-part shrinkage between pure and recalibrated predictions. With $\bar r_t=\sum_{i\in C}w_i(y_{ti}-\hat p_{ti})$ and $\hat v_t$ the estimated variance of $\bar r_t$ (sample variance of coreset residuals$/n$, finite-population corrected), $\kappa_t=\max\{0,1-c_0\hat v_t/\bar r_t^{2}\}$ and $\hat a=\mathrm{pure}+\kappa_t(\mathrm{Cal}-\mathrm{pure})$, $c_0=0.5$. A residual indistinguishable from noise leaves the pure prediction untouched; a clearly non-zero residual switches the recalibration on.
+We also report cross-fitted AIPW (\emph{gregcf}, residuals from a 5-fold cross-fitted ability) and Cal-IRT with the AIPW correction (\emph{calgreg}).
+
+\subsection{Pseudo-shift tuning (AUTO)}
+Because the best estimator depends on an unknown shift, we also evaluate a selector that uses only source models. The source set is split twice: a random 30\% and the strongest 25\% of source models serve as pseudo-targets. For each candidate (design $\in\{$stratified, VA-PPS $\lambda\in\{0.5,1\}\}$ $\times$ estimator $\in\{$mean, linear, ridge, and pure/plug-in/AIPW/Cal/Cal-AIPW/ShrinkCal IRT with $d\in\{2,4,8\}\}$) and budget, we compute RMSE relative to difficulty-stratified sampling on the pseudo-targets (2 repetitions each); \emph{minimax} picks the candidate with the lowest worst-case ratio over the two inner splits and \emph{mean} the lowest average ratio. The chosen candidate is then applied to the real targets.

@@ -1,0 +1,1689 @@
+{
+ "key": "paperwritingbench/iclr2025_c815e2438e",
+ "benchmark": "paperwritingbench",
+ "item": "iclr2025_c815e2438e",
+ "prompt": [
+  {
+   "name": "TASK.md",
+   "size": 21664,
+   "text": "Your task is to generate a complete research paper using the materials below.\nYou must produce:\n1. A BibTeX bibliography file (references.bib)\n2. The full LaTeX paper (template.tex)\n\nInstructions\n• Use the research idea and experimental logs to construct a coherent, rigorous ML paper.\n• For related work and baselines:\n  – Search for and include influential papers published up until 2024-10.\n  – Incorporate relevant literature and add the corresponding BibTeX entries to references.bib.\n  – Do NOT hallucinate papers or reference keys; all citation entries must be real.\n• In the LaTeX paper, cite papers using \\cite{} with keys that match exactly with your entries in references.bib.\n• Do not fabricate experimental results or make claims unsupported by the logs.\n\nMaterials\nHere are all the raw research materials to assist with the writing process:\n\n[RESEARCH IDEA]\n## Problem Statement\nCurrent deep learning approaches for molecular docking predominantly treat each protein-ligand pair as an isolated training and inference instance. This \"single-instance\" paradigm fails to exploit the substantial correlation inherent in biological data: in real-world drug discovery and existing databases, multiple distinct ligands often bind to the same target protein pocket. By processing these complexes individually, existing models ignore conserved interaction patterns and shared structural motifs. Consequently, the models struggle to generalize or resolve ambiguities that could be clarified by cross-referencing other ligands known to bind to the same target.\n\n## Core Hypothesis\nWe hypothesize that ligands binding to the same protein pocket exhibit a high degree of \"binding pose consistency\"—meaning they tend to adopt similar spatial orientations and form conserved interactions (e.g., hydrogen bonds) with specific protein residues.\n\nWe propose that docking a **group** of ligands simultaneously to a shared protein pocket will yield superior performance compared to docking them individually. By explicitly modeling the joint distribution of the group, the system can use the structural information of \"neighboring\" ligands as an inductive bias. If the model is uncertain about the pose of a query ligand, it can leverage the high-confidence features of other ligands in the group to resolve the correct binding mode through interaction consistency.\n\n## Proposed Methodology (High-Level Technical Approach)\nWe aim to develop a \"Group-Aware\" docking framework. Instead of mapping a single ligand to a protein, our architecture will process a set of ligands and a single protein pocket simultaneously.\n\n**1. Group Graph Construction**\nWe will construct a composite graph that includes the protein and multiple ligands. Crucially, we will introduce edges not just within molecules, but *between* the ligands in the group.\n*   **Intuition:** This creates a communication channel where ligands can exchange information about their geometry. We will link atoms in different ligands based on chemical similarity or spatial proximity in a shared coordinate system.\n\n**2. Cross-Ligand Message Passing**\nWe will implement an interaction layer that performs message passing across the inter-ligand edges.\n*   **Intuition:** This allows the network to aggregate features from the entire group. A ligand does not just \"see\" the protein; it \"sees\" how its peers are positioned.\n\n**3. Triangle Attention for Interaction Consistency**\nWe will design a specialized attention module that operates on triplets: (Protein Atom, Ligand A Atom, Ligand B Atom).\n*   **Intuition:** This module enforces the logic of conserved interactions. If Ligand A is strongly interacting with a specific Protein residue, and Ligand B is structurally similar to Ligand A, the attention mechanism should incentivize Ligand B to interact with that same residue. This acts as a geometric constraint, ensuring that the predicted poses for the group are mutually consistent with the protein's binding logic.\n\n**4. Diffusion-Based Generative Backbone**\nWe will integrate these group-aware representations into a generative diffusion framework. The model will learn to denoise the coordinates of all ligands in the group simultaneously.\n*   **Intuition:** The reverse diffusion process (sampling) will iteratively refine the poses of the whole group, allowing the confident placement of easier ligands to guide the placement of more difficult ones.\n\n**5. Auxiliary Geometric Supervision**\nTo ensure the learned embeddings capture physical reality, we will utilize auxiliary losses during training, such as predicting pairwise distances between protein atoms and group ligand atoms, forcing the interaction layers to encode valid 3D spatial data.\n\n## Expected Contribution\n1.  **Paradigm Shift:** We propose moving from single-ligand docking to \"collaborative\" or group docking, effectively utilizing the correlations present in chemical databases.\n2.  **Novel Architecture:** The introduction of cross-ligand message passing and triangle attention for binding sites represents a new method for encoding biological priors (conserved interactions) into deep neural networks.\n3.  **Enhanced Robustness:** By leveraging the \"wisdom of the crowd\" (group ligands), this approach aims to improve docking accuracy and generate physically valid poses, particularly in scenarios where individual cues are weak but group consensus is strong.\n\n[EXPERIMENTAL LOGS]\n## 1. Experimental Setup\n\nWe detailed the technical specifications, datasets, and implementation parameters used to conduct the experiments and reproduce the results.\n\n*   **Dataset:**\n    *   We utilized the PDBBind v2020 dataset, containing 19,443 protein-ligand complexes.\n    *   **Preprocessing:** We processed proteins using `reduce2` to correct and add missing receptor hydrogens.\n    *   **Splits:** We adopted a time-based split:\n        *   **Training/Validation:** 17,000 complexes released in 2018 or earlier.\n        *   **Testing:** 363 complexes from 2019 with no ligand overlap.\n    *   **Grouping:** For training, we grouped complexes by protein UniProt ID and name, aligned sequences, and performed agglomerative clustering. The maximum number of ligands per group during training was set to 5.\n\n*   **Evaluation Metrics:**\n    *   **Ligand RMSD:** Heavy-atom Root Mean Square Deviation (measured at 25th, 50th, and 75th percentiles).\n    *   **Success Rates:** Percentage of predictions with RMSD < 2.0 Å and < 5.0 Å.\n    *   **Centroid Distance:** Distance between the centroids of the predicted and native ligand poses.\n    *   **PoseBuster Benchmarks:** Validity checks including sanitization, bond lengths, angles, steric clashes, and protein-ligand distances.\n\n*   **Baselines Compared:**\n    *   **Search-based:** SMINA, GN-INA (evaluated alone and with P2Rank or EquiBind for pocket initialization).\n    *   **Deep Learning-based:** TANKBind, EquiBind, DiffDock.\n    *   **Method Variants:**\n        *   *Ref:* Uses native protein pocket.\n        *   *P2R:* Uses top-3 P2Rank predicted pockets.\n        *   *S (Self-Augment):* Uses ligands within the test set for augmentation.\n        *   *A (Augment):* Expands augmented ligand database using the training set.\n        *   *N (No Augment):* No augmented ligand database used.\n\n*   **Implementation Details:**\n    *   **Framework:** Integrated into a diffusion-based docking framework (DiffDock architecture modified).\n    *   **Architecture:** The denoising network used 5 interaction layers (reduced from 6 in DiffDock), resulting in ~18.8 million parameters.\n    *   **Hardware:** Training performed on 8 NVIDIA A100 GPUs. Baseline DiffDock comparison trained on 4 RTX A6000 GPUs.\n    *   **Training Time:** 350 epochs (approx. 9 minutes per epoch; total ~52.5 hours).\n    *   **Optimization:** AdamW optimizer, learning rate 0.001, weight decay 10.0.\n    *   **Diffusion Parameters:** Translational noise sigma set to 10.0.\n    *   **Sampling:** 40 poses sampled per pocket during inference.\n    *   **Pocket Radius:** Set to 20 Å.\n\n## 2. Raw Numeric Data\n\nWe extracted the following empirical data from our experimental runs.\n\n**Table 1: Comparison of Top-1 and Top-5 Ligand RMSD metrics against baselines**\n| Method | Top-1 25th (↓) | Top-1 50th (↓) | Top-1 75th (↓) | Top-1 % < 5Å (↑) | Top-1 % < 2Å (↑) | Top-5 25th (↓) | Top-5 50th (↓) | Top-5 75th (↓) | Top-5 % < 5Å (↑) | Top-5 % < 2Å (↑) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| GNINA | 2.4 | 7.7 | 17.9 | 40.8 | 22.9 | 1.6 | 4.5 | 11.8 | 52.8 | 29.3 |\n| SMINA | 3.1 | 7.1 | 17.9 | 38.0 | 18.7 | 1.7 | 4.6 | 9.7 | 53.1 | 29.3 |\n| TANKBIND | 2.5 | 4.0 | 8.5 | 59.0 | 20.4 | 2.1 | 3.4 | 6.1 | 67.5 | 24.5 |\n| P2RANK+SMINA | 2.9 | 6.9 | 16.0 | 43.0 | 20.4 | 1.5 | 4.4 | 14.1 | 54.8 | 33.2 |\n| P2RANK+GNINA | 1.7 | 5.5 | 15.9 | 47.8 | 28.8 | 1.4 | 3.4 | 12.5 | 60.3 | 38.3 |\n| EQUIBIND+SMINA | 2.4 | 6.5 | 11.2 | 43.6 | 23.2 | 1.3 | 3.4 | 8.1 | 60.6 | 38.6 |\n| EQUIBIND+GNINA | 1.8 | 4.9 | 13.0 | 50.3 | 28.8 | 1.4 | 3.1 | 9.1 | 61.7 | 39.1 |\n| DIFFDOCK | 1.6 | 3.6 | 7.9 | 59.3 | 32.4 | 1.4 | 2.4 | 4.8 | 75.6 | 41.3 |\n| GROUPBIND-P2R-S | 1.7 | 3.4 | 7.9 | 57.9 | 33.2 | 1.3 | 2.1 | 4.2 | 77.8 | 47.4 |\n| GROUPBIND-P2R-A | 1.8 | 3.2 | 6.6 | 66.2 | 32.1 | 1.3 | 2.1 | 4.0 | 80.1 | 48.8 |\n| GROUPBIND-Ref-S | 1.6 | 2.8 | 5.8 | 69.3 | 36.6 | 1.2 | 2.0 | 3.9 | 82.3 | 50.7 |\n| GROUPBIND-Ref-A | 1.6 | 2.9 | 5.9 | 70.4 | 36.3 | 1.2 | 2.0 | 3.6 | 84.5 | 49.0 |\n\n**Table 2: Ablation studies on model components (Perfect selection under 10 samples)**\n*MP-GL: Message Passing Group Ligands, Att: Triangle Attention, Dist: Auxiliary Distance Prediction*\n| Method | MP-GL | Att | Dist | % < 2Å | Median RMSD |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n| DIFFDOCK | - | - | - | 30.6 | 3.0 |\n| GROUPBIND | Yes | - | - | 35.2 | 2.6 |\n| GROUPBIND | Yes | Yes | - | 38.8 | 2.5 |\n| GROUPBIND | Yes | Yes | Yes | 42.9 | 2.2 |\n\n**Table 3: Performance comparison on New Proteins (Homologous) with and without Augmentation**\n| Setting | Top-1 25th | Top-1 50th | Top-1 75th | Top-1 %<2Å | Top-1 %<5Å | Top-5 25th | Top-5 50th | Top-5 75th | Top-5 %<2Å | Top-5 %<5Å |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| No Aug | 2.3 | 4.9 | 24.9 | 20.5 | 50.0 | 1.5 | 3.2 | 6.8 | 34.1 | 68.2 |\n| Aug | 1.8 | 4.7 | 15.5 | 29.6 | 50.0 | 1.5 | 3.4 | 6.3 | 38.6 | 65.9 |\n\n**Table 4: Ligand Centroid Distance Metrics**\n| Method | Top-1 25th (↓) | Top-1 50th (↓) | Top-1 75th (↓) | Top-1 % < 5Å (↑) | Top-1 % < 2Å (↑) | Top-5 25th (↓) | Top-5 50th (↓) | Top-5 75th (↓) | Top-5 % < 5Å (↑) | Top-5 % < 2Å (↑) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| GNINA | 0.8 | 3.7 | 23.1 | 53.6 | 40.2 | 0.6 | 2.0 | 8.2 | 66.8 | 49.7 |\n| SMINA | 1.0 | 2.6 | 16.1 | 59.8 | 41.6 | 0.6 | 1.9 | 6.2 | 72.9 | 50.8 |\n| TANKBIND | 0.9 | 1.8 | 4.4 | 77.1 | 55.1 | 0.8 | 1.4 | 2.9 | 86.8 | 62.0 |\n| P2RANK+SMINA | 0.8 | 2.6 | 14.8 | 60.1 | 44.1 | 0.6 | 1.8 | 12.3 | 66.2 | 53.4 |\n| P2RANK+GNINA | 0.6 | 2.2 | 14.6 | 60.9 | 48.3 | 0.5 | 1.4 | 9.2 | 69.3 | 57.3 |\n| EQUIBIND+SMINA | 0.7 | 2.1 | 7.3 | 69.3 | 49.2 | 0.5 | 1.3 | 5.1 | 74.9 | 58.9 |\n| EQUIBIND+GNINA | 0.6 | 1.9 | 9.9 | 66.5 | 50.8 | 0.5 | 1.1 | 5.3 | 73.7 | 60.1 |\n| DIFFDOCK | 0.6 | 1.4 | 3.2 | 80.6 | 60.4 | 0.4 | 0.7 | 1.8 | 89.8 | 78.7 |\n| GROUPBIND-P2R-S | 0.5 | 1.0 | 3.1 | 81.2 | 67.6 | 0.3 | 0.6 | 1.3 | 91.1 | 82.3 |\n| GROUPBIND-P2R-A | 0.5 | 1.0 | 2.4 | 83.7 | 71.5 | 0.3 | 0.6 | 1.2 | 93.1 | 84.5 |\n| GROUPBIND-Ref-S | 0.4 | 0.8 | 1.6 | 94.5 | 80.3 | 0.3 | 0.6 | 1.1 | 96.7 | 88.1 |\n| GROUPBIND-Ref-A | 0.4 | 0.8 | 1.5 | 94.7 | 84.5 | 0.3 | 0.6 | 1.0 | 97.2 | 90.6 |\n\n**Table 5: Detailed Ablation Study Results (Percentiles)**\n| Method | MP-GL | Att | Dist | 25th (↓) | 50th (↓) | 75th (↓) | % < 5Å (↑) | % < 2Å (↑) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| DIFFDOCK | - | - | - | 1.76 | 2.98 | 5.21 | 73.3 | 30.6 |\n| GROUPBIND | Yes | - | - | 1.70 | 2.51 | 4.33 | 83.9 | 35.2 |\n| GROUPBIND | Yes | Yes | - | 1.49 | 2.50 | 3.98 | 84.2 | 38.8 |\n| GROUPBIND | Yes | Yes | Yes | 1.39 | 2.23 | 4.10 | 84.2 | 42.9 |\n\n**Table 6: Effect of Maximum Number of Ligands in Group (GROUPBIND-Ref-S / Ref-A)**\n| Method | # Ligs | 25th (↓) | 50th (↓) | 75th (↓) | % < 5Å (↑) | % < 2Å (↑) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| GROUPBIND-Ref-S | 1 | 1.09 | 1.86 | 3.32 | 87.5 | 53.5 |\n| GROUPBIND-Ref-S | 2 | 1.02 | 1.70 | 3.20 | 88.6 | 57.9 |\n| GROUPBIND-Ref-S | 3 | 1.04 | 1.74 | 3.19 | 87.8 | 55.4 |\n| GROUPBIND-Ref-S | 4 | 1.07 | 1.73 | 2.96 | 89.5 | 56.5 |\n| GROUPBIND-Ref-S | 5 | 1.03 | 1.72 | 3.16 | 88.9 | 56.5 |\n| GROUPBIND-Ref-A | 2 | 1.00 | 1.66 | 3.18 | 88.1 | 56.8 |\n| GROUPBIND-Ref-A | 3 | 0.99 | 1.71 | 3.18 | 89.2 | 56.2 |\n| GROUPBIND-Ref-A | 4 | 1.04 | 1.60 | 3.07 | 90.0 | 59.6 |\n| GROUPBIND-Ref-A | 5 | 1.02 | 1.70 | 2.93 | 90.0 | 59.0 |\n\n**Table 7: Inference Time Comparison**\n| Method | Inference Time (s) |\n| :--- | :--- |\n| GNINA | 127 |\n| SMINA | 126 |\n| TANKBIND | 0.7 / 2.5 |\n| P2RANK + SMINA | 126 |\n| P2RANK + GNINA | 127 |\n| EQUIBIND + SMINA | 126 |\n| EQUIBIND + GNINA | 127 |\n| DiffDock | 40 |\n| Ours (per pocket) | 30 |\n\n## 3. Qualitative Observations\n\nBased on the analysis of generated structures, plots, and benchmarks, we recorded the following observations:\n\n*   **Observation on Multi-Ligand Binding:** We observed that distinct ligands binding to the same protein pocket often exhibit significant structural similarity in their docking poses, specifically preserving key interactions such as hydrogen bonds and pi-stacking with pocket residues, despite having low Tanimoto similarity (e.g., 0.26).\n*   **Observation on Pose Quality:** In visual comparisons, the method successfully captured the pose consistency seen in reference ligands, resulting in lower average RMSD compared to DiffDock which treated ligands in isolation.\n*   **Observation on Success Rate vs. Top-K:** We found that the success rate (RMSD < 2Å) increased with Top-K selection. Our method consistently outperformed DiffDock for K > 1, with the margin increasing as K increased. With perfect selection (K=40), our method achieved 55-60% success compared to DiffDock's 47%.\n*   **Observation on Augmented Ligands:**\n    *   Including augmented ligands consistently improved success rates compared to using no group information.\n    *   There was a subtle negative correlation (Spearman r = -0.39) between group similarity and best docking RMSD, suggesting that grouping dissimilar ligands provided more advantageous information for discerning correct interactions than grouping highly similar ones.\n    *   For subsets where no augmented ligands were available (w/o G), performance remained static (approx. 30% perfect success rate) compared to 50-70% for subsets with available augmented ligands.\n*   **Observation on Training Objectives:** The introduction of auxiliary distance prediction (providing supervised signals for pairwise embeddings) improved performance dramatically, even more than just message passing or attention mechanisms alone.\n*   **Observation on Confidence Modeling:** We observed that training the confidence model to predict individual scores and then averaging them to compute a group score was more effective than training the model to predict the group score directly.\n*   **Observation on PoseBuster Benchmark:** While our method achieved a higher overall success rate than DiffDock on the PoseBuster benchmark, it showed a lower PB-Valid success rate. We attributed this to a higher frequency of unreasonable protein-ligand distances, likely a side effect of the noise introduced by augmented ligands.\n*   **Observation on ComBind Benchmark:** Our method consistently outperformed DiffDock across 30 distinct proteins in the ComBind set but did not fully match the performance of the ComBind method itself, likely because ComBind utilizes center-of-mass information from reference ligands which our method does not strictly require.\n\n[AVAILABLE FIGURES]\n### AVAILABLE FIGURES LIST\nItem 1:\n  - Filename: figure_1.png\n  - Caption: Figure 1: Multiple ligands that can bind to the same protein pocket exhibit similar docking poses.\n--------------------------------------------------\nItem 2:\n  - Filename: figure_5.png\n  - Caption: Figure 5: PDB entries 6g2c and 6g29 contain distinct ligands (Tanimoto similarity = 0.26) that bind to the same pocket but share similar binding poses.\n--------------------------------------------------\nItem 3:\n  - Filename: figure_6.png\n  - Caption: Figure 6: Group Ligands Statistics in the PDBBind dataset.\n--------------------------------------------------\nItem 4:\n  - Filename: figure_2.png\n  - Caption: Figure 2: Overview of the proposed GroupBind paradigm. (a) GroupBind leverages other ligands GL1:K known to bind the same target protein GP to facilitate the docking of GL0 . (b) GroupBind introduces the message passing across group ligands and the triangle attention module between group ligands and proteins. (c) GroupBind is not limited to any specific docking framework and can be integrated into existing models (dashed gray box) with the aforementioned modules (blue ones).\n--------------------------------------------------\nItem 5:\n  - Filename: figure_3.png\n  - Caption: Figure 3: Visualization of two examples (UniProt ID: P03211, Q9H7Z6) with reference ligand docking poses, GroupBind’s best predicted docking poses and DiffDock’s best predicted docking poses. There are two and three different ligands that can bind to P03211 and Q9H7Z6, respectively, highlighted in distinct colors. Reference ligands tend to bind the target protein with similar poses, which is well captured with GroupBind and results in lower average RMSD compared to DiffDock.\n--------------------------------------------------\nItem 6:\n  - Filename: figure_8.png\n  - Caption: Figure 8: ComBind Results\n--------------------------------------------------\nItem 7:\n  - Filename: figure_7.png\n  - Caption: Figure 7: PoseBuster Results\n--------------------------------------------------\nItem 8:\n  - Filename: figure_4.png\n  - Caption: Figure 4: Analysis of the effect of augmented ligands. (a) The docking success rate (ligand RMSD < 2 Å) increases with the number of selection increases. (b) Effect of the group size. “SG” and “AG” indicate group ligands within test set and further utilize ligands from the training set respectively. (c) Effect of Group Similarity. X-axis denotes the Tanimoto similarity within the ligand group and Y-axis denotes the average best docking RMSD. (d) Effect on Different Subsets. “w/SG, w/AG and w/o G” indicates the subsets where augmented ligands from the test set, the training set, and no augmented ligands can be used respectively. “SG, AG, NG” indicates the corresponding model performance under different augmented ligands settings: test set, training set and no augmented ligands. For (b)(c)(d), the best docking pose among 40 candidates is applied for the success rate.\n--------------------------------------------------\n\nFigures are located in the figures/ directory and should be referenced appropriately in the paper using standard \\includegraphics commands.\n\n[LATEX TEMPLATE]\n\\documentclass{article} % For LaTeX2e\n\\usepackage{iclr2025_conference,times}\n\n% Optional math commands from https://github.com/goodfeli/dlbook_notation.\n\\input{math_commands.tex}\n\n\\usepackage{hyperref}\n\\usepackage{url}\n\n%%%%%%%%% TITLE - PLEASE UPDATE TITLE HERE\n\\title{My Title}\n\n\\author{Ambitious AI Researcher\\\\\nAI Research Institute\\\\\n123 AI Avenue, ML City\\\\\n\\texttt{researcher@institute.ai}\n}\n\n\\newcommand{\\fix}{\\marginpar{FIX}}\n\\newcommand{\\new}{\\marginpar{NEW}}\n\n\\begin{document}\n\n\\maketitle\n\n\\begin{abstract}\n%%%%%%%%% ABSTRACT %%%%%%%%%\nAbstract here.\n%%%%%%%%% ABSTRACT %%%%%%%%%\n\\end{abstract}\n\n\\section{Introduction}\n\\label{sec:intro}\n%%%%%%%%% INTRODUCTION %%%%%%%%%\nIntroduction here.\n%%%%%%%%% INTRODUCTION %%%%%%%%%\n\n\\section{Related Work}\n\\label{sec:related_work}\n%%%%%%%%% RELATED WORK %%%%%%%%%\nRelated work here.\n%%%%%%%%% RELATED WORK %%%%%%%%%\n\n\\section{Methodology}\n\\label{sec:method}\n%%%%%%%%% METHOD %%%%%%%%%\nMethodology here.\n%%%%%%%%% METHOD %%%%%%%%%\n\n\\section{Experiments}\n\\label{sec:experiments}\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\nExperimental setup, results, and analysis here.\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\n\n\\section{Conclusion}\n\\label{sec:conclusion}\n%%%%%%%%% CONCLUSION %%%%%%%%%\nConclusion here.\n%%%%%%%%% CONCLUSION %%%%%%%%%\n\n%%%%%%%%% REFERENCES %%%%%%%%%\n\\bibliography{references}\n\\bibliographystyle{iclr2025_conference}\n%%%%%%%%% REFERENCES %%%%%%%%%\n\n%%%%%%%%% Appendix %%%%%%%%%\n% If you want to add appendix, uncomment the following lines:\n% \\appendix\n% \\section{xxx}\n%%%%%%%%% Appendix %%%%%%%%%\n\n\\end{document}\n\n\nResponse Format\nReturn EXACTLY TWO fenced code blocks.\n1. First code block: the BibTeX file:\n```bibtex\n@article{example2023,\ntitle={Example Title},\nauthor={Author, First},\njournal={Example Journal},\nyear={2023}\n}\n```\n2. Second code block: the generated LaTeX paper:\n```latex\n% The complete LaTeX paper here\n```\nThe final paper must be coherent, highly polished, and scientifically accurate.\n\n[Delivery in this environment]\nYour working directory is /work: it holds the conference's LaTeX template files and the figures/ directory. Write the two files there as /work/references.bib and /work/template.tex (you may also return them as the two code blocks), and compile /work/template.tex with pdflatex and bibtex into /work/template.pdf. The compiled template.pdf is the paper that is evaluated.\n"
+  },
+  {
+   "name": "SYSTEM.md",
+   "size": 9869,
+   "text": "Role: Senior AI Researcher and Academic Writer.\nObjective: Complete a machine learning research paper by filling in missing sections of a provided LaTeX template and generating a corresponding bibliography file. You must produce a scientifically sound, well-structured paper suitable for submission to a top-tier ML conference.\n\nInputs\nYou will receive the following materials:\n• idea.md: Detailed description of the proposed method and technical ideas.\n• experimental_log.md: Raw experimental results and observations used to construct tables, figures, and analysis.\n• conference_guidelines.md: Formatting and stylistic requirements for the target conference.\n• figures_list: A list of figures that may be referenced in the paper.\n\nConference Guidelines\n# ICLR 2025 Paper Writing Guidelines\n\nBelow are the instructions to help you with the LaTeX paper writing process for ICLR 2025.\n\n## General Setup\n* **Document Class:** `\\documentclass{article}`\n* **Required Packages:**\n    ```latex\n    \\usepackage{iclr2025_conference,times}\n    \\usepackage{hyperref}\n    \\usepackage{url}\n    % Optional but recommended for math\n    \\input{math_commands.tex}\n    ```\n* **Style Files:** You must use `iclr2025_conference.sty` and `iclr2025_conference.bst`.\n\n## Anonymity (Crucial)\n* ICLR is double-blind. **Do not** include real author names or affiliations in the submission version, use \"Ambitious AI Researcher\" instead.\n* Use the third person when citing your own prior work (e.g., \"Earlier work by Smalle (2024)...\" instead of \"In our earlier work...\").\n* You may post your paper on arXiv, but do not explicitly refer to the arXiv version in the paper to maintain anonymity.\n\n## Paper Length\n* **Main Text:** Strict upper limit of **10 pages**.\n* **Citations:** Unlimited additional pages.\n* **Ethics & Reproducibility Statements:** Optional. Do not count toward the page limit (max 1 page each).\n* **Acknowledgments:** Do not count toward the page limit.\n\n## Abstract\nThe abstract must be limited to **one paragraph**.\n* **Margins:** Indented 1/2 inch (3 picas) on both left and right-hand margins.\n* **Font:** 10-point type, vertical spacing of 11-points.\n* **Title:** The word `\\textsc{Abstract}` must be centered, in small caps, and in point size 12.\n* **Spacing:** Two line spaces precede the abstract.\n\n## Formatting Your Paper\nThe text must be confined within a rectangle 5.5 inches (33 picas) wide and 9 inches (54 picas) long. The left margin is 1.5 inch (9 picas).\n* **Font:** Times New Roman (via `times` package) is preferred.\n* **Size:** 10-point type with 11-point vertical spacing.\n* **Paragraphs:** Separated by 1/2 line space, with **no indentation**.\n* **Paper Title:** 17-point, small caps, left-aligned.\n\n### Headings\n* **First Level:** Small caps (`\\textsc`), flush left, 12-point. One line space before, 1/2 after.\n* **Second Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n* **Third Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n\n## Citations and References\nUse the `natbib` package (loaded automatically by the style file).\n* **Narrative citation:** Use `\\citet{Gomu2024}` $\\rightarrow$ \"Gomu et al. (2024)\".\n* **Parenthetical citation:** Use `\\citep{Gomu2024}` $\\rightarrow$ \"(Gomu et al., 2024)\".\n* **Bibliography:**\n    ```latex\n    \\bibliography{references}\n    \\bibliographystyle{iclr2025_conference}\n    ```\n\n## Figures and Tables\n* All artwork must be neat, clean, and legible.\n* **Captions:** Lower case (except for first word and proper nouns).\n* **Placement:**\n    * **Figures:** Caption appears **after** (below) the figure.\n    * **Tables:** Caption appears **before** (above) the table.\n\n### Example Code for Figures\n```latex\n\\begin{figure}[h]\n\\begin{center}\n%\\framebox[4.0in]{$\\;$}\n\\fbox{\\rule[-.5cm]{0cm}{4cm} \\rule[-.5cm]{4cm}{0cm}}\n\\end{center}\n\\caption{Sample figure caption.}\n\\end{figure}\n```\n\n### Example Code for Tables\n```latex\n\\begin{table}[t]\n\\caption{Sample table title}\n\\label{sample-table}\n\\begin{center}\n\\begin{tabular}{ll}\n\\multicolumn{1}{c}{\\bf PART}  &\\multicolumn{1}{c}{\\bf DESCRIPTION}\n\\\\ \\hline \\\\\nDendrite         &Input terminal \\\\\nAxon             &Output terminal \\\\\nSoma             &Cell body (contains cell nucleus) \\\\\n\\end{tabular}\n\\end{center}\n\\end{table}\n```\n\n## Math Notation\n* ICLR encourages standardized notation using `\\input{math_commands.tex}` (based on the Deep Learning book notation).\n* Variables: Italics ($a$, $\\va$, $\\mA$).\n* Random Variables: Roman ($P(\\ra)$).\n* Sets: Blackboard bold ($\\R$, $\\sA$).\n* Functions: Standard LaTeX ($f(\\vx)$).\n\n## Optional Statements\nThese should appear at the end of the main text, before references.\n1.  **Ethics Statement:** (Optional, max 1 page) Address potential concerns (human subjects, sensitive data, bias, etc.).\n2.  **Reproducibility Statement:** (Optional, max 1 page) Reference code, proofs, or data processing steps to ensure reproducibility.\n\n## Important Rules\n* **Formatting:** Do not modify the width or length of the text rectangle or font sizes.\n* **Line Numbers:** Do not refer to line numbers in your text (the style file adds them automatically for review).\n* **Appendix:** You may include an appendix at the very end of the main PDF (after references). Use `\\appendix` to start this section.\n* **Figures Directory:** For consistent compilation, all figures will reside in the `figures` directory. Always include the `figures/` prefix in your `\\includegraphics` command (e.g., `figures/figure_1.pdf`).\n* **Author Information:** Always use the following author information placeholder in your writeup:\n    * Ambitious AI Researcher, AI Research Institute, 123 AI Avenue, ML City, researcher@institute.ai\n\nCritical Constraints\n1. Scientific Integrity\n• All reported experimental results MUST match the provided experimental logs.\n• Never fabricate results, numbers, baselines, datasets, or metrics.\n• If results are weak, negative, or inconclusive, report them honestly and discuss possible explanations.\n2. Literature Cutoff Rule\nYou must behave as if the current date is: 2024-10. Do NOT cite or discuss papers published after this date.\n3. Page Limit\nThe main paper is limited to 10 pages (including figures and tables but excluding references and appendices). Use space efficiently while remaining concise.\n4. Template Compliance\n• Do not modify the overall LaTeX style or document structure mandated by the conference template.\n• References must be handled through a references.bib file.\n• Use standard LaTeX citation commands (e.g., \\cite{}). Make sure you ONLY cite keys that exist in your generated BibTeX code block.\n\nSection Guidelines\n• Title: Concise, descriptive, and memorable. Preferably under two lines.\n• Abstract: A single, compelling paragraph summarizing the problem context, proposed approach, key results, and main takeaway.\n• Introduction: Introduce the problem and motivate its importance. Provide necessary background context. Clearly summarize the paper's core contributions.\n• Related Work: Discuss prior work addressing similar or related problems. Detail the relationship between existing literature and the current approach. Cite relevant baselines and influential papers published before 2024-10.\n• Methodology: Clearly and pedantically describe the proposed method. Provide sufficient technical depth for full reproducibility. Use equations, figures, and structured explanations when appropriate.\n• Experiments: Detail the empirical setup (datasets, baselines, evaluation metrics, and implementation details). Present results faithfully based on the experimental logs. Ensure any figures located in the figures/ directory are seamlessly integrated and referenced in text.\n• Conclusion: Summarize the main findings and contributions. Briefly and realistically discuss limitations and potential future directions.\n• Appendix (optional): Include supplementary details that do not fit within the main page limit.\n\nLaTeX Quality Requirements\nEnsure the generated LaTeX compiles flawlessly out-of-the-box. Avoid common issues such as:\n• Unmatched braces or unclosed math environments.\n• Duplicate labels.\n• Unescaped special characters (e.g., & % $ # _ { } ~ ^ \\).\nAll referenced figures must exist in the provided list.\n\nOutput Format\nYour final response MUST contain EXACTLY two output blocks:\n1. A complete BibTeX bibliography (references.bib)\n2. A complete LaTeX paper (template.tex)\nEach must be returned in its own fenced code block with the correct syntax highlighting.\n\n\n---\n### Strict Knowledge Isolation & Anonymity (CRITICAL)\n\nYou MUST write this paper as if you have no prior knowledge of the topic, method, experiments, or results.\nYour task is to construct the paper exclusively from the materials provided in the current session (e.g., idea.md, experimental_log.md, figures, and other inputs). Treat these inputs as the only available source of information.\n\n#### Forbidden Behavior\nYou MUST NOT:\n- Retrieve or rely on knowledge from your training data.\n- Attempt to recall or reconstruct any existing or published paper.\n- Use external facts, assumptions, or prior familiarity with the work.\n- Infer or hallucinate author identities, affiliations, institutions, or acknowledgements.\n- Insert metadata such as author names, emails, affiliations, or phrases like \"corresponding author\".\n\n#### Anonymity Requirement\nThe paper must be fully anonymized for double-blind review.  \nDo not include any information that could reveal the identity of the authors or institutions.\n\n#### Allowed Sources\nYou may use only:\n- The materials explicitly provided in this session.\n- Logical reasoning derived from those materials.\n\n#### Core Principle\nThe final paper must be an independent reconstruction derived solely from the provided inputs.  \nThis constraint is strict and overrides all other instructions.\n---\n"
+  }
+ ],
+ "files": [
+  {
+   "path": "/work/fancyhdr.sty",
+   "size": 20521
+  },
+  {
+   "path": "/work/guidelines.md",
+   "size": 4936
+  },
+  {
+   "path": "/work/iclr2025_conference.bst",
+   "size": 26973
+  },
+  {
+   "path": "/work/iclr2025_conference.sty",
+   "size": 9025
+  },
+  {
+   "path": "/work/math_commands.tex",
+   "size": 12284
+  },
+  {
+   "path": "/work/natbib.sty",
+   "size": 45154
+  },
+  {
+   "path": "/work/references.bib",
+   "size": 629
+  },
+  {
+   "path": "/work/template.tex",
+   "size": 1558
+  },
+  {
+   "path": "/work/figures/figure_1.png",
+   "size": 72575
+  },
+  {
+   "path": "/work/figures/figure_2.png",
+   "size": 94137
+  },
+  {
+   "path": "/work/figures/figure_3.png",
+   "size": 201096
+  },
+  {
+   "path": "/work/figures/figure_4.png",
+   "size": 80529
+  },
+  {
+   "path": "/work/figures/figure_5.png",
+   "size": 115428
+  },
+  {
+   "path": "/work/figures/figure_6.png",
+   "size": 37301
+  },
+  {
+   "path": "/work/figures/figure_7.png",
+   "size": 51289
+  },
+  {
+   "path": "/work/figures/figure_8.png",
+   "size": 43745
+  },
+  {
+   "path": "/work/figures/info.json",
+   "size": 2789
+  }
+ ],
+ "file_notes": [],
+ "settings": {
+  "limits": {
+   "time_limit_hours": 2.0
+  },
+  "offline": false,
+  "image": null,
+  "deliverables": [
+   "template.pdf",
+   "template.tex",
+   "references.bib"
+  ],
+  "work": "paper",
+  "inputs": [
+   {
+    "path": "/work/figures",
+    "from": "figures"
+   }
+  ],
+  "software": false
+ },
+ "shield": {
+  "source": {
+   "title": "Group Ligands Docking to Protein Pockets",
+   "authors": [
+    "Jiaqi Guan",
+    "Jiahan Li",
+    "Xiangxin Zhou",
+    "Xingang Peng",
+    "Sheng Wang",
+    "Yunan Luo",
+    "Jian Peng",
+    "Jianzhu Ma"
+   ],
+   "time_cutoff": "2024-10-01",
+   "abs_url": "https://openreview.net/forum?id=zDC3iCBxJb",
+   "pdf_url": "https://openreview.net/pdf?id=zDC3iCBxJb",
+   "openreview_forum": "zDC3iCBxJb",
+   "arxiv_id": "2501.15055",
+   "code_repository": [
+    "https://github.com/google-research/paper-orchestra"
+   ]
+  },
+  "extra": {
+   "urls": [
+    "https://huggingface.co/datasets/yiwen-song/PaperWritingBench",
+    "https://yiwen-song.github.io/paper_orchestra/",
+    "https://arxiv.org/abs/2501.15055"
+   ]
+  },
+  "probe_url": "https://github.com/google-research/paper-orchestra"
+ },
+ "evaluator": {
+  "repo": "https://github.com/google-research/paper-orchestra",
+  "commit": "ca1b3fa01c2970fc7cda32d16245db38d57b3f56",
+  "dataset": "yiwen-song/PaperWritingBench",
+  "revision": "fbcfcafd042184ca954954b08dfcb92bd7942b51",
+  "paper_id": "iclr2025_c815e2438e",
+  "venue": "iclr2025",
+  "paper_dir": "iclr2025/papers/iclr2025_c815e2438e",
+  "idea": "idea_sparse.md",
+  "research_cutoff": "2024-10",
+  "prompt": "Single Agent (arXiv 2604.05018v1 App. F.1)",
+  "paper": "template.pdf"
+ },
+ "references": [
+  {
+   "name": "iclr2025_c815e2438e.pdf",
+   "size": 19382855,
+   "text": null,
+   "note": "the original paper",
+   "file": "refs/paperwritingbench/iclr2025_c815e2438e/iclr2025_c815e2438e.pdf"
+  },
+  {
+   "name": "raw_materials/idea_dense.md",
+   "size": 7604,
+   "text": "## Problem Statement\nCurrent deep learning-based molecular docking algorithms generally treat each protein-ligand pair in isolation. While successful, this individualistic approach ignores a critical biochemical reality: ligands binding to the same target protein pocket often adopt similar poses due to conserved interactions within the binding site (e.g., specific hydrogen bonds or spatial arrangements). By failing to exploit the correlated structural information available across multiple ligands known to bind to the same target, existing methods limit their predictive accuracy, particularly in complex scenarios where the search space is vast. There is currently no end-to-end deep learning framework capable of simultaneously docking a group of ligands to enforce this structural consistency.\n\n## Core Hypothesis\nWe propose **GroupBind**, a novel docking paradigm that simultaneously docks a target ligand along with a group of \"support\" ligands to a shared protein pocket. We hypothesize that by explicitly modeling the interactions *between* ligands in a group and enforcing geometric consistency between the group and the protein, the model will learn to favor poses that satisfy conserved interaction patterns.\n\nSpecifically, we propose to:\n1.  Construct a **Group Ligands Graph** that connects atoms across different ligands based on structural similarity (Maximum Common Substructure) and 3D proximity.\n2.  Implement a **Message Passing Mechanism** across these group ligands to exchange geometric constraints.\n3.  Design a **Triangle Attention Module** that updates protein-ligand representations based on the consistency of interactions across the ligand group.\n\n## Proposed Methodology (Detailed Technical Approach)\n\n### 1. Mathematical Formulation and Generative Framework\nWe define the protein pocket as a residue-level proximity 3D graph $\\mathcal{G}_P = \\{ \\mathcal{V}_P, \\mathcal{E}_P \\}$ and the ligand as a 3D graph $\\mathcal{G}_L = \\{ \\mathcal{V}_L, \\mathcal{E}_L \\}$. Instead of modeling the pose of a single ligand, we will model the joint distribution of the docking poses for a group of $K+1$ ligands (the target ligand $L_0$ and $K$ support ligands $L_{1:K}$) binding to the shared pocket $\\mathcal{G}_P$.\n\nWe will utilize a diffusion-based generative framework. The modeling objective is the conditional distribution over the product space $\\mathbb{P}_g$ of translations $\\mathbf{r}$, rotations $R$, and torsions $\\theta$ for the entire group:\n$$\np \\left( (\\mathbf{r}_{0:K}, R_{0:K}, \\theta_{0:K}) \\vert \\mathcal{G}_P, \\mathcal{G}_{L_{0:K}} \\right)\n$$\nwhere the product space is defined as $\\mathbb{P}_g = \\mathbb{T}(3)^{(K+1)} \\times SO(3)^{(K+1)} \\times SO(2)^{\\sum_{k=0}^K m_k}$, and $m_k$ is the number of rotatable bonds in the $k$-th ligand.\n\n### 2. Group Ligands Graph Construction\nTo enable information exchange, we will construct a graph connecting the ligands. To avoid artifacts from high noise levels during the diffusion process, this graph construction will be independent of the protein pocket.\n*   **2D Matching:** We will use Maximum Common Substructure (MCS) matching to establish one-to-one mappings between atoms of different ligands.\n*   **3D Proximity:** For unmatched atoms, we will add edges between atoms in different ligands if they are within a radius of $4 \\mathrm{\\AA}$.\n*   **Graph Structure:** This results in a graph $\\mathcal{A}$ where edges represent either structural equivalence or spatial proximity among the ligand group.\n\n### 3. Message Passing Across Group Ligands\nWe will implement an interaction layer using irreducible representations (irreps) of $SO(3)$. For a ligand atom $j$ in ligand $L_g$ and a neighbor atom $k$ in ligand $L_{g'}$ (where $g \\neq g'$), the feature update at layer $\\ell$ will be defined as:\n\n$$\n\\Delta_{\\mathcal{A}} \\mathbf{h}_j^{(\\ell)} = \\mathbf{BN} \\bigg( \\frac{1}{|\\mathcal{N}_{\\mathcal{A}}(j)|} \\sum_{k \\in \\mathcal{N}_{\\mathcal{A}}(j)} Y(\\hat{r}_{jk}) \\otimes_{\\psi_{jk}} \\mathbf{h}_k^{(\\ell)} \\bigg)\n$$\n\nHere:\n*   $\\mathbf{h}$ represents the node features.\n*   $Y(\\hat{r}_{jk})$ are the spherical harmonics of the edge vector up to degree $l=2$.\n*   $\\otimes_{\\psi_{jk}}$ denotes the spherical tensor product weighted by path weights $\\psi_{jk}$.\n*   $\\psi_{jk} = \\phi_e([\\mathbf{h}_j^{(\\ell)}, \\mathbf{h}_k^{(\\ell)}, \\mathbf{e}_{jk}])$ is computed via an MLP taking node and edge embeddings.\n\n### 4. Triangle Attention for Interaction Consistency\nWe will introduce a triangle attention module to enforce that structurally similar ligand atoms interact similarly with protein residues. We first define pair representations for protein-ligand edges ($\\mathbf{z}_{ij}$) and group ligand-ligand edges ($\\mathbf{g}_{jk}$) via MLPs:\n$$\n\\mathbf{z}_{ij}^{(\\ell)} = \\phi_c([\\mathbf{h}_i^{(\\ell)}, \\mathbf{h}_j^{(\\ell)}, \\mathbf{e}_{ij}^{(\\ell)}])\n$$\n$$\n\\mathbf{g}_{jk}^{(\\ell)} = \\phi_g([\\mathbf{h}_i^{(\\ell)}, \\mathbf{h}_j^{(\\ell)}, \\mathbf{e}_{jk}])\n$$\nWe then update the protein-ligand pair representation $\\mathbf{z}_{ij}$ using a multi-head attention mechanism where the attention weights are modulated by the group similarity embedding $\\mathbf{g}_{jk}$. The update rule is:\n\n$$\n\\mathbf{z}_{ij}^{(\\ell)} = \\mathbf{z}_{ij}^{(\\ell)} + \\mathrm{Linear} \\biggl( \\mathrm{concat}_h \\biggl( \\sum_k s_{ijk}^{(\\ell)h} \\mathbf{v}_{ik}^{(\\ell)h} \\phi \\bigl( \\mathbf{z}_{ij}^{(\\ell)h} \\bigr) \\biggr) \\biggr)\n$$\n\nThe attention scores $s_{ijk}$ are computed as:\n$$\ns_{ijk}^{(\\ell)h} = \\mathrm{softmax} \\biggl( \\frac{1}{\\sqrt{c}} \\mathbf{q}_{ij}^{(\\ell)h} \\mathbf{\\Phi}^\\top \\mathbf{k}_{ik}^{(\\ell)h} + b_{kj}^{(\\ell)h} \\biggr)\n$$\nwhere $\\mathbf{q}, \\mathbf{k}, \\mathbf{v}$ are linear transformations of $\\mathbf{z}$, and $b_{kj}$ is a linear transformation of the group pair embedding $\\mathbf{g}_{kj}$. This mechanism allows the model to \"attend\" to how a similar atom $k$ in a neighbor ligand interacts with protein atom $i$ to inform the interaction of atom $j$.\n\nWe will further refine the pairwise protein-ligand edge features $\\mathbf{e}_{ij}$ through layers:\n$$\n\\mathbf{e}_{ij}^{(\\ell+1)} = \\phi_2([\\mathbf{e}_{ij}^{(0)}, \\phi_1(\\mathbf{z}_{ij}^{(\\ell)})])\n$$\n\n### 5. Training Objectives and Confidence Model\nIn addition to the standard diffusion score matching loss, we will introduce an **Auxiliary Distance Prediction** loss to supervise the pairwise features. We will predict binned distances $\\hat{d}_{ij}^b$ and apply a weighted cross-entropy loss:\n$$\n\\mathcal{L}_{\\mathrm{dist}} = \\frac{1}{N_{\\mathrm{pairs}}} e^{-t} \\sum_{i,j} \\sum_{b=1}^B d_{ij}^b \\log \\hat{d}_{ij}^b\n$$\n\nFinally, we will train a **Group Confidence Model** to rank the sampled poses. Rather than predicting a single group score directly, we will predict individual confidence scores $\\phi_c(\\mathbf{x}_k)$ and aggregate them:\n$$\n\\mathbf{c}(\\mathbf{x}_0, \\ldots, \\mathbf{x}_K) = \\frac{1}{K} \\sum_{k=0}^K \\phi_c(\\mathbf{x}_k)\n$$\n\n## Expected Contribution\n1.  **Novel Paradigm:** This will be the first deep learning approach to formalize molecular docking as a group-conditional generation problem, leveraging physical consistency across multiple ligands.\n2.  **Architectural Innovation:** The introduction of the group-ligand message passing layer and the triangle attention module provides a specific algorithmic method to encode \"interaction consistency\" into geometric deep learning networks.\n3.  **Theoretical Precision:** By utilizing spherical tensor products and explicit pair-representation updates, we ensure that the geometric constraints of the group are rigorously propagated to the target ligand's pose generation process.",
+   "note": "the dense idea (the method that produced the experimental log)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gpt-5-2025-08-07.json",
+   "size": 34684,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"D\\u00b4avid Bajusz, Anita R\\u00b4acz, and K\\u00b4aroly H\\u00b4eberger. Why is tanimoto index an appropriate choice for fingerprint-based similarity calculations? Journal of cheminformatics, 7(1):1\\u201313, 2015.\",\n            \"extracted_paper_title\": \"Why is tanimoto index an appropriate choice for fingerprint-based similarity calculations?\",\n            \"fetched_paper_id\": \"9afafe6095df854829d54a9172d302e272ce75a4\",\n            \"fetched_paper_title\": \"Why is Tanimoto index an appropriate choice for fingerprint-based similarity calculations?\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Helen Berman, Kim Henrick, and Haruki Nakamura. Announcing the worldwide protein data bank. Nature structural & molecular biology, 10(12):980\\u2013980, 2003.\",\n            \"extracted_paper_title\": \"Announcing the worldwide protein data bank\",\n            \"fetched_paper_id\": \"af3f78eb5adbc02cb2154d423da85237cbb6fdeb\",\n            \"fetched_paper_title\": \"Announcing the worldwide Protein Data Bank\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Martin Buttenschoen, Garrett M Morris, and Charlotte M Deane. Posebusters: Ai-based docking methods fail to generate physically valid poses or generalise to novel sequences. Chemical Science, 15(9):3130\\u20133139, 2024.\",\n            \"extracted_paper_title\": \"Posebusters: Ai-based docking methods fail to generate physically valid poses or generalise to novel sequences\",\n            \"fetched_paper_id\": \"dd267334c01365d362ed8239394f0ad61b41e269\",\n            \"fetched_paper_title\": \"PoseBusters: AI-based docking methods fail to generate physically valid poses or generalise to novel sequences\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Gabriele Corso, Hannes St\\u00a8ark, Bowen Jing, Regina Barzilay, and Tommi Jaakkola. Diffdock: Diffusion steps, twists, and turns for molecular docking. arXiv preprint arXiv:2210.01776, 2022.\",\n            \"extracted_paper_title\": \"Diffdock: Diffusion steps, twists, and turns for molecular docking\",\n            \"fetched_paper_id\": \"e99604e2da48483b633247c13dd4ad5f46196562\",\n            \"fetched_paper_title\": \"DiffDock: Diffusion Steps, Twists, and Turns for Molecular Docking\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Valentin De Bortoli, Emile Mathieu, Michael Hutchinson, James Thornton, Yee Whye Teh, and Arnaud Doucet. Riemannian score-based generative modelling. Advances in Neural Information Processing Systems, 35:2406\\u20132422, 2022.\",\n            \"extracted_paper_title\": \"Riemannian score-based generative modelling\",\n            \"fetched_paper_id\": \"7d2ff802094eb24bed1faa363a8d07947905be3e\",\n            \"fetched_paper_title\": \"Riemannian Score-Based Generative Modeling\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Daniel Defays. An efficient algorithm for a complete link method. The computer journal, 20(4):364\\u2013366, 1977.\",\n            \"extracted_paper_title\": \"An efficient algorithm for a complete link method\",\n            \"fetched_paper_id\": \"3f7baed9e34b71d3ec2ff6a3e68e2511bb3cbc8a\",\n            \"fetched_paper_title\": \"An Efficient Algorithm for a Complete Link Method\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chuong B Do, Mahathi SP Mahabhashyam, Michael Brudno, and Serafim Batzoglou. Probcons: Probabilistic consistency-based multiple sequence alignment. Genome research, 15(2):330\\u2013340, 2005.\",\n            \"extracted_paper_title\": \"Probcons: Probabilistic consistency-based multiple sequence alignment.\",\n            \"fetched_paper_id\": \"2ee638dbd3a8083d3aa20fd45c240f1661868e74\",\n            \"fetched_paper_title\": \"ProbCons: Probabilistic consistency-based multiple sequence alignment.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chuong B Do, Samuel S Gross, and Serafim Batzoglou. Contralign: discriminative training for protein sequence alignment. In Annual International Conference on Research in Computational Molecular Biology, pp. 160\\u2013174. Springer, 2006.\",\n            \"extracted_paper_title\": \"Contralign: discriminative training for protein sequence alignment.\",\n            \"fetched_paper_id\": \"6e3d91086165693e41057b82b941f579d2586e4d\",\n            \"fetched_paper_title\": \"CONTRAlign: Discriminative Training for Protein Sequence Alignment\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Leonardo G Ferreira, Ricardo N Dos Santos, Glaucius Oliva, and Adriano D Andricopulo. Molecular docking and structure-based drug design strategies. Molecules, 20(7):13384\\u201313421, 2015.\",\n            \"extracted_paper_title\": \"Molecular docking and structure-based drug design strategies.\",\n            \"fetched_paper_id\": \"fb180bea71bf830773e6c47764fb457d3a79cf14\",\n            \"fetched_paper_title\": \"Molecular Docking and Structure-Based Drug Design Strategies\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Fabian Fuchs, Daniel Worrall, Volker Fischer, and Max Welling. Se (3)-transformers: 3d roto-translation equivariant attention networks. Advances in neural information processing systems, 33:1970\\u20131981, 2020.\",\n            \"extracted_paper_title\": \"Se (3)-transformers: 3d roto-translation equivariant attention networks.\",\n            \"fetched_paper_id\": \"6075091294a0fe0fe5c6c7b7a0df9029b6a965cb\",\n            \"fetched_paper_title\": \"SE(3)-Transformers: 3D Roto-Translation Equivariant Attention Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Kaiyuan Gao, Qizhi Pei, Jinhua Zhu, Tao Qin, Kun He, Tie-Yan Liu, and Lijun Wu. Fabind+: Enhancing molecular docking through improved pocket prediction and pose generation. arXiv preprint arXiv:2403.20261, 2024.\",\n            \"extracted_paper_title\": \"Fabind+: Enhancing molecular docking through improved pocket prediction and pose generation.\",\n            \"fetched_paper_id\": \"6594ec85ba41682c2ae0b2c205a92ec372f0ec4b\",\n            \"fetched_paper_title\": \"FABind+: Enhancing Molecular Docking through Improved Pocket Prediction and Pose Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Mario Geiger and Tess Smidt. e3nn: Euclidean neural networks. arXiv preprint arXiv:2207.09453, 2022.\",\n            \"extracted_paper_title\": \"e3nn: Euclidean neural networks\",\n            \"fetched_paper_id\": \"c7215ab4589ce3590910c597e86b1aba8e460d49\",\n            \"fetched_paper_title\": \"e3nn: Euclidean Neural Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Thomas A Halgren, Robert B Murphy, Richard A Friesner, Hege S Beard, Leah L Frye, W Thomas Pollard, and Jay L Banks. Glide: a new approach for rapid, accurate docking and scoring. 2. enrichment factors in database screening. Journal of medicinal chemistry, 47(7):1750\\u20131759, 2004.\",\n            \"extracted_paper_title\": \"Glide: a new approach for rapid, accurate docking and scoring. 2. enrichment factors in database screening.\",\n            \"fetched_paper_id\": \"603531c6adfeebdfaecde525d5bf2d4a37a2364f\",\n            \"fetched_paper_title\": \"Glide: a new approach for rapid, accurate docking and scoring. 2. Enrichment factors in database screening.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Somaye Hashemifar, Qixing Huang, and Jinbo Xu. Joint alignment of multiple protein\\u2013protein interaction networks via convex optimization. Journal of Computational Biology, 23(11):903\\u2013911, 2016.\",\n            \"extracted_paper_title\": \"Joint alignment of multiple protein\\u2013protein interaction networks via convex optimization\",\n            \"fetched_paper_id\": \"7348bcad3d3ae7ca4aa4b8e6123c53629a40400b\",\n            \"fetched_paper_title\": \"Joint Alignment of Multiple Protein\\u2013Protein Interaction Networks via Convex Optimization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. Advances in neural information processing systems, 33:6840\\u20136851, 2020.\",\n            \"extracted_paper_title\": \"Denoising diffusion probabilistic models\",\n            \"fetched_paper_id\": \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n            \"fetched_paper_title\": \"Denoising Diffusion Probabilistic Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Tao Hu, Zhizhong Han, and Matthias Zwicker. 3d shape completion with multi-view consistent inference. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 34, pp. 10997\\u201311004, 2020.\",\n            \"extracted_paper_title\": \"3d shape completion with multi-view consistent inference\",\n            \"fetched_paper_id\": \"d70de096619ca477a211e2db93e3f1ff66a9812c\",\n            \"fetched_paper_title\": \"3D Shape Completion with Multi-view Consistent Inference\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"John Jumper, Richard Evans, Alexander Pritzel, Tim Green, Michael Figurnov, Olaf Ronneberger, Kathryn Tunyasuvunakool, Russ Bates, Augustin \\u02c7Z\\u00b4\\u0131dek, Anna Potapenko, et al. Highly accurate protein structure prediction with alphafold. Nature, 596(7873):583\\u2013589, 2021.\",\n            \"extracted_paper_title\": \"Highly accurate protein structure prediction with alphafold\",\n            \"fetched_paper_id\": \"dc32a984b651256a8ec282be52310e6bd33d9815\",\n            \"fetched_paper_title\": \"Highly accurate protein structure prediction with AlphaFold\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wolfgang Kabsch. A solution for the best rotation to relate two sets of vectors. Acta Crystallographica Section A: Crystal Physics, Diffraction, Theoretical and General Crystallography, 32(5):922\\u2013923, 1976.\",\n            \"extracted_paper_title\": \"A solution for the best rotation to relate two sets of vectors\",\n            \"fetched_paper_id\": \"cf0533ad2412de3345a495c96812d3cdc74ffb08\",\n            \"fetched_paper_title\": \"A solution for the best rotation to relate two sets of vectors\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"David Ryan Koes, Matthew P Baumgartner, and Carlos J Camacho. Lessons learned in empirical scoring with smina from the csar 2011 benchmarking exercise. Journal of chemical information and modeling, 53(8):1893\\u20131904, 2013.\",\n            \"extracted_paper_title\": \"Lessons learned in empirical scoring with smina from the csar 2011 benchmarking exercise.\",\n            \"fetched_paper_id\": \"b8e3a38b79188040cb45c3ef8b75164bab657f8b\",\n            \"fetched_paper_title\": \"Lessons Learned in Empirical Scoring with smina from the CSAR 2011 Benchmarking Exercise\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Radoslav Kriv\\u00b4ak and David Hoksza. P2rank: machine learning based tool for rapid and accurate prediction of ligand binding sites from protein structure. Journal of cheminformatics, 10:1\\u201312, 2018.\",\n            \"extracted_paper_title\": \"P2rank: machine learning based tool for rapid and accurate prediction of ligand binding sites from protein structure\",\n            \"fetched_paper_id\": \"71193d1c1633e3cd7004e5336b37f235aa456203\",\n            \"fetched_paper_title\": \"P2Rank: machine learning based tool for rapid and accurate prediction of ligand binding sites from protein structure\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Chung-Shou Liao, Kanghao Lu, Michael Baym, Rohit Singh, and Bonnie Berger. Isorankn: spectral methods for global alignment of multiple protein networks. Bioinformatics, 25(12):i253\\u2013i258, 2009.\",\n            \"extracted_paper_title\": \"Isorankn: spectral methods for global alignment of multiple protein networks\",\n            \"fetched_paper_id\": \"6beb58f7547048e1ca4e4f99afdd405dbaea4e1b\",\n            \"fetched_paper_title\": \"IsoRankN: spectral methods for global alignment of multiple protein networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhihai Liu, Yan Li, Li Han, Jie Li, Jie Liu, Zhixiong Zhao, Wei Nie, Yuchen Liu, and Renxiao Wang. Pdb-wide collection of binding data: current status of the pdbbind database. Bioinformatics, 31(3):405\\u2013412, 2015.\",\n            \"extracted_paper_title\": \"Pdb-wide collection of binding data: current status of the pdbbind database\",\n            \"fetched_paper_id\": \"c55f1d68e5348d86862a1aea65d12bd578d9f944\",\n            \"fetched_paper_title\": \"PDB-wide collection of binding data: current status of the PDBbind database\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. arXiv preprint arXiv:1711.05101, 2017.\",\n            \"extracted_paper_title\": \"Decoupled weight decay regularization\",\n            \"fetched_paper_id\": \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n            \"fetched_paper_title\": \"Decoupled Weight Decay Regularization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wei Lu, Qifeng Wu, Jixian Zhang, Jiahua Rao, Chengtao Li, and Shuangjia Zheng. Tankbind: Trigonometry-aware neural networks for drug-protein binding structure prediction. Advances in neural information processing systems, 35:7236\\u20137249, 2022.\",\n            \"extracted_paper_title\": \"Tankbind: Trigonometry-aware neural networks for drug-protein binding structure prediction.\",\n            \"fetched_paper_id\": \"b886797dc34c91f186629403d7c7e2092fc25083\",\n            \"fetched_paper_title\": \"TANKBind: Trigonometry-Aware Neural NetworKs for Drug-Protein Binding Structure Prediction\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Andrew T McNutt and David R Koes. Open-combind: harnessing unlabeled data for improved binding pose prediction. Biophysical Journal, 123(3):186a, 2024.\",\n            \"extracted_paper_title\": \"Open-combind: harnessing unlabeled data for improved binding pose prediction\",\n            \"fetched_paper_id\": \"7756a2957cb1fcf380e6e2953b3bcf2f96bbeab1\",\n            \"fetched_paper_title\": \"Open-ComBind: harnessing unlabeled data for improved binding pose prediction\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Andrew T McNutt, Paul Francoeur, Rishal Aggarwal, Tomohide Masuda, Rocco Meli, Matthew Ragoza, Jocelyn Sunseri, and David Ryan Koes. Gnina 1.0: molecular docking with deep learning. Journal of cheminformatics, 13(1):1\\u201320, 2021.\",\n            \"extracted_paper_title\": \"Gnina 1.0: molecular docking with deep learning\",\n            \"fetched_paper_id\": \"0816a349bf0e690559bedcc790ab26657354bcb9\",\n            \"fetched_paper_title\": \"GNINA 1.0: molecular docking with deep learning\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Rocco Meli and Philip C Biggin. spyrmsd: symmetry-corrected rmsd calculations in python. Journal of Cheminformatics, 12(1):1\\u20137, 2020.\",\n            \"extracted_paper_title\": \"spyrmsd: symmetry-corrected rmsd calculations in python\",\n            \"fetched_paper_id\": \"c20e56330e9c52df4160199f45695104f92d000f\",\n            \"fetched_paper_title\": \"spyrmsd: symmetry-corrected RMSD calculations in Python\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Oscar M\\u00b4endez-Lucio, Mazen Ahmad, Ehecatl Antonio del Rio-Chanona, and J\\u00a8org Kurt Wegner. A geometric deep learning approach to predict binding conformations of bioactive molecules. Nature Machine Intelligence, 3(12):1033\\u20131039, 2021.\",\n            \"extracted_paper_title\": \"A geometric deep learning approach to predict binding conformations of bioactive molecules.\",\n            \"fetched_paper_id\": \"2e17cc055f7313d3c4ebd48c07a6026a408bed9c\",\n            \"fetched_paper_title\": \"A geometric deep learning approach to predict binding conformations of bioactive molecules\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Elaine C Meng, Brian K Shoichet, and Irwin D Kuntz. Automated docking with grid-based energy evaluation. Journal of computational chemistry, 13(4):505\\u2013524, 1992.\",\n            \"extracted_paper_title\": \"Automated docking with grid-based energy evaluation\",\n            \"fetched_paper_id\": \"2df7fefb20b86ec974784dc3c30d7888ec13fcb9\",\n            \"fetched_paper_title\": \"Automated docking with grid\\u2010based energy evaluation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Joseph M Paggi, Julia A Belk, Scott A Hollingsworth, Nicolas Villanueva, Alexander S Powers, Mary J Clark, Augustine G Chemparathy, Jonathan E Tynan, Thomas K Lau, Roger K Sunahara, et al. Leveraging nonstructural data to predict structures and affinities of protein\\u2013ligand complexes. Proceedings of the National Academy of Sciences, 118(51):e2112621118, 2021.\",\n            \"extracted_paper_title\": \"Leveraging nonstructural data to predict structures and affinities of protein\\u2013ligand complexes\",\n            \"fetched_paper_id\": \"d80abdc701ceb7403e0af63b2deacdf2bc885c08\",\n            \"fetched_paper_title\": \"Leveraging nonstructural data to predict structures and affinities of protein\\u2013ligand complexes\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Qizhi Pei, Kaiyuan Gao, Lijun Wu, Jinhua Zhu, Yingce Xia, Shufang Xie, Tao Qin, Kun He, Tie-Yan Liu, and Rui Yan. Fabind: Fast and accurate protein-ligand binding. Advances in Neural Information Processing Systems, 36, 2024.\",\n            \"extracted_paper_title\": \"Fabind: Fast and accurate protein-ligand binding\",\n            \"fetched_paper_id\": \"ef5fceee2925cb8441bf1de100b67a33eeeef3a3\",\n            \"fetched_paper_title\": \"FABind: Fast and Accurate Protein-Ligand Binding\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Matthew Ragoza, Joshua Hochuli, Elisa Idrobo, Jocelyn Sunseri, and David Ryan Koes. Protein\\u2013ligand scoring with convolutional neural networks. Journal of chemical information and modeling, 57(4):942\\u2013957, 2017.\",\n            \"extracted_paper_title\": \"Protein\\u2013ligand scoring with convolutional neural networks\",\n            \"fetched_paper_id\": \"a6ff341ccfa09e05273315e590cfb65e68920a68\",\n            \"fetched_paper_title\": \"Protein-Ligand Scoring with Convolutional Neural Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"John W Raymond and Peter Willett. Maximum common subgraph isomorphism algorithms for the matching of chemical structures. Journal of computer-aided molecular design, 16:521\\u2013533, 2002.\",\n            \"extracted_paper_title\": \"Maximum common subgraph isomorphism algorithms for the matching of chemical structures.\",\n            \"fetched_paper_id\": \"8d491d313a0e44c10f06d6a4a0d4c7f816bf4f60\",\n            \"fetched_paper_title\": \"Maximum common subgraph isomorphism algorithms for the matching of chemical structures\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Brian K Shoichet, Irwin D Kuntz, and Dale L Bodian. Molecular docking using shape descriptors. Journal of computational chemistry, 13(3):380\\u2013397, 1992.\",\n            \"extracted_paper_title\": \"Molecular docking using shape descriptors\",\n            \"fetched_paper_id\": \"34f2d87388e8aa408605be28ffa9b9bfd5c07e93\",\n            \"fetched_paper_title\": \"Molecular docking using shape descriptors\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yang Song, Jascha Sohl-Dickstein, Diederik P Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole. Score-based generative modeling through stochastic differential equations. In International Conference on Learning Representations, 2021. URL https://openreview.net/forum?id=PxTIG12RRHS.\",\n            \"extracted_paper_title\": \"Score-based generative modeling through stochastic differential equations\",\n            \"fetched_paper_id\": \"633e2fbfc0b21e959a244100937c5853afca4853\",\n            \"fetched_paper_title\": \"Score-Based Generative Modeling through Stochastic Differential Equations\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hannes St\\u00a8ark, Octavian Ganea, Lagnajit Pattanaik, Regina Barzilay, and Tommi Jaakkola. Equibind: Geometric deep learning for drug binding structure prediction. In International conference on machine learning, pp. 20503\\u201320521. PMLR, 2022.\",\n            \"extracted_paper_title\": \"Equibind: Geometric deep learning for drug binding structure prediction\",\n            \"fetched_paper_id\": \"5309f4bcb15e3dafbed759488551c1650b55dd81\",\n            \"fetched_paper_title\": \"EquiBind: Geometric Deep Learning for Drug Binding Structure Prediction\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Nathaniel Thomas, Tess Smidt, Steven Kearnes, Lusann Yang, Li Li, Kai Kohlhoff, and Patrick Riley. Tensor field networks: Rotation-and translation-equivariant neural networks for 3d point clouds. arXiv preprint arXiv:1802.08219, 2018.\",\n            \"extracted_paper_title\": \"Tensor field networks: Rotation- and translation-equivariant neural networks for 3d point clouds\",\n            \"fetched_paper_id\": \"6f3370fcf266fc10842b6d3e77c6cadd842a3580\",\n            \"fetched_paper_title\": \"Tensor Field Networks: Rotation- and Translation-Equivariant Neural Networks for 3D Point Clouds\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Robert Tibshirani, Guenther Walther, and Trevor Hastie. Estimating the number of clusters in a data set via the gap statistic. Journal of the Royal Statistical Society: Series B (Statistical Methodology), 63(2):411\\u2013423, 2001.\",\n            \"extracted_paper_title\": \"Estimating the number of clusters in a data set via the gap statistic\",\n            \"fetched_paper_id\": \"e8020b85160eda580566053404cb5c32ad19c62c\",\n            \"fetched_paper_title\": \"Estimating the number of clusters in a data set via the gap statistic\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Oleg Trott and Arthur J Olson. Autodock vina: improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading. Journal of computational chemistry, 31(2):455\\u2013461, 2010.\",\n            \"extracted_paper_title\": \"Autodock vina: improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading\",\n            \"fetched_paper_id\": \"c1203ff7582cf15a160591f6d29e434e27db4e97\",\n            \"fetched_paper_title\": \"AutoDock Vina: Improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Michel Van Kempen, Stephanie S Kim, Charlotte Tumescheit, Milot Mirdita, Jeongjae Lee, Cameron LM Gilchrist, Johannes S\\u00a8oding, and Martin Steinegger. Fast and accurate protein structure search with foldseek. Nature biotechnology, 42(2):243\\u2013246, 2024.\",\n            \"extracted_paper_title\": \"Fast and accurate protein structure search with foldseek\",\n            \"fetched_paper_id\": \"655fa18c26267f33084647b30fb0964ec199cd97\",\n            \"fetched_paper_title\": \"Fast and accurate protein structure search with Foldseek\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Joe H Ward Jr. Hierarchical grouping to optimize an objective function. Journal of the American statistical association, 58(301):236\\u2013244, 1963.\",\n            \"extracted_paper_title\": \"Hierarchical grouping to optimize an objective function\",\n            \"fetched_paper_id\": \"8eced091ab3e3fd0b1747896cff082711c510d4a\",\n            \"fetched_paper_title\": \"Hierarchical Grouping to Optimize an Objective Function\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Scott A Wildman and Gordon M Crippen. Prediction of physicochemical parameters by atomic contributions. Journal of chemical information and computer sciences, 39(5):868\\u2013873, 1999.\",\n            \"extracted_paper_title\": \"Prediction of physicochemical parameters by atomic contributions\",\n            \"fetched_paper_id\": \"1f8a30b17d363c04feab4adb02654c33c0ae1e5b\",\n            \"fetched_paper_title\": \"Prediction of Physicochemical Parameters by Atomic Contributions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jianxiong Xiao and Long Quan. Multiple view semantic segmentation for street view images. In 2009 IEEE 12th international conference on computer vision, pp. 686\\u2013693. IEEE, 2009.\",\n            \"extracted_paper_title\": \"Multiple view semantic segmentation for street view images\",\n            \"fetched_paper_id\": \"542eca2fe1bca3e950e38873ab40e488eb6f864e\",\n            \"fetched_paper_title\": \"Multiple view semantic segmentation for street view images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Si Zhang and Hanghang Tong. Final: Fast attributed network alignment. In Proceedings of the 22nd ACM SIGKDD international conference on knowledge discovery and data mining, pp. 1345\\u20131354, 2016.\",\n            \"extracted_paper_title\": \"Final: Fast attributed network alignment\",\n            \"fetched_paper_id\": \"5a1c861be2c508a1c1d538e1e6a63db4a8343791\",\n            \"fetched_paper_title\": \"FINAL: Fast Attributed Network Alignment\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Si Zhang, Hanghang Tong, Long Jin, Yinglong Xia, and Yunsong Guo. Balancing consistency and disparity in network alignment. In Proceedings of the 27th ACM SIGKDD conference on knowledge discovery & data mining, pp. 2212\\u20132222, 2021.\",\n            \"extracted_paper_title\": \"Balancing consistency and disparity in network alignment.\",\n            \"fetched_paper_id\": \"70308873ff77d1db4bdbbe39b3ed30e9b35bdd5e\",\n            \"fetched_paper_title\": \"Balancing Consistency and Disparity in Network Alignment\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yangtian Zhang, Huiyu Cai, Chence Shi, Bozitao Zhong, and Jian Tang. E3bind: An end-to-end equivariant network for protein-ligand docking. arXiv preprint arXiv:2210.06069, 2022.\",\n            \"extracted_paper_title\": \"E3bind: An end-to-end equivariant network for protein-ligand docking.\",\n            \"fetched_paper_id\": \"9946caf3a8a381f880fe6452c960429ebe8b1440\",\n            \"fetched_paper_title\": \"E3Bind: An End-to-End Equivariant Network for Protein-Ligand Docking\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yangtian Zhang, Huiyu Cai, Chence Shi, and Jian Tang. E3bind: An end-to-end equivariant network for protein-ligand docking. In The Eleventh International Conference on Learning Representations, 2023. URL https://openreview.net/forum?id=sO1QiAftQFv.\",\n            \"extracted_paper_title\": \"E3bind: An end-to-end equivariant network for protein-ligand docking.\",\n            \"fetched_paper_id\": \"9946caf3a8a381f880fe6452c960429ebe8b1440\",\n            \"fetched_paper_title\": \"E3Bind: An End-to-End Equivariant Network for Protein-Ligand Docking\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Bo Zheng, Li Dong, Shaohan Huang, Wenhui Wang, Zewen Chi, Saksham Singhal, Wanxiang Che, Ting Liu, Xia Song, and Furu Wei. Consistency regularization for cross-lingual fine-tuning. In Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing (Volume 1: Long Papers), pp. 3403\\u20133417, 2021.\",\n            \"extracted_paper_title\": \"Consistency regularization for cross-lingual fine-tuning.\",\n            \"fetched_paper_id\": \"1da75c7a8915c0794bc9857f93c6cf31aac17ad2\",\n            \"fetched_paper_title\": \"Consistency Regularization for Cross-Lingual Fine-Tuning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dengyong Zhou, Olivier Bousquet, Thomas Lal, Jason Weston, and Bernhard Sch\\u00a8olkopf. Learning with local and global consistency. Advances in neural information processing systems, 16, 2003.\",\n            \"extracted_paper_title\": \"Learning with local and global consistency\",\n            \"fetched_paper_id\": \"46770a8e7e2af28f5253e5961f709be74e34c1f6\",\n            \"fetched_paper_title\": \"Learning with Local and Global Consistency\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Gengmo Zhou, Zhifeng Gao, Qiankun Ding, Hang Zheng, Hongteng Xu, Zhewei Wei, Linfeng Zhang, and Guolin Ke. Uni-mol: A universal 3d molecular representation learning framework. In The Eleventh International Conference on Learning Representations, 2023. URL https://openreview.net/forum?id=6K2RM6wVqKu.\",\n            \"extracted_paper_title\": \"Uni-mol: A universal 3d molecular representation learning framework.\",\n            \"fetched_paper_id\": \"11f42721f56f36a64638677ccde7784040829656\",\n            \"fetched_paper_title\": \"Uni-Mol: A Universal 3D Molecular Representation Learning Framework\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"1da75c7a8915c0794bc9857f93c6cf31aac17ad2\",\n        \"0816a349bf0e690559bedcc790ab26657354bcb9\",\n        \"cf0533ad2412de3345a495c96812d3cdc74ffb08\",\n        \"2df7fefb20b86ec974784dc3c30d7888ec13fcb9\",\n        \"6075091294a0fe0fe5c6c7b7a0df9029b6a965cb\",\n        \"6beb58f7547048e1ca4e4f99afdd405dbaea4e1b\",\n        \"5a1c861be2c508a1c1d538e1e6a63db4a8343791\",\n        \"e8020b85160eda580566053404cb5c32ad19c62c\",\n        \"2e17cc055f7313d3c4ebd48c07a6026a408bed9c\",\n        \"34f2d87388e8aa408605be28ffa9b9bfd5c07e93\",\n        \"c55f1d68e5348d86862a1aea65d12bd578d9f944\",\n        \"fb180bea71bf830773e6c47764fb457d3a79cf14\",\n        \"ef5fceee2925cb8441bf1de100b67a33eeeef3a3\",\n        \"d80abdc701ceb7403e0af63b2deacdf2bc885c08\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"d70de096619ca477a211e2db93e3f1ff66a9812c\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"9946caf3a8a381f880fe6452c960429ebe8b1440\",\n        \"6594ec85ba41682c2ae0b2c205a92ec372f0ec4b\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"603531c6adfeebdfaecde525d5bf2d4a37a2364f\",\n        \"c1203ff7582cf15a160591f6d29e434e27db4e97\",\n        \"af3f78eb5adbc02cb2154d423da85237cbb6fdeb\",\n        \"dd267334c01365d362ed8239394f0ad61b41e269\",\n        \"71193d1c1633e3cd7004e5336b37f235aa456203\",\n        \"a6ff341ccfa09e05273315e590cfb65e68920a68\",\n        \"1f8a30b17d363c04feab4adb02654c33c0ae1e5b\",\n        \"9afafe6095df854829d54a9172d302e272ce75a4\",\n        \"2ee638dbd3a8083d3aa20fd45c240f1661868e74\",\n        \"655fa18c26267f33084647b30fb0964ec199cd97\",\n        \"7756a2957cb1fcf380e6e2953b3bcf2f96bbeab1\",\n        \"dc32a984b651256a8ec282be52310e6bd33d9815\",\n        \"7d2ff802094eb24bed1faa363a8d07947905be3e\",\n        \"b886797dc34c91f186629403d7c7e2092fc25083\",\n        \"6f3370fcf266fc10842b6d3e77c6cadd842a3580\",\n        \"70308873ff77d1db4bdbbe39b3ed30e9b35bdd5e\",\n        \"7348bcad3d3ae7ca4aa4b8e6123c53629a40400b\",\n        \"11f42721f56f36a64638677ccde7784040829656\",\n        \"5309f4bcb15e3dafbed759488551c1650b55dd81\",\n        \"8eced091ab3e3fd0b1747896cff082711c510d4a\",\n        \"3f7baed9e34b71d3ec2ff6a3e68e2511bb3cbc8a\",\n        \"6e3d91086165693e41057b82b941f579d2586e4d\",\n        \"e99604e2da48483b633247c13dd4ad5f46196562\",\n        \"46770a8e7e2af28f5253e5961f709be74e34c1f6\",\n        \"542eca2fe1bca3e950e38873ab40e488eb6f864e\",\n        \"b8e3a38b79188040cb45c3ef8b75164bab657f8b\",\n        \"c7215ab4589ce3590910c597e86b1aba8e460d49\",\n        \"8d491d313a0e44c10f06d6a4a0d4c7f816bf4f60\",\n        \"c20e56330e9c52df4160199f45695104f92d000f\"\n    ],\n    \"all_ids_count\": 49,\n    \"p0_ids\": [\n        \"8d491d313a0e44c10f06d6a4a0d4c7f816bf4f60\",\n        \"71193d1c1633e3cd7004e5336b37f235aa456203\",\n        \"e99604e2da48483b633247c13dd4ad5f46196562\",\n        \"0816a349bf0e690559bedcc790ab26657354bcb9\",\n        \"c20e56330e9c52df4160199f45695104f92d000f\",\n        \"5309f4bcb15e3dafbed759488551c1650b55dd81\",\n        \"dd267334c01365d362ed8239394f0ad61b41e269\",\n        \"655fa18c26267f33084647b30fb0964ec199cd97\",\n        \"b886797dc34c91f186629403d7c7e2092fc25083\",\n        \"b8e3a38b79188040cb45c3ef8b75164bab657f8b\",\n        \"d80abdc701ceb7403e0af63b2deacdf2bc885c08\",\n        \"c55f1d68e5348d86862a1aea65d12bd578d9f944\"\n    ],\n    \"p0_ids_count\": 12,\n    \"p1_ids\": [\n        \"a6ff341ccfa09e05273315e590cfb65e68920a68\",\n        \"e8020b85160eda580566053404cb5c32ad19c62c\",\n        \"2e17cc055f7313d3c4ebd48c07a6026a408bed9c\",\n        \"2df7fefb20b86ec974784dc3c30d7888ec13fcb9\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"34f2d87388e8aa408605be28ffa9b9bfd5c07e93\",\n        \"70308873ff77d1db4bdbbe39b3ed30e9b35bdd5e\",\n        \"2ee638dbd3a8083d3aa20fd45c240f1661868e74\",\n        \"7348bcad3d3ae7ca4aa4b8e6123c53629a40400b\",\n        \"3f7baed9e34b71d3ec2ff6a3e68e2511bb3cbc8a\",\n        \"6e3d91086165693e41057b82b941f579d2586e4d\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"5a1c861be2c508a1c1d538e1e6a63db4a8343791\",\n        \"7d2ff802094eb24bed1faa363a8d07947905be3e\",\n        \"9afafe6095df854829d54a9172d302e272ce75a4\",\n        \"c1203ff7582cf15a160591f6d29e434e27db4e97\",\n        \"af3f78eb5adbc02cb2154d423da85237cbb6fdeb\",\n        \"fb180bea71bf830773e6c47764fb457d3a79cf14\",\n        \"c7215ab4589ce3590910c597e86b1aba8e460d49\",\n        \"46770a8e7e2af28f5253e5961f709be74e34c1f6\",\n        \"dc32a984b651256a8ec282be52310e6bd33d9815\",\n        \"7756a2957cb1fcf380e6e2953b3bcf2f96bbeab1\",\n        \"8eced091ab3e3fd0b1747896cff082711c510d4a\",\n        \"11f42721f56f36a64638677ccde7784040829656\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"603531c6adfeebdfaecde525d5bf2d4a37a2364f\",\n        \"6594ec85ba41682c2ae0b2c205a92ec372f0ec4b\",\n        \"1f8a30b17d363c04feab4adb02654c33c0ae1e5b\",\n        \"542eca2fe1bca3e950e38873ab40e488eb6f864e\",\n        \"d70de096619ca477a211e2db93e3f1ff66a9812c\",\n        \"cf0533ad2412de3345a495c96812d3cdc74ffb08\",\n        \"1da75c7a8915c0794bc9857f93c6cf31aac17ad2\",\n        \"6beb58f7547048e1ca4e4f99afdd405dbaea4e1b\",\n        \"6075091294a0fe0fe5c6c7b7a0df9029b6a965cb\",\n        \"ef5fceee2925cb8441bf1de100b67a33eeeef3a3\",\n        \"6f3370fcf266fc10842b6d3e77c6cadd842a3580\",\n        \"9946caf3a8a381f880fe6452c960429ebe8b1440\"\n    ],\n    \"p1_ids_count\": 37\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gemini-3.1-pro-preview.json",
+   "size": 34688,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"D\\u00b4avid Bajusz, Anita R\\u00b4acz, and K\\u00b4aroly H\\u00b4eberger. Why is tanimoto index an appropriate choice for fingerprint-based similarity calculations? Journal of cheminformatics, 7(1):1\\u201313, 2015.\",\n            \"extracted_paper_title\": \"Why is tanimoto index an appropriate choice for fingerprint-based similarity calculations?\",\n            \"fetched_paper_id\": \"9afafe6095df854829d54a9172d302e272ce75a4\",\n            \"fetched_paper_title\": \"Why is Tanimoto index an appropriate choice for fingerprint-based similarity calculations?\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Helen Berman, Kim Henrick, and Haruki Nakamura. Announcing the worldwide protein data bank. Nature structural & molecular biology, 10(12):980\\u2013980, 2003.\",\n            \"extracted_paper_title\": \"Announcing the worldwide protein data bank\",\n            \"fetched_paper_id\": \"af3f78eb5adbc02cb2154d423da85237cbb6fdeb\",\n            \"fetched_paper_title\": \"Announcing the worldwide Protein Data Bank\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Martin Buttenschoen, Garrett M Morris, and Charlotte M Deane. Posebusters: Ai-based docking methods fail to generate physically valid poses or generalise to novel sequences. Chemical Science, 15(9):3130\\u20133139, 2024.\",\n            \"extracted_paper_title\": \"Posebusters: Ai-based docking methods fail to generate physically valid poses or generalise to novel sequences\",\n            \"fetched_paper_id\": \"dd267334c01365d362ed8239394f0ad61b41e269\",\n            \"fetched_paper_title\": \"PoseBusters: AI-based docking methods fail to generate physically valid poses or generalise to novel sequences\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Gabriele Corso, Hannes St\\u00a8ark, Bowen Jing, Regina Barzilay, and Tommi Jaakkola. Diffdock: Diffusion steps, twists, and turns for molecular docking. arXiv preprint arXiv:2210.01776, 2022.\",\n            \"extracted_paper_title\": \"Diffdock: Diffusion steps, twists, and turns for molecular docking\",\n            \"fetched_paper_id\": \"e99604e2da48483b633247c13dd4ad5f46196562\",\n            \"fetched_paper_title\": \"DiffDock: Diffusion Steps, Twists, and Turns for Molecular Docking\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Valentin De Bortoli, Emile Mathieu, Michael Hutchinson, James Thornton, Yee Whye Teh, and Arnaud Doucet. Riemannian score-based generative modelling. Advances in Neural Information Processing Systems, 35:2406\\u20132422, 2022.\",\n            \"extracted_paper_title\": \"Riemannian score-based generative modelling\",\n            \"fetched_paper_id\": \"7d2ff802094eb24bed1faa363a8d07947905be3e\",\n            \"fetched_paper_title\": \"Riemannian Score-Based Generative Modeling\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Daniel Defays. An efficient algorithm for a complete link method. The computer journal, 20(4): 364\\u2013366, 1977.\",\n            \"extracted_paper_title\": \"An efficient algorithm for a complete link method\",\n            \"fetched_paper_id\": \"3f7baed9e34b71d3ec2ff6a3e68e2511bb3cbc8a\",\n            \"fetched_paper_title\": \"An Efficient Algorithm for a Complete Link Method\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chuong B Do, Mahathi SP Mahabhashyam, Michael Brudno, and Serafim Batzoglou. Probcons: Probabilistic consistency-based multiple sequence alignment. Genome research, 15(2):330\\u2013340, 2005.\",\n            \"extracted_paper_title\": \"Probcons: Probabilistic consistency-based multiple sequence alignment\",\n            \"fetched_paper_id\": \"2ee638dbd3a8083d3aa20fd45c240f1661868e74\",\n            \"fetched_paper_title\": \"ProbCons: Probabilistic consistency-based multiple sequence alignment.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chuong B Do, Samuel S Gross, and Serafim Batzoglou. Contralign: discriminative training for protein sequence alignment. In Annual International Conference on Research in Computational Molecular Biology, pp. 160\\u2013174. Springer, 2006.\",\n            \"extracted_paper_title\": \"Contralign: discriminative training for protein sequence alignment.\",\n            \"fetched_paper_id\": \"6e3d91086165693e41057b82b941f579d2586e4d\",\n            \"fetched_paper_title\": \"CONTRAlign: Discriminative Training for Protein Sequence Alignment\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Leonardo G Ferreira, Ricardo N Dos Santos, Glaucius Oliva, and Adriano D Andricopulo. Molecular docking and structure-based drug design strategies. Molecules, 20(7):13384\\u201313421, 2015.\",\n            \"extracted_paper_title\": \"Molecular docking and structure-based drug design strategies\",\n            \"fetched_paper_id\": \"fb180bea71bf830773e6c47764fb457d3a79cf14\",\n            \"fetched_paper_title\": \"Molecular Docking and Structure-Based Drug Design Strategies\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Fabian Fuchs, Daniel Worrall, Volker Fischer, and Max Welling. Se (3)-transformers: 3d roto- translation equivariant attention networks. Advances in neural information processing systems, 33:1970\\u20131981, 2020.\",\n            \"extracted_paper_title\": \"SE(3)-Transformers: 3D Roto-translation Equivariant Attention Networks\",\n            \"fetched_paper_id\": \"6075091294a0fe0fe5c6c7b7a0df9029b6a965cb\",\n            \"fetched_paper_title\": \"SE(3)-Transformers: 3D Roto-Translation Equivariant Attention Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Kaiyuan Gao, Qizhi Pei, Jinhua Zhu, Tao Qin, Kun He, Tie- Yan Liu, and Lijun Wu. Fabind+: Enhancing molecular docking through improved pocket prediction and pose generation. arXiv preprint arXiv:2403.20261, 2024.\",\n            \"extracted_paper_title\": \"Fabind+: Enhancing molecular docking through improved pocket prediction and pose generation\",\n            \"fetched_paper_id\": \"6594ec85ba41682c2ae0b2c205a92ec372f0ec4b\",\n            \"fetched_paper_title\": \"FABind+: Enhancing Molecular Docking through Improved Pocket Prediction and Pose Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Mario Geiger and Tess Smidt. e3nn: Euclidean neural networks. arXiv preprint arXiv:2207.09453, 2022.\",\n            \"extracted_paper_title\": \"e3nn: Euclidean neural networks\",\n            \"fetched_paper_id\": \"c7215ab4589ce3590910c597e86b1aba8e460d49\",\n            \"fetched_paper_title\": \"e3nn: Euclidean Neural Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Thomas A Halgren, Robert B Murphy, Richard A Friesner, Hege S Beard, Leah L Frye, W Thomas Pollard, and Jay L Banks. Glide: a new approach for rapid, accurate docking and scoring. 2. enrichment factors in database screening. Journal of medicinal chemistry, 47(7):1750\\u20131759, 2004.\",\n            \"extracted_paper_title\": \"Glide: a new approach for rapid, accurate docking and scoring. 2. enrichment factors in database screening.\",\n            \"fetched_paper_id\": \"603531c6adfeebdfaecde525d5bf2d4a37a2364f\",\n            \"fetched_paper_title\": \"Glide: a new approach for rapid, accurate docking and scoring. 2. Enrichment factors in database screening.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Somaye Hashemifar, Qixing Huang, and Jinbo Xu. Joint alignment of multiple protein\\u2013protein interaction networks via convex optimization. Journal of Computational Biology, 23(11):903\\u2013 911, 2016.\",\n            \"extracted_paper_title\": \"Joint alignment of multiple protein\\u2013protein interaction networks via convex optimization\",\n            \"fetched_paper_id\": \"7348bcad3d3ae7ca4aa4b8e6123c53629a40400b\",\n            \"fetched_paper_title\": \"Joint Alignment of Multiple Protein\\u2013Protein Interaction Networks via Convex Optimization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. Advances in neural information processing systems, 33:6840\\u20136851, 2020.\",\n            \"extracted_paper_title\": \"Denoising diffusion probabilistic models\",\n            \"fetched_paper_id\": \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n            \"fetched_paper_title\": \"Denoising Diffusion Probabilistic Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Tao Hu, Zhizhong Han, and Matthias Zwicker. 3d shape completion with multi-view consistent inference. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 34, pp. 10997\\u201311004, 2020.\",\n            \"extracted_paper_title\": \"3d shape completion with multi-view consistent inference\",\n            \"fetched_paper_id\": \"d70de096619ca477a211e2db93e3f1ff66a9812c\",\n            \"fetched_paper_title\": \"3D Shape Completion with Multi-view Consistent Inference\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"John Jumper, Richard Evans, Alexander Pritzel, Tim Green, Michael Figurnov, Olaf Ronneberger, Kathryn Tunyasuvunakool, Russ Bates, Augustin \\u02c7Z\\u00b4\\u0131dek, Anna Potapenko, et al. Highly accurate protein structure prediction with alphafold. Nature, 596(7873):583\\u2013589, 2021.\",\n            \"extracted_paper_title\": \"Highly accurate protein structure prediction with AlphaFold\",\n            \"fetched_paper_id\": \"dc32a984b651256a8ec282be52310e6bd33d9815\",\n            \"fetched_paper_title\": \"Highly accurate protein structure prediction with AlphaFold\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wolfgang Kabsch. A solution for the best rotation to relate two sets of vectors. Acta Crystallographica Section A: Crystal Physics, Diffraction, Theoretical and General Crystallography, 32 (5):922\\u2013923, 1976.\",\n            \"extracted_paper_title\": \"A solution for the best rotation to relate two sets of vectors.\",\n            \"fetched_paper_id\": \"cf0533ad2412de3345a495c96812d3cdc74ffb08\",\n            \"fetched_paper_title\": \"A solution for the best rotation to relate two sets of vectors\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"David Ryan Koes, Matthew P Baumgartner, and Carlos J Camacho. Lessons learned in empirical scoring with smina from the csar 2011 benchmarking exercise. Journal of chemical information and modeling, 53(8):1893\\u20131904, 2013.\",\n            \"extracted_paper_title\": \"Lessons learned in empirical scoring with smina from the csar 2011 benchmarking exercise\",\n            \"fetched_paper_id\": \"b8e3a38b79188040cb45c3ef8b75164bab657f8b\",\n            \"fetched_paper_title\": \"Lessons Learned in Empirical Scoring with smina from the CSAR 2011 Benchmarking Exercise\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Radoslav Kriv\\u00b4ak and David Hoksza. P2rank: machine learning based tool for rapid and accurate prediction of ligand binding sites from protein structure. Journal of cheminformatics, 10:1\\u201312, 2018.\",\n            \"extracted_paper_title\": \"P2rank: machine learning based tool for rapid and accurate prediction of ligand binding sites from protein structure.\",\n            \"fetched_paper_id\": \"71193d1c1633e3cd7004e5336b37f235aa456203\",\n            \"fetched_paper_title\": \"P2Rank: machine learning based tool for rapid and accurate prediction of ligand binding sites from protein structure\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Chung-Shou Liao, Kanghao Lu, Michael Baym, Rohit Singh, and Bonnie Berger. Isorankn: spectral methods for global alignment of multiple protein networks. Bioinformatics, 25(12):i253\\u2013i258, 2009.\",\n            \"extracted_paper_title\": \"Isorankn: spectral methods for global alignment of multiple protein networks\",\n            \"fetched_paper_id\": \"6beb58f7547048e1ca4e4f99afdd405dbaea4e1b\",\n            \"fetched_paper_title\": \"IsoRankN: spectral methods for global alignment of multiple protein networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhihai Liu, Yan Li, Li Han, Jie Li, Jie Liu, Zhixiong Zhao, Wei Nie, Yuchen Liu, and Renxiao Wang. Pdb-wide collection of binding data: current status of the pdbbind database. Bioinformatics, 31 (3):405\\u2013412, 2015.\",\n            \"extracted_paper_title\": \"Pdb-wide collection of binding data: current status of the pdbbind database\",\n            \"fetched_paper_id\": \"c55f1d68e5348d86862a1aea65d12bd578d9f944\",\n            \"fetched_paper_title\": \"PDB-wide collection of binding data: current status of the PDBbind database\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. arXiv preprint arXiv:1711.05101, 2017.\",\n            \"extracted_paper_title\": \"Decoupled weight decay regularization\",\n            \"fetched_paper_id\": \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n            \"fetched_paper_title\": \"Decoupled Weight Decay Regularization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wei Lu, Qifeng Wu, Jixian Zhang, Jiahua Rao, Chengtao Li, and Shuangjia Zheng. Tankbind: Trigonometry-aware neural networks for drug-protein binding structure prediction. Advances in neural information processing systems, 35:7236\\u20137249, 2022.\",\n            \"extracted_paper_title\": \"Tankbind: Trigonometry-aware neural networks for drug-protein binding structure prediction\",\n            \"fetched_paper_id\": \"b886797dc34c91f186629403d7c7e2092fc25083\",\n            \"fetched_paper_title\": \"TANKBind: Trigonometry-Aware Neural NetworKs for Drug-Protein Binding Structure Prediction\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Andrew T McNutt and David R Koes. Open-combind: harnessing unlabeled data for improved binding pose prediction. Biophysical Journal, 123(3):186a, 2024.\",\n            \"extracted_paper_title\": \"Open-combind: harnessing unlabeled data for improved binding pose prediction\",\n            \"fetched_paper_id\": \"7756a2957cb1fcf380e6e2953b3bcf2f96bbeab1\",\n            \"fetched_paper_title\": \"Open-ComBind: harnessing unlabeled data for improved binding pose prediction\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Andrew T McNutt, Paul Francoeur, Rishal Aggarwal, Tomohide Masuda, Rocco Meli, Matthew Ragoza, Jocelyn Sunseri, and David Ryan Koes. Gnina 1.0: molecular docking with deep learning. Journal of cheminformatics, 13(1):1\\u201320, 2021.\",\n            \"extracted_paper_title\": \"Gnina 1.0: molecular docking with deep learning\",\n            \"fetched_paper_id\": \"0816a349bf0e690559bedcc790ab26657354bcb9\",\n            \"fetched_paper_title\": \"GNINA 1.0: molecular docking with deep learning\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Rocco Meli and Philip C Biggin. spyrmsd: symmetry-corrected rmsd calculations in python. Journal of Cheminformatics, 12(1):1\\u20137, 2020.\",\n            \"extracted_paper_title\": \"spyrmsd: symmetry-corrected rmsd calculations in python\",\n            \"fetched_paper_id\": \"c20e56330e9c52df4160199f45695104f92d000f\",\n            \"fetched_paper_title\": \"spyrmsd: symmetry-corrected RMSD calculations in Python\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Oscar M\\u00b4endez-Lucio, Mazen Ahmad, Ehecatl Antonio del Rio-Chanona, and J\\u00a8org Kurt Wegner. A geometric deep learning approach to predict binding conformations of bioactive molecules. Nature Machine Intelligence, 3(12):1033\\u20131039, 2021.\",\n            \"extracted_paper_title\": \"A geometric deep learning approach to predict binding conformations of bioactive molecules\",\n            \"fetched_paper_id\": \"a50cea1de7d1e6d3ca4fc9247f7be5517b976eca\",\n            \"fetched_paper_title\": \"Machine learning in computational docking\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Elaine C Meng, Brian K Shoichet, and Irwin D Kuntz. Automated docking with grid-based energy evaluation. Journal of computational chemistry, 13(4):505\\u2013524, 1992.\",\n            \"extracted_paper_title\": \"Automated docking with grid-based energy evaluation\",\n            \"fetched_paper_id\": \"2df7fefb20b86ec974784dc3c30d7888ec13fcb9\",\n            \"fetched_paper_title\": \"Automated docking with grid\\u2010based energy evaluation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Joseph M Paggi, Julia A Belk, Scott A Hollingsworth, Nicolas Villanueva, Alexander S Powers, Mary J Clark, Augustine G Chemparathy, Jonathan E Tynan, Thomas K Lau, Roger K Sunahara, et al. Leveraging nonstructural data to predict structures and affinities of protein\\u2013ligand complexes. Proceedings of the National Academy of Sciences, 118(51):e2112621118, 2021.\",\n            \"extracted_paper_title\": \"Leveraging nonstructural data to predict structures and affinities of protein\\u2013ligand complexes\",\n            \"fetched_paper_id\": \"d80abdc701ceb7403e0af63b2deacdf2bc885c08\",\n            \"fetched_paper_title\": \"Leveraging nonstructural data to predict structures and affinities of protein\\u2013ligand complexes\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Qizhi Pei, Kaiyuan Gao, Lijun Wu, Jinhua Zhu, Yingce Xia, Shufang Xie, Tao Qin, Kun He, Tie- Yan Liu, and Rui Yan. Fabind: Fast and accurate protein-ligand binding. Advances in Neural Information Processing Systems, 36, 2024.\",\n            \"extracted_paper_title\": \"Fabind: Fast and accurate protein-ligand binding\",\n            \"fetched_paper_id\": \"ef5fceee2925cb8441bf1de100b67a33eeeef3a3\",\n            \"fetched_paper_title\": \"FABind: Fast and Accurate Protein-Ligand Binding\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Matthew Ragoza, Joshua Hochuli, Elisa Idrobo, Jocelyn Sunseri, and David Ryan Koes. Protein\\u2013 ligand scoring with convolutional neural networks. Journal of chemical information and modeling, 57(4):942\\u2013957, 2017.\",\n            \"extracted_paper_title\": \"Protein\\u2013ligand scoring with convolutional neural networks\",\n            \"fetched_paper_id\": \"a6ff341ccfa09e05273315e590cfb65e68920a68\",\n            \"fetched_paper_title\": \"Protein-Ligand Scoring with Convolutional Neural Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"John W Raymond and Peter Willett. Maximum common subgraph isomorphism algorithms for the matching of chemical structures. Journal of computer-aided molecular design, 16:521\\u2013533, 2002.\",\n            \"extracted_paper_title\": \"Maximum common subgraph isomorphism algorithms for the matching of chemical structures.\",\n            \"fetched_paper_id\": \"8d491d313a0e44c10f06d6a4a0d4c7f816bf4f60\",\n            \"fetched_paper_title\": \"Promoting Access to White Rose Research Papers Maximum Common Subgraph Isomorphism Algorithms for the Matching of Chemical Structures\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Brian K Shoichet, Irwin D Kuntz, and Dale L Bodian. Molecular docking using shape descriptors. Journal of computational chemistry, 13(3):380\\u2013397, 1992.\",\n            \"extracted_paper_title\": \"Molecular docking using shape descriptors\",\n            \"fetched_paper_id\": \"34f2d87388e8aa408605be28ffa9b9bfd5c07e93\",\n            \"fetched_paper_title\": \"Molecular docking using shape descriptors\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yang Song, Jascha Sohl-Dickstein, Diederik P Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole. Score-based generative modeling through stochastic differential equations. In International Conference on Learning Representations, 2021. URL https://openreview.net/ forum?id=PxTIG12RRHS.\",\n            \"extracted_paper_title\": \"Score-based generative modeling through stochastic differential equations.\",\n            \"fetched_paper_id\": \"633e2fbfc0b21e959a244100937c5853afca4853\",\n            \"fetched_paper_title\": \"Score-Based Generative Modeling through Stochastic Differential Equations\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hannes St\\u00a8ark, Octavian Ganea, Lagnajit Pattanaik, Regina Barzilay, and Tommi Jaakkola. Equibind: Geometric deep learning for drug binding structure prediction. In International conference on machine learning, pp. 20503\\u201320521. PMLR, 2022.\",\n            \"extracted_paper_title\": \"Equibind: Geometric deep learning for drug binding structure prediction\",\n            \"fetched_paper_id\": \"5309f4bcb15e3dafbed759488551c1650b55dd81\",\n            \"fetched_paper_title\": \"EquiBind: Geometric Deep Learning for Drug Binding Structure Prediction\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Nathaniel Thomas, Tess Smidt, Steven Kearnes, Lusann Yang, Li Li, Kai Kohlhoff, and Patrick Riley. Tensor field networks: Rotation-and translation-equivariant neural networks for 3d point clouds. arXiv preprint arXiv:1802.08219, 2018.\",\n            \"extracted_paper_title\": \"Tensor field networks: Rotation- and translation-equivariant neural networks for 3d point clouds\",\n            \"fetched_paper_id\": \"6f3370fcf266fc10842b6d3e77c6cadd842a3580\",\n            \"fetched_paper_title\": \"Tensor Field Networks: Rotation- and Translation-Equivariant Neural Networks for 3D Point Clouds\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Robert Tibshirani, Guenther Walther, and Trevor Hastie. Estimating the number of clusters in a data set via the gap statistic. Journal of the Royal Statistical Society: Series B (Statistical Methodology), 63(2):411\\u2013423, 2001.\",\n            \"extracted_paper_title\": \"Estimating the number of clusters in a data set via the gap statistic.\",\n            \"fetched_paper_id\": \"e8020b85160eda580566053404cb5c32ad19c62c\",\n            \"fetched_paper_title\": \"Estimating the number of clusters in a data set via the gap statistic\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Oleg Trott and Arthur J Olson. Autodock vina: improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading. Journal of computational chemistry, 31(2):455\\u2013461, 2010.\",\n            \"extracted_paper_title\": \"Autodock vina: improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading.\",\n            \"fetched_paper_id\": \"c1203ff7582cf15a160591f6d29e434e27db4e97\",\n            \"fetched_paper_title\": \"AutoDock Vina: Improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Michel Van Kempen, Stephanie S Kim, Charlotte Tumescheit, Milot Mirdita, Jeongjae Lee, Cameron LM Gilchrist, Johannes S\\u00a8oding, and Martin Steinegger. Fast and accurate protein structure search with foldseek. Nature biotechnology, 42(2):243\\u2013246, 2024.\",\n            \"extracted_paper_title\": \"Fast and accurate protein structure search with foldseek\",\n            \"fetched_paper_id\": \"655fa18c26267f33084647b30fb0964ec199cd97\",\n            \"fetched_paper_title\": \"Fast and accurate protein structure search with Foldseek\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Joe H Ward Jr. Hierarchical grouping to optimize an objective function. Journal of the American statistical association, 58(301):236\\u2013244, 1963.\",\n            \"extracted_paper_title\": \"Hierarchical grouping to optimize an objective function\",\n            \"fetched_paper_id\": \"8eced091ab3e3fd0b1747896cff082711c510d4a\",\n            \"fetched_paper_title\": \"Hierarchical Grouping to Optimize an Objective Function\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Scott A Wildman and Gordon M Crippen. Prediction of physicochemical parameters by atomic contributions. Journal of chemical information and computer sciences, 39(5):868\\u2013873, 1999.\",\n            \"extracted_paper_title\": \"Prediction of physicochemical parameters by atomic contributions\",\n            \"fetched_paper_id\": \"1f8a30b17d363c04feab4adb02654c33c0ae1e5b\",\n            \"fetched_paper_title\": \"Prediction of Physicochemical Parameters by Atomic Contributions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jianxiong Xiao and Long Quan. Multiple view semantic segmentation for street view images. In 2009 IEEE 12th international conference on computer vision, pp. 686\\u2013693. IEEE, 2009.\",\n            \"extracted_paper_title\": \"Multiple view semantic segmentation for street view images.\",\n            \"fetched_paper_id\": \"542eca2fe1bca3e950e38873ab40e488eb6f864e\",\n            \"fetched_paper_title\": \"Multiple view semantic segmentation for street view images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Si Zhang and Hanghang Tong. Final: Fast attributed network alignment. In Proceedings of the 22nd ACM SIGKDD international conference on knowledge discovery and data mining, pp. 1345\\u2013 1354, 2016.\",\n            \"extracted_paper_title\": \"Final: Fast attributed network alignment\",\n            \"fetched_paper_id\": \"5a1c861be2c508a1c1d538e1e6a63db4a8343791\",\n            \"fetched_paper_title\": \"FINAL: Fast Attributed Network Alignment\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Si Zhang, Hanghang Tong, Long Jin, Yinglong Xia, and Yunsong Guo. Balancing consistency and disparity in network alignment. In Proceedings of the 27th ACM SIGKDD conference on knowledge discovery & data mining, pp. 2212\\u20132222, 2021.\",\n            \"extracted_paper_title\": \"Balancing consistency and disparity in network alignment\",\n            \"fetched_paper_id\": \"70308873ff77d1db4bdbbe39b3ed30e9b35bdd5e\",\n            \"fetched_paper_title\": \"Balancing Consistency and Disparity in Network Alignment\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yangtian Zhang, Huiyu Cai, Chence Shi, Bozitao Zhong, and Jian Tang. E3bind: An end-to-end equivariant network for protein-ligand docking. arXiv preprint arXiv:2210.06069, 2022.\",\n            \"extracted_paper_title\": \"E3bind: An end-to-end equivariant network for protein-ligand docking.\",\n            \"fetched_paper_id\": \"9946caf3a8a381f880fe6452c960429ebe8b1440\",\n            \"fetched_paper_title\": \"E3Bind: An End-to-End Equivariant Network for Protein-Ligand Docking\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yangtian Zhang, Huiyu Cai, Chence Shi, and Jian Tang. E3bind: An end-to-end equivariant network for protein-ligand docking. In The Eleventh International Conference on Learning Representations, 2023. URL https://openreview.net/forum?id=sO1QiAftQFv.\",\n            \"extracted_paper_title\": \"E3bind: An end-to-end equivariant network for protein-ligand docking\",\n            \"fetched_paper_id\": \"9946caf3a8a381f880fe6452c960429ebe8b1440\",\n            \"fetched_paper_title\": \"E3Bind: An End-to-End Equivariant Network for Protein-Ligand Docking\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Bo Zheng, Li Dong, Shaohan Huang, Wenhui Wang, Zewen Chi, Saksham Singhal, Wanxiang Che, Ting Liu, Xia Song, and Furu Wei. Consistency regularization for cross-lingual fine-tuning. In Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing (Volume 1: Long Papers), pp. 3403\\u20133417, 2021.\",\n            \"extracted_paper_title\": \"Consistency regularization for cross-lingual fine-tuning\",\n            \"fetched_paper_id\": \"1da75c7a8915c0794bc9857f93c6cf31aac17ad2\",\n            \"fetched_paper_title\": \"Consistency Regularization for Cross-Lingual Fine-Tuning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dengyong Zhou, Olivier Bousquet, Thomas Lal, Jason Weston, and Bernhard Sch\\u00a8olkopf. Learning with local and global consistency. Advances in neural information processing systems, 16, 2003.\",\n            \"extracted_paper_title\": \"Learning with local and global consistency\",\n            \"fetched_paper_id\": \"46770a8e7e2af28f5253e5961f709be74e34c1f6\",\n            \"fetched_paper_title\": \"Learning with Local and Global Consistency\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Gengmo Zhou, Zhifeng Gao, Qiankun Ding, Hang Zheng, Hongteng Xu, Zhewei Wei, Linfeng Zhang, and Guolin Ke. Uni-mol: A universal 3d molecular representation learning framework. In The Eleventh International Conference on Learning Representations, 2023. URL https: //openreview.net/forum?id=6K2RM6wVqKu.\",\n            \"extracted_paper_title\": \"Uni-mol: A universal 3d molecular representation learning framework.\",\n            \"fetched_paper_id\": \"11f42721f56f36a64638677ccde7784040829656\",\n            \"fetched_paper_title\": \"Uni-Mol: A Universal 3D Molecular Representation Learning Framework\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"dd267334c01365d362ed8239394f0ad61b41e269\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"c20e56330e9c52df4160199f45695104f92d000f\",\n        \"655fa18c26267f33084647b30fb0964ec199cd97\",\n        \"2ee638dbd3a8083d3aa20fd45c240f1661868e74\",\n        \"0816a349bf0e690559bedcc790ab26657354bcb9\",\n        \"5a1c861be2c508a1c1d538e1e6a63db4a8343791\",\n        \"6e3d91086165693e41057b82b941f579d2586e4d\",\n        \"2df7fefb20b86ec974784dc3c30d7888ec13fcb9\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"cf0533ad2412de3345a495c96812d3cdc74ffb08\",\n        \"542eca2fe1bca3e950e38873ab40e488eb6f864e\",\n        \"a50cea1de7d1e6d3ca4fc9247f7be5517b976eca\",\n        \"5309f4bcb15e3dafbed759488551c1650b55dd81\",\n        \"c7215ab4589ce3590910c597e86b1aba8e460d49\",\n        \"1da75c7a8915c0794bc9857f93c6cf31aac17ad2\",\n        \"70308873ff77d1db4bdbbe39b3ed30e9b35bdd5e\",\n        \"c1203ff7582cf15a160591f6d29e434e27db4e97\",\n        \"7d2ff802094eb24bed1faa363a8d07947905be3e\",\n        \"11f42721f56f36a64638677ccde7784040829656\",\n        \"1f8a30b17d363c04feab4adb02654c33c0ae1e5b\",\n        \"af3f78eb5adbc02cb2154d423da85237cbb6fdeb\",\n        \"dc32a984b651256a8ec282be52310e6bd33d9815\",\n        \"6f3370fcf266fc10842b6d3e77c6cadd842a3580\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"a6ff341ccfa09e05273315e590cfb65e68920a68\",\n        \"d80abdc701ceb7403e0af63b2deacdf2bc885c08\",\n        \"ef5fceee2925cb8441bf1de100b67a33eeeef3a3\",\n        \"603531c6adfeebdfaecde525d5bf2d4a37a2364f\",\n        \"71193d1c1633e3cd7004e5336b37f235aa456203\",\n        \"9946caf3a8a381f880fe6452c960429ebe8b1440\",\n        \"3f7baed9e34b71d3ec2ff6a3e68e2511bb3cbc8a\",\n        \"6beb58f7547048e1ca4e4f99afdd405dbaea4e1b\",\n        \"34f2d87388e8aa408605be28ffa9b9bfd5c07e93\",\n        \"fb180bea71bf830773e6c47764fb457d3a79cf14\",\n        \"d70de096619ca477a211e2db93e3f1ff66a9812c\",\n        \"9afafe6095df854829d54a9172d302e272ce75a4\",\n        \"6594ec85ba41682c2ae0b2c205a92ec372f0ec4b\",\n        \"c55f1d68e5348d86862a1aea65d12bd578d9f944\",\n        \"7756a2957cb1fcf380e6e2953b3bcf2f96bbeab1\",\n        \"b886797dc34c91f186629403d7c7e2092fc25083\",\n        \"e99604e2da48483b633247c13dd4ad5f46196562\",\n        \"46770a8e7e2af28f5253e5961f709be74e34c1f6\",\n        \"7348bcad3d3ae7ca4aa4b8e6123c53629a40400b\",\n        \"8eced091ab3e3fd0b1747896cff082711c510d4a\",\n        \"8d491d313a0e44c10f06d6a4a0d4c7f816bf4f60\",\n        \"e8020b85160eda580566053404cb5c32ad19c62c\",\n        \"b8e3a38b79188040cb45c3ef8b75164bab657f8b\",\n        \"6075091294a0fe0fe5c6c7b7a0df9029b6a965cb\"\n    ],\n    \"all_ids_count\": 49,\n    \"p0_ids\": [\n        \"5309f4bcb15e3dafbed759488551c1650b55dd81\",\n        \"dd267334c01365d362ed8239394f0ad61b41e269\",\n        \"c20e56330e9c52df4160199f45695104f92d000f\",\n        \"0816a349bf0e690559bedcc790ab26657354bcb9\",\n        \"d80abdc701ceb7403e0af63b2deacdf2bc885c08\",\n        \"c55f1d68e5348d86862a1aea65d12bd578d9f944\",\n        \"b886797dc34c91f186629403d7c7e2092fc25083\",\n        \"e99604e2da48483b633247c13dd4ad5f46196562\",\n        \"71193d1c1633e3cd7004e5336b37f235aa456203\",\n        \"af3f78eb5adbc02cb2154d423da85237cbb6fdeb\",\n        \"b8e3a38b79188040cb45c3ef8b75164bab657f8b\"\n    ],\n    \"p0_ids_count\": 11,\n    \"p1_ids\": [\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"655fa18c26267f33084647b30fb0964ec199cd97\",\n        \"2ee638dbd3a8083d3aa20fd45c240f1661868e74\",\n        \"5a1c861be2c508a1c1d538e1e6a63db4a8343791\",\n        \"6e3d91086165693e41057b82b941f579d2586e4d\",\n        \"2df7fefb20b86ec974784dc3c30d7888ec13fcb9\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"cf0533ad2412de3345a495c96812d3cdc74ffb08\",\n        \"542eca2fe1bca3e950e38873ab40e488eb6f864e\",\n        \"a50cea1de7d1e6d3ca4fc9247f7be5517b976eca\",\n        \"c7215ab4589ce3590910c597e86b1aba8e460d49\",\n        \"1da75c7a8915c0794bc9857f93c6cf31aac17ad2\",\n        \"70308873ff77d1db4bdbbe39b3ed30e9b35bdd5e\",\n        \"c1203ff7582cf15a160591f6d29e434e27db4e97\",\n        \"7d2ff802094eb24bed1faa363a8d07947905be3e\",\n        \"11f42721f56f36a64638677ccde7784040829656\",\n        \"1f8a30b17d363c04feab4adb02654c33c0ae1e5b\",\n        \"dc32a984b651256a8ec282be52310e6bd33d9815\",\n        \"6f3370fcf266fc10842b6d3e77c6cadd842a3580\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"a6ff341ccfa09e05273315e590cfb65e68920a68\",\n        \"ef5fceee2925cb8441bf1de100b67a33eeeef3a3\",\n        \"603531c6adfeebdfaecde525d5bf2d4a37a2364f\",\n        \"9946caf3a8a381f880fe6452c960429ebe8b1440\",\n        \"6beb58f7547048e1ca4e4f99afdd405dbaea4e1b\",\n        \"3f7baed9e34b71d3ec2ff6a3e68e2511bb3cbc8a\",\n        \"34f2d87388e8aa408605be28ffa9b9bfd5c07e93\",\n        \"fb180bea71bf830773e6c47764fb457d3a79cf14\",\n        \"d70de096619ca477a211e2db93e3f1ff66a9812c\",\n        \"9afafe6095df854829d54a9172d302e272ce75a4\",\n        \"6594ec85ba41682c2ae0b2c205a92ec372f0ec4b\",\n        \"7756a2957cb1fcf380e6e2953b3bcf2f96bbeab1\",\n        \"46770a8e7e2af28f5253e5961f709be74e34c1f6\",\n        \"7348bcad3d3ae7ca4aa4b8e6123c53629a40400b\",\n        \"8eced091ab3e3fd0b1747896cff082711c510d4a\",\n        \"8d491d313a0e44c10f06d6a4a0d4c7f816bf4f60\",\n        \"e8020b85160eda580566053404cb5c32ad19c62c\",\n        \"6075091294a0fe0fe5c6c7b7a0df9029b6a965cb\"\n    ],\n    \"p1_ids_count\": 38\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  }
+ ],
+ "conditions": [
+  {
+   "name": "RW-opus",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-sonnet",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-mixed",
+   "system": "researchworld",
+   "agent": null,
+   "provider": null,
+   "model": null,
+   "effort": null,
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "mixed",
+     "name": "Antigravity (Gemini) + Claude Code + Codex CLI",
+     "version": "antigravity agy_acp_server 1.4.1; claude-code @anthropic-ai/claude-agent-sdk 0.3.300; codex @openai/codex 0.163.0",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container; roles use antigravity, claude-code, codex"
+    },
+    "model": {
+     "provider": "per role",
+     "model": "per role",
+     "effort": "per role"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "codex",
+      "agent_name": "Codex CLI",
+      "agent_version": "@openai/codex 0.163.0",
+      "how": "codex-acp",
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "CC-opus",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CC-sonnet",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-astra",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6-astra",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6-astra",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-sol",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6.1-sol",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-opus",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-sonnet",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-opus",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-opus-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-sonnet",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-sonnet-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-opus",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-sonnet",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  }
+ ],
+ "batches": [
+  "paperwritingbench-subset"
+ ],
+ "runs": []
+}

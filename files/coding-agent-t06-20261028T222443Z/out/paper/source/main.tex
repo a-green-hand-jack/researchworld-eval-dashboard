@@ -1,0 +1,250 @@
+\documentclass{article}
+
+\usepackage[main]{neurips_2026}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{caption}
+\captionsetup{font=small}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\newcommand{\kstar}{k^\star}
+
+\title{How Many Votes Move a Leaderboard? Worst-Case Fragility of Pairwise-Comparison Rankings Is Predicted by Statistical Evidence}
+
+\author{%
+  Anonymous Author(s) \\
+  Affiliation \\
+  Address \\
+  \texttt{email} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Leaderboards built from pairwise preferences, such as Chatbot Arena, fit a Bradley--Terry (BT) model to many ``A vs.\ B'' judgments and rank by the fitted scores. We ask how many comparisons must be removed, relabelled, or injected to change such a ranking, and whether the answer depends on the evaluation design (crowd votes, expert annotation, LLM judges, sports results). We compute refit-verified worst-case perturbations for 3,418 ranking-relevant pairs on 80 real leaderboards spanning four designs: three crowd arenas, MT-Bench expert and GPT-4 judgments, five LLM judges relabelling the same 49,938 Arena battles, and 68 NBA seasons. Top-1 positions are often fragile. The leader of a 135,622-vote Arena snapshot changes after removing 62 votes (0.05\%) or injecting 107, even though it is first in 100\% of bootstrap resamples. On a 57,477-vote snapshot, 2 removals suffice. Our main finding is that the worst-case size is almost entirely predicted by two quantities computable from a single BT fit. These are the pair's statistical evidence $z$ (score gap over its standard error) and an evidence-spread factor $R$ (standard error over the largest single-comparison influence). The count is $\kstar \approx zR$, with $R^2=0.989$ on the log scale across all designs. Adding design indicators raises $R^2$ by only 0.002, and $R$ grows roughly as $\tfrac12\sqrt{n}$ in the number $n$ of comparisons involving the pair. Hence the fraction-of-data metric usually used for cross-dataset comparison mainly reflects gap size, data volume, and the number of competitors. It does not reflect who labels. At equal sample size on the same six models, crowd votes are no more fragile than MT-Bench expert votes. Statistically clear leaders never changed under random deletion of 30\% or random label flips of 10\% of the comparisons. Yet a targeted removal of a median 0.14\% of the data overturns significant ($z>1.96$) adjacent pairs. Realistic attacker constraints raise the required number of votes by 1.3--4$\times$ (target-only) or 2.4--52$\times$ (omnipresent).
+\end{abstract}
+
+\section{Introduction}
+
+Public leaderboards that aggregate pairwise preferences now guide model selection, product announcements and research claims. Chatbot Arena~\citep{chiang2024chatbot} collects anonymous crowd votes between two models and fits a Bradley--Terry (BT) model~\citep{bradley1952rank}. MT-Bench~\citep{zheng2023judging} uses expert and GPT-4 pairwise judgments on a fixed question set. Sports rankings fit the same model to game results. A rank is a deterministic function of the comparison data, so a natural question is how much the data must change before the rank changes. The change could come from noise (careless voters, dataset curation, filtering rules) or from deliberate action, such as vote rigging~\citep{min2025improving} or selective sampling and private testing~\citep{singh2025leaderboard}.
+
+Recent work applied the worst-case data-dropping idea of \citet{broderick2020automatic} to Chatbot Arena and MT-Bench. It found that removing a handful of preferences can change the top-ranked model, and that MT-Bench appears more robust than Arena, which was attributed to expert annotators and curated prompts~\citep{huang2025dropping}. This leaves open questions that matter for anyone comparing leaderboards. Is a fraction-of-data metric comparable across datasets of very different size and number of competitors? Does fragility depend on who labels (crowd, expert, LLM judge), or on generic statistical properties of the data? How does worst-case fragility relate to the uncertainty that leaderboards already report (bootstrap intervals)? How do removal, relabelling and injection compare, and what does a constrained, realistic attacker need?
+
+\textbf{Contributions.}
+\textbf{(1) Measurement.} We define fragility as the minimum number $\kstar$ of comparisons that must be dropped, flipped or injected to change a ranking event (top-1 identity, top-3 set, order of a pair). We compute refit-verified upper bounds with an iterated-linearization greedy search. On every small board where we could check, the search is within one comparison of a continuous-relaxation bound for adjacent pairs (\S\ref{sec:method}, App.~\ref{app:relax}). We apply it to 80 public leaderboards from four designs (\S\ref{sec:data}).
+\textbf{(2) A fragility law.} Under linearization, $\kstar \ge zR$, where $z$ is the pair's evidence (gap over its standard error) and $R$ is the ratio of that standard error to the largest single-comparison influence. Empirically the bound is nearly tight. $\kstar/(zR)$ has median 1.10 across 2,419 pairs ($\kstar\ge 3$), a log-linear fit on $z$ and $R$ explains 98.9\% of the variance of $\log\kstar$, and design indicators add 0.2 points (\S\ref{sec:law}). Since $R\approx\tfrac12\sqrt{n_{\mathrm{loc}}}$, a pair that is just significant and has $10^4$ relevant comparisons can be flipped with about 100 removals.
+\textbf{(3) Cross-design comparisons with controls.} Global data fractions differ by three orders of magnitude across designs. The decomposition $\kstar/N \approx zR/N$ explains the gap by evidence, spread, and dilution by unrelated data. Controlled comparisons hold the battles or the model set fixed. They show that crowd votes are not intrinsically more fragile than expert or LLM-judge labels (\S\ref{sec:design}).
+\textbf{(4) Noise vs.\ manipulation.} Random deletion and label noise almost never move significant pairs. Bootstrap resampling marks them as certain. Targeted perturbations of a small fraction of a percent overturn them (\S\ref{sec:noise}). Constrained attackers that see only their own model's battles, or random battles, need 1.3--4$\times$ and 2.4--52$\times$ more votes than the optimal attacker, respectively (\S\ref{sec:attack}).
+
+\section{Related work}
+
+\textbf{Pairwise-comparison ranking.} The BT model~\citep{bradley1952rank} and its generalizations (home advantage, ties) are standard for ranking from paired comparisons, with MM and Newton algorithms for the MLE~\citep{hunter2004mm}. Chatbot Arena reports BT scores with bootstrap confidence intervals~\citep{chiang2024chatbot,efron1979bootstrap}. MT-Bench released expert and GPT-4 pairwise judgments and found GPT-4 agreement with experts comparable to inter-expert agreement~\citep{zheng2023judging}.
+
+\textbf{Influence and data-dropping robustness.} Influence functions approximate the effect of removing a training point~\citep{koh2017understanding}. \citet{broderick2020automatic} proposed the Approximate Maximum Influence Perturbation (AMIP): the smallest fraction of data whose removal changes a conclusion, found by ranking first-order influences. They argued that this sensitivity is driven by a signal-to-noise ratio, is not captured by standard errors, and does not vanish asymptotically. \citet{huang2025dropping} applied this idea to BT leaderboards. They showed that dropping as little as 0.02\% of Arena data can change the top model, and that MT-Bench appears more robust, which they attributed to expert annotation and prompt curation. We build on these works but differ in four ways. (i) We show that for BT the worst-case count is quantitatively predicted, pair by pair, by $z$ and an evidence-spread factor $R$, which reconciles ``not captured by standard errors'' with a near-deterministic relation once $R$ is accounted for. (ii) We test the design explanation with controls that hold the battles or the model set fixed, and with sports data. (iii) We study flips and injections as well as removal, and compare them with random noise and bootstrap uncertainty. (iv) We report the sampling uncertainty of the fragility metric itself.
+
+\textbf{Manipulation of preference leaderboards.} \citet{min2025improving} showed that Arena rankings can be raised by rigging votes. They distinguished \emph{target-only} attackers, who must recognise their own model, from more efficient \emph{omnipresent} attackers, who exploit the fact that every vote moves the ratings. \citet{singh2025leaderboard} documented private testing, selective disclosure and unequal sampling on Chatbot Arena. Our constrained-attacker experiments (\S\ref{sec:attack}) follow this taxonomy for BT, measured in the same units as removal and relabelling.
+
+\section{Problem setup and method}\label{sec:method}
+
+\textbf{Model.} A leaderboard is a multiset of comparisons $c=(a_c,b_c,y_c)$ with $y_c\in\{0,\tfrac12,1\}$ from $a_c$'s perspective. Ties count as half a win for each side, as in Arena-style BT. We fit $P(a \text{ beats } b)=\sigma(\theta_a-\theta_b+\eta h_c)$, where $h_c$ indicates home advantage (NBA only), by minimizing
+$L(\theta;w)=\sum_c w_c\,\ell_c(\theta)+\tfrac{\lambda}{2}\|\theta\|^2$, with $\ell_c=-y_c\log\sigma(s_c)-(1-y_c)\log\sigma(-s_c)$, $s_c=x_c^\top\theta$, and $\lambda=10^{-3}$, which only fixes location. The likelihood depends on the data only through counts per (pair, outcome) \emph{cell}. We therefore store a weight table $w$ and fit with damped Newton in milliseconds.
+
+\textbf{Events and perturbations.} For competitors $i$ ranked above $j$, let $f=\hat\theta_i-\hat\theta_j>0$. We consider three perturbation classes of size $k$: \emph{drop} ($k$ comparisons removed); \emph{flip} ($k$ comparisons relabelled to another outcome); and \emph{inject} ($k$ new decisive comparisons added, restricted to pairs that occur in the data). The fragility of the pair, $\kstar(i,j)$, is the smallest $k$ for which some perturbation of that class makes $\hat\theta_j>\hat\theta_i$ after refitting. Ranking events reduce to pairs. The top-1 identity changes iff some $j$ overtakes the leader, so $\kstar_{\text{top-1}}=\min_j \kstar(1,j)$ (we search $j\le 6$). The top-3 set changes iff some $j>3$ overtakes some $i\le3$ (we search $j\le 10$). We also study all adjacent pairs $(r,r{+}1)$.
+
+\textbf{Influence quantities.} Let $H$ be the Hessian of $L$ at $\hat\theta$, $u=H^{-1}(e_i-e_j)$, and $p_c=\sigma(\hat s_c)$. Removing one copy of comparison $c$ changes $f$ to first order by $\psi_c=u^\top x_c\,(p_c-y_c)$. Relabelling it to $y'$ changes $f$ by $u^\top x_c(y'-y_c)$, and injecting $(a,b,y)$ changes it by $u^\top x_{ab}(y-p_{ab})$. Since $\partial f/\partial w_c=-\psi_c$, the infinitesimal-jackknife (sandwich) standard error is $s=(\sum_c\psi_c^2)^{1/2}$. Its median ratio to the model-based $\sqrt{(e_i-e_j)^\top H^{-1}(e_i-e_j)}$ is 0.99 in our data. We define
+\begin{equation}
+z=\frac{f}{s},\qquad \psi^\star=\max_{c:\,w_c>0}(-\psi_c),\qquad R=\frac{s}{\psi^\star},
+\end{equation}
+and analogously $R_{\text{flip}}$ and $R_{\text{inj}}$ with the per-unit relabel and injection effects.
+
+\begin{proposition}[linearized fragility]\label{prop:lin}
+Let $k_{\mathrm{lin}}$ be the smallest number of removals such that $f+\sum_{c\in S}\psi_c\le 0$ (the first-order prediction of a flipped order). Then $k_{\mathrm{lin}}\ge f/\psi^\star=zR$. If the cell attaining $\psi^\star$ holds at least $\lceil zR\rceil$ comparisons, then $k_{\mathrm{lin}}=\lceil zR\rceil$. The same holds for flips with $R_{\text{flip}}$. For injections, supply is unlimited, so $k_{\mathrm{lin}}=\lceil zR_{\text{inj}}\rceil$ exactly.
+\end{proposition}
+\emph{Proof.} Each removal lowers the linear prediction by at most $\psi^\star$, and the order flips only once the total reduction reaches $f$; taking all removals from the maximizing cell attains the bound. \hfill$\square$
+
+The proposition is elementary. Its content is in the reparametrization: $\kstar$ splits into the \emph{evidence} $z$, which leaderboards already report through confidence intervals, and the \emph{evidence spread} $R$, the number of ``worst-case comparisons'' that carry one standard error. Two consequences guide the analysis.
+\begin{corollary}[scaling]\label{cor:scale}
+If every cell count is multiplied by $m$, then $\hat\theta$ is unchanged, $s\propto m^{-1/2}$ and $\psi^\star\propto m^{-1}$. Hence $z,R\propto\sqrt m$, $k_{\mathrm{lin}}\propto m$, and the dropped fraction $k_{\mathrm{lin}}/N$ is constant. This is the non-vanishing sensitivity of \citet{broderick2020automatic}. At fixed $z$, by contrast, $k_{\mathrm{lin}}\propto R\propto\sqrt{m}$.
+\end{corollary}
+A back-of-envelope estimate of $R$ helps interpretation. Suppose $i$ and $j$ face a common pool with Fisher information $F\approx n_i\bar v$ each, where $\bar v$ is the per-comparison Bernoulli variance. Then $s^2\approx 2/F$ and $\psi^\star\approx q/F$ with $q=\max(1-p)$. This gives $R\approx\sqrt{n_{\mathrm{loc}}\bar v}/q$, where $n_{\mathrm{loc}}$ counts comparisons involving $i$ or $j$. With $\bar v\approx0.2$ and $q\approx0.9$, $R\approx\tfrac12\sqrt{n_{\mathrm{loc}}}$, close to the empirical median $R/\sqrt{n_{\mathrm{loc}}}=0.47$ (10--90\%: 0.35--0.64).
+
+\textbf{Comparing datasets.} The global fraction factorizes as
+\begin{equation}\label{eq:decomp}
+\frac{\kstar}{N} = \underbrace{z}_{\text{evidence}}\cdot\underbrace{R}_{\text{spread}\,\approx\,\frac12\sqrt{n_{\mathrm{loc}}}}\cdot\underbrace{\tfrac1N}_{\text{dilution}}\cdot\underbrace{\rho}_{=\kstar/(zR)}.
+\end{equation}
+Dilution penalizes leaderboards with many competitors, since a pair touches only $\approx 2/K$ of the data. Spread rewards volume. We therefore report counts, fractions, and $(z,R,\rho)$. The residual $\rho$ is the design-specific excess fragility that the generic statistics do not explain.
+
+\textbf{Search algorithm (refit-verified).} For each pair and class, we run an \emph{iterated linearization greedy}. At the current weights we refit, compute per-unit effects, and form the first-order optimal plan (most harmful units first, respecting cell capacities). We then apply half of the plan and refit, repeating until the order flips. On overshoot we bisect within the last step, then prune at most 25 units one at a time. We also run the one-shot AMIP ordering of \citet{broderick2020automatic}, extended until an exact refit flips the order. Both procedures return perturbations that are checked by a refit from scratch, so the minimum of the two is a \emph{certified upper bound} on $\kstar$: ``$\kstar$ comparisons suffice''. All 12,456 (pair, class) searches, including the tie-removed variants, were verified. The iterated search beats the one-shot ordering in 6.2\% of cases and is worse in 2 of 12,456 cases (by one unit). On small boards we solve the continuous relaxation of the drop problem with SLSQP from three starts (App.~\ref{app:relax}). For all 55 adjacent and 1-vs-2 pairs tested, the greedy is within one comparison of the relaxed bound (max excess 1.1\%). For distant pairs (1 vs.\ 5) it can overshoot by up to 23\%. This affects only large $\kstar$ values, not the decision-relevant close pairs. A search takes about 0.2\,s wall-clock (median) per pair and perturbation class.
+
+\section{Data and evaluation designs}\label{sec:data}
+
+\begin{table}[t]
+\caption{Leaderboards. $N$: comparisons after removing competitors with fewer than 50 comparisons; $K$: competitors; ties: fraction of tied outcomes (counted as half-wins).}
+\label{tab:data}
+\centering\small
+\input{tables/datasets.tex}
+\end{table}
+
+Table~\ref{tab:data} lists the data, all public (sources, versions and checksums in App.~\ref{app:repro}). \emph{Crowd votes}: Chatbot Arena human-preference 55k (2023--24) and 140k (2025; ``both bad'' counted as a tie), and WebDev Arena 10k. \emph{Expert}: MT-Bench human judgments (3,355 votes by authors and experts on 80 questions, 6 models). \emph{LLM judge}: MT-Bench GPT-4 pairwise judgments on the same questions and models, and five open LLM judges (Athene-70B, Llama-3-70B/8B-Instruct, Qwen2-72B-Instruct, Mistral-7B-Instruct-v0.1) applied to the 49,938 single-turn battles of Arena-55k. For these we average the judge's outcome probabilities over both presentation orders and take the argmax. \emph{Sports}: 68 NBA regular seasons (1947--2015; seasons with more than 20\% neutral-site games are excluded) with a home-advantage term. Two built-in controls make design comparisons possible. The \emph{same battles} are labelled by the crowd and by five judges. The \emph{same six models} are ranked by Arena crowd votes (``Arena-55k, MT-Bench 6 models''), MT-Bench experts and GPT-4. The main analysis keeps ties as half-wins. App.~\ref{app:ties} repeats it with ties removed.
+
+\section{Experiments}
+
+\subsection{How fragile are real leaderboards?}\label{sec:fragile}
+
+\begin{table}[t]
+\caption{Worst-case perturbations that change the top-1 competitor (refit-verified; smaller is more fragile). Boot.\ CI: 5--95\% range of the top-1 drop count over 100 bootstrap resamples. $P_{\text{boot}}$: share of resamples with the same leader. $z,R$: evidence and spread for the cheapest challenger (Eq.~\ref{eq:decomp}). $^\dagger$NBA bootstrap columns pool seasons 2005--2015.}
+\label{tab:main}
+\centering\scriptsize\setlength{\tabcolsep}{3pt}
+\input{tables/main.tex}
+\end{table}
+
+Table~\ref{tab:main} reports top-1 fragility. Three patterns stand out. \emph{(i) Near-ties are fragile under any perturbation.} On Arena-55k the two GPT-4-Turbo snapshots differ by $z=0.07$, and 2 removals, 1 flip or 2 injections change the leader. The bootstrap already flags this case ($P_{\text{boot}}=0.53$). The same holds for most NBA seasons (median 4 removed games). \emph{(ii) Clear leaders can still fall to small targeted perturbations.} On Arena-140k the leader (gemini-2.5-pro) is first in 100\% of bootstrap resamples, yet removing 62 of 135,622 votes (0.046\%), flipping 46, or injecting 107 dethrones it. The leader and its challenger (a preview snapshot of the same model) have \emph{no} direct battles, so the order rests entirely on indirect comparisons. \emph{(iii) Fractions differ by three orders of magnitude.} The top-1 drop fraction ranges from 0.003\% (Arena-55k) to 6\% (MT-Bench GPT-4). Below the top spot, adjacent pairs are mostly near-ties. On Arena-140k, 21 of 51 adjacent pairs flip with at most 10 removals, and 48 with at most 100. Only 5 adjacent pairs are significant at $z>1.96$, and they need 193 removals (median; max 322). \emph{Which comparisons are removed?} For the top-1 change on Arena-140k, Arena-55k, WebDev and NBA 2014/15, every removed comparison is a \emph{loss of the challenger}, mostly to much weaker opponents. The median opponent rank is 46 of 52 on Arena-140k, 44 of 64 on Arena-55k, 6 of 12 on WebDev, and 24 of 30 for the NBA. Such upsets have the largest influence ($|p_c-y_c|\approx 1$). They are also the votes a quality filter is most likely to discard as noise, so a seemingly neutral cleaning rule can act as a targeted perturbation. Where the top two meet often (MT-Bench, the six-model Arena board), the removals are instead mainly the leader's direct wins over the challenger (App.~\ref{app:repro}, \texttt{composition.py}). Flips are cheaper than removals (median ratio flip/drop $=0.60$), and optimal injection costs about as much as removal (inject/drop $=0.71$). The fragility metric is itself uncertain: bootstrap 90\% intervals for the top-1 drop count span, e.g., [24, 87] for Arena-140k and [1, 37] for Arena-55k.
+
+\subsection{Fragility is predicted by evidence and spread}\label{sec:law}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figs/fig_law.pdf}
+\caption{Ranking-relevant pairs (adjacent, top-1 and top-3 boundary; $\kstar\ge1$) on 80 leaderboards, drop perturbations. (a) As a fraction of the data, fragility separates by design at equal $z$. (b) The verified count collapses onto $\kstar=zR$ (dashed) for all designs; $z$ and $R$ come from one BT fit. Steps at $\kstar\le2$ reflect integrality.}
+\label{fig:law}
+\end{figure}
+
+\begin{table}[t]
+\caption{Fragility law. OLS of $\log\kstar$ on $\log z$ and $\log R$ (or $\log n_{\mathrm{loc}}$) over pairs with $\kstar\ge3$ (2,419 / 2,022 / 2,281 pairs for drop / flip / inject); brackets: 95\% intervals from a bootstrap over leaderboards (500 resamples), which accounts for dependence among pairs of the same board. The lower block gives the median ratio $\rho=\kstar/(zR)$ by design (the expert design has a single board, hence no interval).}
+\label{tab:law}
+\centering\scriptsize
+\input{tables/law.tex}
+\end{table}
+
+Figure~\ref{fig:law} and Table~\ref{tab:law} give the central result. Measured as a global fraction (panel a), fragility at a given $z$ differs by up to two orders of magnitude between designs. NBA seasons look most robust and Arena boards most fragile. Measured as a count and plotted against $zR$ (panel b), all designs fall on the line $\kstar=zR$. Without any fitting, $\log(zR)$ explains 99.3\% of the variance of $\log\kstar$ on the LLM leaderboards and 92.6\% on NBA seasons (drop). Free OLS coefficients on $\log z$ and $\log R$ are close to 1 (0.93 and 0.94; $R^2=0.989$). Adding design indicators raises $R^2$ by 0.002. Replacing $R$ by the raw count of relevant comparisons $n_{\mathrm{loc}}$ still gives $R^2=0.974$ with exponent 0.39, close to the $\tfrac12$ of the back-of-envelope estimate. The ratio $\rho$ is 1.06--1.12 for crowd, LLM-judge and sports boards (0.87 for the single expert board). \emph{Why this is not a tautology.} Proposition~\ref{prop:lin} only bounds the \emph{linearized} count. The verified $\kstar$ could deviate from $zR$ for two reasons. The most influential cell may hold too few comparisons, which pushes the count up. The response may be nonlinear over hundreds of removals, which can push it either way. Both effects occur. The first-order count exceeds $zR$ by a median factor of 1.41, while the refit-verified count is a median 18\% below the first-order count (removals compound). On crowd and LLM-judge boards both effects are small (1.18 and 0.95). On NBA seasons they are larger and partly offset each other (1.45 and 0.80). $z$ alone explains only 78\% of the variance of $\log\kstar$. The spread $R$ is what turns a loose relation with the standard error into a tight one. This reconciles the observation of \citet{broderick2020automatic} that such sensitivity ``is not reflected in standard errors'' with a near-deterministic law. For flips and injections the law holds with larger, design-dependent offsets. Sports has $\rho=1.59$ for flips, because seasons with 82 games per team make the top flip cells small. The flip identity explains only 38\% of the log-variance on NBA seasons, against 98\% on LLM boards.
+
+Two practical rules follow. First, $\kstar\approx zR\approx\tfrac12 z\sqrt{n_{\mathrm{loc}}}$. A pair that is just significant ($z=2$) and backed by $10^4$ relevant votes can be flipped by about 100 removals. Tripling the evidence triples the cost, but doubling the data at a fixed gap only multiplies it by $\sqrt2$ in $z$ and $\sqrt2$ in $R$. Second, subsampling confirms Corollary~\ref{cor:scale} at a fixed true gap. For the rank-1 vs.\ rank-3 pair, $\kstar$ grows as $N^{0.98\text{--}1.06}$ on all five LLM boards, so the dropped fraction stays constant (App.~\ref{app:sub}). A fraction-based robustness score therefore does not improve with more data, while a count-based one does.
+
+\subsection{Does the evaluation design matter?}\label{sec:design}
+
+\begin{table}[t]
+\caption{Controlled design comparisons (drop). \textbf{Top:} the same 49,938 Arena battles labelled by the crowd and by five LLM judges. $\tau$: Kendall correlation of BT scores with the crowd's; adjacent statistics over the top 10. \textbf{Bottom:} the same six models ranked by three labelers, compared at equal $N=1{,}367$ (100 random subsamples of the MT-Bench boards; bootstrap for the Arena board, which has $N=1{,}367$).}
+\label{tab:design}
+\centering\scriptsize\setlength{\tabcolsep}{3.5pt}
+\input{tables/judges.tex}
+
+\vspace{4pt}
+\input{tables/mt6.tex}
+\end{table}
+
+Equation~\ref{eq:decomp} explains the large cross-dataset differences in Table~\ref{tab:main}. MT-Bench has $K=6$, so each pair touches about a third of the data (low dilution), and its six models are far apart (large $z$). Arena has 52--64 competitors, many of them near-ties at the top. Table~\ref{tab:design} removes these confounders.
+
+\emph{Same battles, different labelers.} Relabelling the same battles with LLM judges changes the ranking substantially ($\tau=0.57$--0.81 with the crowd). It does not consistently change fragility. Top-1 counts range from 4 to 16 against 9 for the crowd. Judges that rarely output ties (Athene, Llama-3-70B) produce larger adjacent gaps (median adjacent $z$ 1.0--1.6 vs.\ 0.6) and hence larger median adjacent $\kstar$ (29--36 vs.\ 9). The weakest judge (Mistral-7B, about 64\% agreement with crowd labels on decisive battles according to the dataset card) yields a top-3 boundary that 3 removals overturn. In all cases $\rho\in[1.06,1.10]$, so the law is identical. The labeler matters only through the gaps it induces.
+
+\emph{Same models, equal sample size.} On the six MT-Bench models at $N=1{,}367$, Arena crowd votes need 52 [23, 74] removals to change the leader, MT-Bench experts 38 [23, 51] (overlapping intervals), and GPT-4 82 [67, 99]. All three agree on the full order. The higher robustness of MT-Bench in fraction terms (Table~\ref{tab:main}: 2.7\% vs.\ 0.003--0.05\% for full Arena) is thus explained by its small, well-separated model set, not by expert annotation. Per comparison, the GPT-4 judge is the most robust labeler here, because it separates the models most sharply ($z_{12}=8.7$). Expert votes are not more robust than crowd votes. This refines the attribution of \citet{huang2025dropping}. Caveats: Arena and MT-Bench differ in prompts and slightly in model snapshots, and MT-Bench votes are clustered by question.
+
+\subsection{Noise versus manipulation}\label{sec:noise}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figs/fig_random.pdf}
+\caption{Probability that the top-1 changes under random deletion (blue) or random win/loss flips (orange) of a given fraction of comparisons (200 replicates; bars: 95\% binomial intervals). Dotted lines: worst-case fraction for the same perturbation type.}
+\label{fig:random}
+\end{figure}
+
+Figure~\ref{fig:random} compares worst-case and random perturbations. For pairs with real evidence, random perturbations are harmless. On Arena-140k, WebDev and MT-Bench the leader never changed under random deletion of up to 30\% of the comparisons or random flips of up to 10\% (0/200 replicates). The worst case is 0.03--6\%. For near-ties (Arena-55k, many NBA seasons), random perturbations of only 0.1--1\% change the leader with probability 0.15--0.35, approaching $\tfrac12$ at larger rates. These are exactly the cases flagged by bootstrap intervals. Across the 67 adjacent pairs on LLM boards that are significant at $z>1.96$, worst-case removal needs a median of 63 comparisons (minimum 32), or 0.14\% of the data (73\% need under 1\%). Statistical significance protects against noise of the kind modelled by the bootstrap. Against targeted perturbation, protection grows only as $zR$. This is a statement about \emph{which} comparisons are removed, and it is exactly what the bootstrap does not model.
+
+\subsection{What does a constrained attacker need?}\label{sec:attack}
+
+\begin{table}[t]
+\caption{Injected decisive votes needed to move the rank-$r$ competitor to rank 1. Free: attacker chooses pair and outcome (iterated greedy). Target-only: attacker sees only its own model's battles (opponents drawn from the empirical distribution) and always votes for it; ``battles seen'' scales votes by the share of all battles that involve the model. Omnipresent: attacker votes optimally (first-order) on random battles from the empirical pair distribution. Medians [5--95\%] over 20 random attack sequences.}
+\label{tab:attack}
+\centering\scriptsize\setlength{\tabcolsep}{4pt}
+\input{tables/attack.tex}
+\end{table}
+
+Free injection is a lower bound on what an attacker needs. Table~\ref{tab:attack} adds two constrained attackers in the spirit of \citet{min2025improving}. A target-only attacker that recognises its model but cannot choose opponents needs 1.3--4.0$\times$ more votes than the free attacker (over the 30 scenarios on 8 boards). The top-1 change on Arena-140k needs 141 votes instead of 107. Because such battles are rare, this corresponds to observing about 14k battles. An omnipresent attacker casts 2.4--52$\times$ more votes than the free attacker (3,376 for the same target), but needs about 4$\times$ fewer battles than the target-only attacker sees. This agrees with the efficiency ordering of \citet{min2025improving}, here for BT. Moving a rank-10 model to the top of Arena-140k needs 828 (free) to 12k (omnipresent) votes. That is small next to the platform's volume but far beyond accidental noise.
+
+\section{Discussion and limitations}\label{sec:discussion}
+
+\textbf{What the results imply.} The question ``how many votes move a leaderboard?'' has a short, mostly design-independent answer: about $z\cdot R$. Here $z$ is the evidence leaderboards already report and $R\approx\tfrac12\sqrt{n_{\mathrm{loc}}}$ is computable from the same fit. Fragility is therefore not a separate property of crowdsourcing, expert annotation, or LLM judging. It is a property of the gaps and the volume of relevant data. Different designs differ mainly in the gaps they produce and in how much unrelated data dilutes each pair. We suggest three practical changes. (1) Report $zR$ (or a verified $\kstar$) next to confidence intervals. A pair is robust to an adversarial budget of $B$ comparisons only if $z\gtrsim B/R$. (2) Compare datasets in counts and in $(z,R)$, not in global fractions, which conflate competitor count and data volume with robustness. (3) Treat top positions decided by indirect comparisons (no direct battles, as for Arena-140k's top pair) with extra caution.
+
+\textbf{Limitations and failure modes.} (i) Our $\kstar$ are certified \emph{upper} bounds. The continuous relaxation suggests they are tight for close pairs, but they can be loose (up to 23\%) for well-separated pairs, and the relaxation itself is non-convex, so its bound is empirical. (ii) We analyse the plain BT MLE with ties as half-wins. Production leaderboards add style control, reweighting, deduplication and anomaly filtering. These could change $\kstar$ and the feasibility of attacks, and we did not model defences. Online Elo, which is order-dependent, is not studied. (iii) Results with ties removed (App.~\ref{app:ties}) change individual counts (e.g., Arena-55k top-1: 2$\to$9) but not the law. (iv) Bootstrap intervals assume independent comparisons. MT-Bench votes are clustered by question and Arena votes by user and session, so intervals are likely too narrow. (v) Design comparisons rest on a small number of boards per design (one expert board) and on the specific public snapshots. The LLM-judge relabels come from a third-party dataset whose license is unstated. (vi) Attack models are stylized: injected votes are assumed accepted, and attackers know the current fit. (vii) The flip law is less accurate for small sports leaderboards (NBA $\rho=1.59$, $R^2=0.38$ on the identity). (viii) For NBA we rank by BT scores with home advantage, not by official win percentage.
+
+\textbf{Broader impact.} Quantifying how cheaply rankings can be moved could inform manipulators. However, the attacks we evaluate are already public~\citep{min2025improving}, and the main implication is defensive: report fragility, require evidence proportional to the stakes, and audit indirect top positions.
+
+\section{Conclusion}
+
+On 80 leaderboards from four evaluation designs, the minimum number of comparisons whose removal, relabelling or injection changes a ranking follows $\kstar\approx zR$ to within about 10\% for removals. Top spots on crowd arenas are often near-ties that a handful of votes overturn. Even statistically clear leaders fall to a few dozen to a few hundred targeted votes. Apparent differences between designs largely disappear once gaps and data volume are accounted for.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+
+\section{Reproducibility, data provenance, and LLM-use disclosure}\label{app:repro}
+
+{\sloppy
+\textbf{Data} (all public, fixed snapshots; SHA-256 checksums in \texttt{SHA256SUMS}, download script \texttt{get\_data.sh}):
+\begin{itemize}\setlength{\itemsep}{0pt}
+\item \texttt{lmarena-ai/arena-human-preference-55k} (Hugging Face commit \texttt{18c2983});
+\item \texttt{lmarena-ai/arena-human-preference-140k} (\texttt{6322995});
+\item \texttt{lmarena-ai/webdev-arena-preference-10k} (\texttt{7c397e6});
+\item \texttt{lmsys/mt\_bench\_human\_judgments} (\texttt{f7d2896});
+\item \texttt{potsawee/chatbot-arena-llm-judges} (\texttt{638a7e3}; five judges, both presentation orders);
+\item FiveThirtyEight \texttt{nba-elo/nbaallelo.csv} (GitHub commit \texttt{4c1ff5e}).
+\end{itemize}
+Competitors with fewer than 50 comparisons are removed iteratively. NBA: regular season, NBA league only, one row per game.
+
+\textbf{Code} (Python 3.11, NumPy 2.4, SciPy 1.17, pandas 3.1). \texttt{run\_all.sh} executes, in order:
+\texttt{data\_prep.py}; \texttt{run\_pairs.py} and \texttt{pair\_influence.py} (Fig.~\ref{fig:law}, Tables~\ref{tab:main}, \ref{tab:law}, \ref{tab:design} top, \ref{tab:ties});
+\texttt{bootstrap\_k.py} (100 resamples; Table~\ref{tab:main}); \texttt{random\_noise.py} (200 replicates; Fig.~\ref{fig:random});
+\texttt{realistic\_attack.py} (Table~\ref{tab:attack}); \texttt{relaxation\_check.py} (Table~\ref{tab:relax}); \texttt{subsample.py} (Fig.~\ref{fig:sub});
+\texttt{matched\_mt6.py} (Table~\ref{tab:design} bottom); \texttt{composition.py} (\S\ref{sec:fragile});
+and \texttt{analysis\_law.py}, \texttt{analysis\_tables.py}, which write all tables, figures and in-text numbers.
+Seeds are derived deterministically from dataset names and replicate indices; an end-to-end re-run from raw data reproduced all reported numbers, except that row-order-dependent tie-breaking in the analysis changed the NBA median $z$ in Table~\ref{tab:main} by 0.02 and some interval endpoints in Table~\ref{tab:law} by $\le0.01$; the analysis now sorts rows deterministically. The full pipeline takes about 30 minutes on 4 CPU cores.
+
+\textbf{LLM use.} The study design, code, experiments and text of this paper were produced by an AI agent (a Claude model) operating autonomously on the task, including literature lookup of the cited works. All numbers come from the released code.
+\par}
+
+\section{Search optimality: continuous relaxation}\label{app:relax}
+
+\begin{table}[h]
+\caption{Greedy drop counts vs.\ the continuous relaxation $\min\sum_c\delta_c$ s.t.\ $\hat\theta_i\le\hat\theta_j$ at weights $w-\delta$, $0\le\delta\le w$, solved by SLSQP (3 starts) on MT-Bench (both), Arena-55k MT-6, WebDev and NBA 2014/15. ``Excess'' $=(\kstar-\lceil\text{relax}\rceil)/\kstar$. Rounding the relaxed solution up always yielded a verified integer solution of size $\lceil\text{relax}\rceil$.}
+\label{tab:relax}
+\centering\small
+\input{tables/relax.tex}
+\end{table}
+
+\section{Ties}\label{app:ties}
+
+\begin{table}[h]
+\caption{Top-1 and top-3-set drop counts with ties as half-wins (main analysis) and with tied comparisons removed before fitting.}
+\label{tab:ties}
+\centering\small
+\input{tables/ties.tex}
+\end{table}
+
+\section{Scaling with sample size}\label{app:sub}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{../figs/fig_subsample.pdf}
+\caption{Random subsamples (10 per size; medians). Left: the worst-case drop count for the full-data rank-1 vs.\ rank-3 pair grows linearly with $N$ (log-log slopes 0.98--1.06). Right: the dropped fraction is roughly constant, as predicted by Corollary~\ref{cor:scale}. Fragility measured as a fraction does not improve with more data at a fixed gap.}
+\label{fig:sub}
+\end{figure}
+
+\newpage
+\input{checklist_filled.tex}
+
+\end{document}

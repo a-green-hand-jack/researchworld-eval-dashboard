@@ -1,0 +1,1664 @@
+{
+ "key": "paperwritingbench/cvpr2025_00ba0d5ace",
+ "benchmark": "paperwritingbench",
+ "item": "cvpr2025_00ba0d5ace",
+ "prompt": [
+  {
+   "name": "TASK.md",
+   "size": 19685,
+   "text": "Your task is to generate a complete research paper using the materials below.\nYou must produce:\n1. A BibTeX bibliography file (references.bib)\n2. The full LaTeX paper (template.tex)\n\nInstructions\n• Use the research idea and experimental logs to construct a coherent, rigorous ML paper.\n• For related work and baselines:\n  – Search for and include influential papers published up until 2024-11.\n  – Incorporate relevant literature and add the corresponding BibTeX entries to references.bib.\n  – Do NOT hallucinate papers or reference keys; all citation entries must be real.\n• In the LaTeX paper, cite papers using \\cite{} with keys that match exactly with your entries in references.bib.\n• Do not fabricate experimental results or make claims unsupported by the logs.\n\nMaterials\nHere are all the raw research materials to assist with the writing process:\n\n[RESEARCH IDEA]\n## Problem Statement\n\nThe emerging task of Reference Audio-Visual Segmentation (Ref-AVS) demands a pixel-wise understanding of dynamic scenes where objects are identified via a combination of visual, auditory, and textual cues. Current approaches suffer from two primary limitations. First, dual-modality methods (Vision+Text or Vision+Audio) fail in complex scenarios where the third modality is required for disambiguation. Second, existing triple-modality frameworks struggle with **spatio-temporal consistency**; they often lose track of the target object over time or exhibit \"target shift\" due to a failure to maintain context across long video sequences. There is currently no effective method for adapting foundational video segmentation models (which typically rely on manual geometric prompts like points or boxes) to autonomously interpret these complex, multimodal semantic signals.\n\n## Core Hypothesis\n\nWe hypothesize that the robustness of the Segment Anything Model 2 (SAM2) can be extended to Language-aided Audio-Visual Scenes (LAVS) by compressing disparate multimodal signals into a single, dynamic **learnable token**.\n\nOur central intuition is that a \"prompt\" should not be a static embedding. Instead, the prompt token must behave as a dynamic agent that evolves alongside the video. By implementing a **Token Propagation** mechanism (forward knowledge transfer) combined with **Token Accumulation** (backward knowledge retention), we believe we can align semantic understanding with SAM2’s native video tracking capabilities. This will allow the model to maintain persistent focus on the referred object throughout a video without forgetting historical context or requiring manual intervention.\n\n## Proposed Methodology (High-Level Technical Approach)\n\nWe propose a framework named **SAM2-LOVE**, designed to interface multimodal encoders with the SAM2 architecture. The approach consists of three distinct conceptual phases:\n\n1.  **Multimodal Compression & Fusion:**\n    We will utilize pre-trained encoders to extract features from video frames, audio clips, and text expressions. To unify these disjoint embedding spaces, we will introduce a **Multimodal Fusion Transformer**. This module will act as a compressor, digesting the raw features and outputting a single, high-density `[seg]` token. This token serves as the semantic anchor, representing the \"instruction\" for the segmentation model.\n\n2.  **Dynamic Token Evolution (Propagation & Accumulation):**\n    To address spatio-temporal inconsistency, the `[seg]` token will not remain static.\n    *   **Token Propagation (Forward Flow):** The token will update iteratively. At each frame, the token from the previous step acts as input to the next, interacting with the current frame’s visual features while retaining the global audio/text context. This mimics a \"tracking\" behavior within the prompt itself.\n    *   **Token Accumulation (Backward Flow):** To prevent the \"dilution\" of the original target information over long sequences (catastrophic forgetting), we will implement a history cache mechanism. A global representation token (`[his]`) will accumulate abstract features from all previous frames and be re-injected into the fusion process at every step. This ensures the prompt remains grounded in the history of the video.\n\n3.  **Zero-Shot SAM2 Adaptation:**\n    We aim to adapt SAM2 via a \"prompt tuning\" strategy rather than full fine-tuning. We will freeze the heavy image encoder and memory attention layers of SAM2. We will only train the fusion module and SAM2's prompt decoder/mask decoder.\n    *   **Training Strategy:** We will align the learned `[seg]` token with the ground truth mask of the *first frame*. We rely on SAM2’s inherent ability to propagate masks (Video Object Segmentation) to handle the subsequent frames. This allows the system to learn multimodal alignment on a single frame and generalize to the entire video zero-shot.\n\n## Expected Contribution\n\n1.  **Unified Multimodal Framework:** We expect to provide the first framework that successfully integrates Audio, Vision, and Language into the foundational SAM2 architecture for pixel-level scene understanding.\n2.  **Temporal Consistency Mechanism:** The proposed \"Propagation and Accumulation\" strategy offers a theoretical contribution to sequence modeling, defining a method to balance current-frame adaptation (forward flow) with historical context retention (backward flow).\n3.  **Practical Generalization:** By leveraging the frozen backbone of SAM2, the approach aims to achieve high-quality segmentation and tracking in dynamic scenes without the need for massive retraining of the foundational visual model.\n\n[EXPERIMENTAL LOGS]\n## 1. Experimental Setup\n\n*   **Dataset:** Ref-AVS Benchmark.\n    *   **Content:** 4,000 videos with manual pixel-level annotations and 20,000 expressions.\n    *   **Splits:** Training set (2,908 videos), Validation set (276 videos), Test set (818 videos).\n    *   **Test Subsets:**\n        *   *Seen:* 39 categories (same as training).\n        *   *Unseen:* 13 additional categories (not in training).\n        *   *Null:* Expressions referring to objects that do not exist or are not visible.\n    *   **Modality Dimensions:** Audio, Vision, and Time (expressions reflect scenarios across these dimensions).\n    *   **Video Statistics:** Average 1.72 objects per video, 48 audible object categories, 3 kinds of static objects.\n\n*   **Evaluation Metrics:**\n    *   **Jaccard Index ($\\mathcal{J}$):** Region similarity.\n    *   **F-score ($\\mathcal{F}$):** Contour accuracy.\n    *   **Average ($\\mathcal{J}\\&\\mathcal{F}$):** The average of Jaccard and F-score.\n    *   **S-score (for Null split):** Square root of the ratio of the number of foreground pixels over the background pixels (lower is better for Null).\n\n*   **Baselines Compared:**\n    *   AVSBench (designed for AVS).\n    *   AVSegFormer (designed for AVS).\n    *   GAVS (designed for AVS).\n    *   ReferFormer (designed for Ref-VOS).\n    *   R2VOS (designed for Ref-VOS).\n    *   EEMC (designed for Ref-AVS).\n    *   *Note:* Missing modalities were provided to baselines to ensure fair comparison (e.g., adding text to AVS methods, audio to Ref-VOS methods).\n\n*   **Implementation Details:**\n    *   **Encoders:**\n        *   Audio: VGGish (frozen).\n        *   Visual: ViT pre-trained on ImageNet (frozen).\n        *   Text: DistilRoBERTa (frozen).\n    *   **Model Initialization:** SAM2 initialized with `SAM2-Hiera-large` weights.\n    *   **Fusion Transformer Architecture:** 6 stacked bi-directional transformer blocks, hidden dimension 1024, number of [seg] tokens set to 1.\n    *   **Training Strategy:**\n        *   Encoders and SAM2 Image Encoder/Memory Attention were frozen.\n        *   Fusion transformer, [seg] token, SAM2 Prompt Encoder, Mask Decoder, and projection MLPs were trainable.\n        *   SAM2 was exposed only to the first frame during training (using multimodal prompts), then generalized to the whole video during inference (zero-shot).\n    *   **Hyperparameters:**\n        *   Hardware: 2 NVIDIA A100 GPUs.\n        *   Training Engine: DeepSpeed with ZeRO-2.\n        *   Optimizer: AdamW.\n        *   Learning Rate: 1e-4.\n        *   Weight Decay: 0.\n        *   Scheduler: WarmupDecayLR (100 warmup iterations).\n        *   Batch Size: 8.\n        *   Gradient Accumulation Step: 2.\n    *   **Loss Function:** Combination of Binary Cross-Entropy (BCE) and DICE loss. Weights: $\\lambda_{bce} = 1.0$, $\\lambda_{dice} = 1.0$.\n\n## 2. Raw Numeric Data\n\n**Table 1: Performance comparison across different methods in Seen, Unseen, Mix (Average of S+U), and NULL settings of Ref-AVS benchmark**\n\n| Method | Seen J (%) | Seen F (%) | Seen J&F (%) | Unseen J (%) | Unseen F (%) | Unseen J&F (%) | Mix J (%) | Mix F (%) | Mix J&F (%) | NULL score |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| AVSBench | 21.2 | 45.7 | 33.5 | 27.7 | 50.9 | 39.3 | 24.5 | 48.3 | 36.4 | - |\n| AVSBench +text | 23.2 | 51.1 | 37.2 | 32.4 | 54.7 | 43.5 | 27.8 | 52.9 | 40.3 | 0.208 |\n| AVSegFormer | 29.2 | 42.3 | 35.7 | 32.7 | 45.1 | 38.9 | 30.9 | 43.7 | 37.3 | - |\n| AVSegFormer +text | 33.5 | 47.0 | 40.2 | 36.1 | 50.1 | 43.1 | 34.8 | 48.6 | 41.7 | 0.171 |\n| GAVS | 24.8 | 45.5 | 35.2 | 27.8 | 46.0 | 36.9 | 26.3 | 45.7 | 36.0 | - |\n| GAVS +text | 28.9 | 49.8 | 39.4 | 29.8 | 49.7 | 39.8 | 29.4 | 49.8 | 39.6 | 0.190 |\n| ReferFormer | 27.4 | 47.7 | 37.5 | 24.9 | 50.4 | 37.6 | 26.2 | 49.1 | 37.6 | - |\n| ReferFormer +audio | 31.3 | 50.1 | 40.7 | 30.4 | 48.8 | 39.6 | 30.9 | 49.5 | 40.2 | 0.176 |\n| R2VOS | 21.3 | 30.9 | 26.1 | 23.9 | 43.1 | 33.5 | 22.6 | 37.0 | 29.8 | - |\n| R2VOS +audio | 25.0 | 41.0 | 33.0 | 27.9 | 49.8 | 38.9 | 26.5 | 45.4 | 35.9 | 0.183 |\n| EEMC | 34.2 | 51.3 | 42.8 | 49.5 | 64.8 | 57.2 | 41.9 | 58.1 | 50.0 | **0.007** |\n| **SAM2-LOVE (ours)** | **43.5** | **51.9** | **47.7** | **66.5** | **72.3** | **69.4** | **55.0** | **62.1** | **58.5** | 0.23 |\n| *vs. prev. SOTA* | *+9.3* | *+0.6* | *+4.9* | *+17.0* | *+7.5* | *+12.2* | *+13.1* | *+4.0* | *+8.5* | - |\n\n**Table 2: Ablations on backbone design and proposed [cls] token accumulation strategy**\n\n| Vision Encoder | Text Encoder | [cls] Accumulation | Seen J (%) | Seen F (%) | Seen J&F (%) | Unseen J (%) | Unseen F (%) | Unseen J&F (%) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| CLIP-V | CLIP-T | Yes | 42.5 | 51.2 | 46.8 | 65.1 | 71.4 | 68.2 |\n| ViT | RoBERTa | Yes | **43.5** | **51.9** | **47.7** | **66.5** | **72.3** | **69.4** |\n| ViT | RoBERTa | No | 42.6 | 50.9 | 46.7 | 66.3 | 71.6 | 69.0 |\n\n**Table 3: Ablations on the number of fusion transformer blocks**\n\n| Number of blocks | Seen J (%) | Seen F (%) | Seen J&F (%) | Unseen J (%) | Unseen F (%) | Unseen J&F (%) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| 1 layer | 41.5 | 49.4 | 45.4 | 65.2 | 70.9 | 68.1 |\n| 6 layers | **42.6** | **50.9** | **46.7** | 66.3 | 71.6 | 69.0 |\n| 12 layers | 42.0 | 50.7 | 46.4 | **67.7** | **73.3** | **70.5** |\n\n**Table 4: Ablations on the numbers of [seg] tokens**\n\n| Number of [seg] tokens | Seen J (%) | Seen F (%) | Seen J&F (%) | Unseen J (%) | Unseen F (%) | Unseen J&F (%) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| 1 | **42.6** | **50.9** | **46.7** | 66.3 | 71.6 | 69.0 |\n| 4 | 41.3 | 50.8 | 46.0 | 65.2 | 71.0 | 68.1 |\n| 8 | 40.7 | 49.8 | 45.2 | **67.0** | **72.2** | **69.6** |\n\n**Table 5: Ablations on different fusion strategies for generating the prompt token for SAM2**\n\n| Fusion Strategy | Seen J (%) | Seen F (%) | Seen J&F (%) | Unseen J (%) | Unseen F (%) | Unseen J&F (%) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| learnable token | **42.6** | **50.9** | **46.7** | **66.3** | **71.6** | **69.0** |\n| mean | 41.6 | 50.1 | 45.8 | 65.9 | 71.6 | 68.7 |\n\n**Table 6: Ablations on the different training modules in SAM2 (frozen vs trainable)**\n\n| Mask Decoder | Prompt Encoder | Seen J (%) | Seen F (%) | Seen J&F (%) |\n| :--- | :--- | :--- | :--- | :--- |\n| Frozen (*) | Frozen (*) | 34.8 | 44.8 | 39.8 |\n| Trainable (√) | Frozen (*) | 42.2 | 50.7 | 46.5 |\n| Trainable (√) | Trainable (√) | **42.5** | **50.9** | **46.7** |\n\n## 3. Qualitative Observations\n\n*   **Multimodal Dependencies:** We observed that previous dual-modality methods failed in specific scenarios: Text-Visual models struggled in silent scenes where audio cues were necessary, and Audio-Visual models failed to understand dynamic controls provided by text input.\n*   **Fusion Strategy:** The fusion transformer successfully compressed multimodal cues (Audio, Vision, Text) into a learnable token ([seg]) containing both high semantics and positional information. This token accurately prompted SAM2 to segment targets.\n*   **Visual Tracking:** SAM2 demonstrated strong zero-shot Video Object Segmentation (VOS) capabilities. It accurately tracked referred objects even when they disappeared and reappeared or interacted with similar objects.\n*   **Comparison with SOTA (Visual Analysis):**\n    *   In comparisons with EEMC, our method showed stronger spatio-temporal consistency across frames.\n    *   Our method successfully tracked small referring targets in early frames where the baseline failed.\n    *   Our method was more robust to changes in audible objects and complex expressions (e.g., distinguishing \"shorter duration\" vs. \"the man\"), whereas the baseline failed to interpret hidden meanings in expressions.\n*   **Token Accumulation Effect:** The `[cls]` token accumulation strategy (appending global representations of previous frames) effectively prevented the `[seg]` token from forgetting historical information as it propagated, functioning as a backward knowledge transfer mechanism.\n*   **Backbone Analysis:** RoBERTa and ViT backbones outperformed CLIP encoders. We attribute this to RoBERTa's stronger natural language understanding capabilities, which are crucial for processing complex expressions in LAVS that act as control signals (e.g., \"the one making the most intense sound\") rather than just category names.\n*   **Token Count Analysis:** Increasing the number of `[seg]` tokens improved performance on Unseen splits (acting as registers for global info) but sacrificed performance on Seen splits. A single token provided a stronger inductive bias beneficial for Seen tasks.\n*   **Limitation (Null Reference):** Our method exhibited a limitation in the \"Null\" split (0.23 score vs 0.007 for EEMC). The model struggled to reject user requirements for a null reference, often segmenting irrelevant regions instead of outputting nothing.\n\n[AVAILABLE FIGURES]\n### AVAILABLE FIGURES LIST\nItem 1:\n  - Filename: figure_1.png\n  - Caption: Figure 1. The comparison with dual-modality SAM pipelines. (a) The text-visual SAM struggles to distinguish the sounding object in the silent scenes. (b) The audio-visual SAM fails to understand the dynamic control from the text input. (c) Our model fuses three modalities’ information and expands to the video due to SAM2.\n--------------------------------------------------\nItem 2:\n  - Filename: figure_2.png\n  - Caption: Figure 2. Illustration of the Ref-AVS task under varying modality cues. The expression can be treated as a kind of control signal to condition the referred object on audio. Different expressions can test the models’ pixel-wise scene understanding capabilities in the LAVS with different dimensions. The absence angle of a triangle means that modality is not the main test dimension.\n--------------------------------------------------\nItem 3:\n  - Filename: figure_5.png\n  - Caption: Figure 5. The visualization results of the referred objects in the Ref-AVS. Notably, we use the legends of the trumpet to represent the different sound volumes of the audio objects, from silent to increasing loudness. More cases can be found in the supplementary.\n--------------------------------------------------\nItem 4:\n  - Filename: figure_3.png\n  - Caption: Figure 3. The pipline of SAM2-LOVE. We harness a fusion transformer to compress the tripe modality representations into a learnable token [seg]. For the input, [aud] and [vis] are added to indicate their corresponding modality sequences, and [his] is to provide additional information about former frames. In the training stage, we use the first frame to align the SAM2 with the compressed and fused representation of [seg]. During inference, we harness the strong zero-shot capabilities of SAM2 to track the referred target at the pixel level.\n--------------------------------------------------\nItem 5:\n  - Filename: figure_4.png\n  - Caption: Figure 4. The token propagation and token accumulation strategy in the fusion transformer. For the token propagation, the output [seg] of the current step serves as the input for the next step, which interacts with different frame features but the same audio and text features. To offer additional historical information, the token accumulation strategy appends the global representations of all the previous frames to update the maintained history token [his].\n--------------------------------------------------\n\nFigures are located in the figures/ directory and should be referenced appropriately in the paper using standard \\includegraphics commands.\n\n[LATEX TEMPLATE]\n% CVPR 2025 Paper Template; see https://github.com/cvpr-org/author-kit\n\n\\documentclass[10pt,twocolumn,letterpaper]{article}\n\\usepackage{cvpr}           \n\n\\input{preamble}\n\n% It is strongly recommended to use hyperref, especially for the review version.\n% hyperref with option pagebackref eases the reviewers' job.\n\\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}\n\\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}\n\n\\def\\paperID{12345678}\n\\def\\confName{CVPR}\n\\def\\confYear{2025}\n\n%%%%%%%%% TITLE - PLEASE UPDATE\n\\title{My Title}\n\n\\author{Ambitious AI Researcher\\\\\nAI Research Institute\\\\\n123 AI Avenue, ML City\\\\\n{\\tt\\small researcher@institute.ai}\n}\n\n\\begin{document}\n\\maketitle\n\n\\begin{abstract}\n%%%%%%%%% ABSTRACT %%%%%%%%%\nAbstract here.\n%%%%%%%%% ABSTRACT %%%%%%%%%\n\\end{abstract}\n\n\\section{Introduction}\n\\label{sec:intro}\n%%%%%%%%% INTRODUCTION %%%%%%%%%\nIntroduction here.\n%%%%%%%%% INTRODUCTION %%%%%%%%%\n\n\\section{Related Work}\n\\label{sec:related_work}\n%%%%%%%%% RELATED WORK %%%%%%%%%\nRelated work here.\n%%%%%%%%% RELATED WORK %%%%%%%%%\n\n\\section{Methodology}\n\\label{sec:method}\n%%%%%%%%% METHOD %%%%%%%%%\nMethodology here.\n%%%%%%%%% METHOD %%%%%%%%%\n\n\\section{Experiments}\n\\label{sec:experiments}\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\nExperimental setup, results, and analysis here.\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\n\n\\section{Conclusion}\n\\label{sec:conclusion}\n%%%%%%%%% CONCLUSION %%%%%%%%%\nConclusion here.\n%%%%%%%%% CONCLUSION %%%%%%%%%\n\n{\n    \\small\n    \\bibliographystyle{ieeenat_fullname}\n    \\bibliography{references}\n}\n\n%%%%%%%%% Appendix %%%%%%%%%\n% If you want to add appendix, uncomment the following lines:\n% \\appendix\n% \\section{xxx}\n%%%%%%%%% Appendix %%%%%%%%%\n\n\\end{document}\n\n\nResponse Format\nReturn EXACTLY TWO fenced code blocks.\n1. First code block: the BibTeX file:\n```bibtex\n@article{example2023,\ntitle={Example Title},\nauthor={Author, First},\njournal={Example Journal},\nyear={2023}\n}\n```\n2. Second code block: the generated LaTeX paper:\n```latex\n% The complete LaTeX paper here\n```\nThe final paper must be coherent, highly polished, and scientifically accurate.\n\n[Delivery in this environment]\nYour working directory is /work: it holds the conference's LaTeX template files and the figures/ directory. Write the two files there as /work/references.bib and /work/template.tex (you may also return them as the two code blocks), and compile /work/template.tex with pdflatex and bibtex into /work/template.pdf. The compiled template.pdf is the paper that is evaluated.\n"
+  },
+  {
+   "name": "SYSTEM.md",
+   "size": 13731,
+   "text": "Role: Senior AI Researcher and Academic Writer.\nObjective: Complete a machine learning research paper by filling in missing sections of a provided LaTeX template and generating a corresponding bibliography file. You must produce a scientifically sound, well-structured paper suitable for submission to a top-tier ML conference.\n\nInputs\nYou will receive the following materials:\n• idea.md: Detailed description of the proposed method and technical ideas.\n• experimental_log.md: Raw experimental results and observations used to construct tables, figures, and analysis.\n• conference_guidelines.md: Formatting and stylistic requirements for the target conference.\n• figures_list: A list of figures that may be referenced in the paper.\n\nConference Guidelines\n# CVPR 2025 Paper Writing Guidelines\n\nBelow are the instructions to help you with the latex paper writing process for CVPR 2025.\n\n## Language\nAll manuscripts must be in English.\n\n## Submission Policies & Anonymity\nCVPR reviewing is double-blind. Authors must not know the names of the reviewers, and reviewers must not know the names of the authors.\n\n* **No Identifying Information:** Do not provide information that may identify the authors in the acknowledgments (e.g., co-workers and grant IDs) or in the supplementary material.\n* **Links:** Do not provide links to websites that identify the authors.\n* **GitHub:** Links to GitHub must be anonymous.\n* **Self-Citation:** If you need to cite any of your own papers that are being submitted concurrently, include anonymized versions in the supplementary material and cite them as anonymous. Do not use the words \"my\" or \"our\" when citing previous work; treat your own prior work as if it were written by someone else (e.g., \"Smith et al. showed...\" rather than \"We showed...\").\n\n## Paper length\nPapers, excluding the references section, must be no longer than eight pages in length.\nThe references section will not be included in the page count, and there is no limit on the length of the references section.\nFor example, a paper of eight pages with two pages of references would have a total length of 10 pages.\n\nOverlength papers, or papers where margins and formatting are deemed significantly altered, will simply not be reviewed.\n\n## Mathematics\nPlease number all of your sections and displayed equations as in these examples:\n```latex\n\\begin{equation}\n  E = m\\cdot c^2\n  \\label{eq:important}\n\\end{equation}\n```\nand\n```latex\n\\begin{equation}\n  v = a\\cdot t.\n  \\label{eq:also-important}\n\\end{equation}\n```\n\n## Formatting your paper\nAll text must be in a two-column format.\nThe total allowable size of the text area is $6\\frac78$ inches (17.46 cm) wide by $8\\frac78$ inches (22.54 cm) high.\nColumns are to be $3\\frac14$ inches (8.25 cm) wide, with a $\\frac{5}{16}$ inch (0.8 cm) space between them.\nThe main title (on the first page) should begin 1 inch (2.54 cm) from the top edge of the page.\nThe second and following pages should begin 1 inch (2.54 cm) from the top edge.\nOn all pages, the bottom margin should be $1\\frac{1}{8}$ inches (2.86 cm) from the bottom edge of the page for $8.5 \\times 11$-inch paper;\nfor A4 paper, approximately $1\\frac{5}{8}$ inches (4.13 cm) from the bottom edge of the page.\n\n### Type style and fonts\nWherever Times is specified, Times Roman may also be used. If neither is available on your word processor, please use the font closest in appearance to Times to which you have access.\n\n### Main Title\nCenter the title $1\\frac{3}{8}$ inches (3.49 cm) from the top edge of the first page. The title should be in Times 14-point, boldface type. Capitalize the first letter of nouns, pronouns, verbs, adjectives, and adverbs; do not capitalize articles, coordinate conjunctions, or prepositions (unless the title begins with such a word).\n\nThe ABSTRACT and MAIN TEXT are to be in a two-column format.\n\n### Main Text\nType main text in 10-point Times, single-spaced.\nDo NOT use double-spacing.\nAll paragraphs should be indented 1 pica (approx.~$\\frac{1}{6}$ inch or 0.422 cm). Make sure your text is fully justified---that is, flush left and flush right. Please do not place any additional blank lines between paragraphs.\n\nFigure and table captions should be 9-point Roman type as in \\cref{fig:onecol,fig:short}. \nShort captions should be centred.\n\n\\noindent Callouts should be 9-point Helvetica, non-boldface type. Initially capitalize only the first word of section titles and first-, second-, and third-order headings.\n\n#### First-order Headings\nFor example, {\\large \\bf 1. Introduction} should be Times 12-point boldface, initially capitalized, flush left, with one blank line before, and one blank line after.\n\n#### Second-order Headings\nFor example, { \\bf 1.1. Database elements} should be Times 11-point boldface, initially capitalized, flush left, with one blank line before, and one after.\nIf you require a third-order heading (we discourage it), use 10-point Times, boldface, initially capitalized, flush left, preceded by one blank line, followed by a period and your text on the same line.\n\n### Footnotes\nPlease use \\footnote{This is what a footnote looks like.\nIt often distracts the reader from the main flow of the argument.} sparingly.\n\nIndeed, try to avoid footnotes altogether and include necessary peripheral observations in the text (within parentheses, if you prefer, as in this sentence). If you wish to use a footnote, place it at the bottom of the column on the page on which it is referenced.\nUse Times 8-point type, single-spaced.\n\n### Cross-references\nFor the benefit of author(s) and readers, please use the\n```latex\n{\\small\\begin{verbatim}\n  \\cref{...}\n\\end{verbatim}}\n```\ncommand for cross-referencing to figures, tables, equations, or sections.\n\nThis will automatically insert the appropriate label alongside the cross-reference as in this example:\n```latex\n\\begin{quotation}\n  To see how our method outperforms previous work, please see \\cref{fig:onecol} and \\cref{tab:example}.\n  It is also possible to refer to multiple targets as once, \\eg~to \\cref{fig:onecol,fig:short-a}.\n  You may also return to \\cref{sec:formatting} or look at \\cref{eq:also-important}.\n\\end{quotation}\n```\nIf you do not wish to abbreviate the label, for example at the beginning of the sentence, you can use the\n```latex\n{\\small\\begin{verbatim}\n  \\Cref{...}\n\\end{verbatim}}\ncommand. Here is an example:\n\\begin{quotation}\n  \\Cref{fig:onecol} is also quite important.\n\\end{quotation}\n```\n\n## Example Code for Tables\n```latex\n\\begin{table}\n  \\centering\n  \\begin{tabular}{@{}lc@{}}\n    \\toprule\n    Method & Frobnability \\\\\n    \\midrule\n    Theirs & Frumpy \\\\\n    Yours & Frobbly \\\\\n    Ours & Makes one's heart Frob\\\\\n    \\bottomrule\n  \\end{tabular}\n  \\caption{Results.   Ours is better.}\n  \\label{tab:example}\n\\end{table}\n```\n\n## Example Code for Figures\n```latex\n\\begin{figure}[t]\n  \\centering\n  \\fbox{\\rule{0pt}{2in} \\rule{0.9\\linewidth}{0pt}}\n   %\\includegraphics[width=0.8\\linewidth]{egfigure.eps}\n\n   \\caption{Example of caption.\n   It is set in Roman so that mathematics (always set in Roman: $B \\sin A = A \\sin B$) may be included without an ugly clash.}\n   \\label{fig:onecol}\n\\end{figure}\n\n\\begin{figure*}\n  \\centering\n  \\begin{subfigure}{0.68\\linewidth}\n    \\fbox{\\rule{0pt}{2in} \\rule{.9\\linewidth}{0pt}}\n    \\caption{An example of a subfigure.}\n    \\label{fig:short-a}\n  \\end{subfigure}\n  \\hfill\n  \\begin{subfigure}{0.28\\linewidth}\n    \\fbox{\\rule{0pt}{2in} \\rule{.9\\linewidth}{0pt}}\n    \\caption{Another example of a subfigure.}\n    \\label{fig:short-b}\n  \\end{subfigure}\n  \\caption{Example of a short caption, which should be centered.}\n  \\label{fig:short}\n\\end{figure*}\n```\n\n## Illustrations, graphs, and photographs\nAll graphics should be centered.\nIn \\LaTeX, avoid using the \\texttt{center} environment for this purpose, as this adds potentially unwanted whitespace.\nInstead use\n```latex\n{\\small\\begin{verbatim}\n  \\centering\n\\end{verbatim}}\n```\nat the beginning of your figure.\n\nPlease ensure that any point you wish to make is resolvable in a printed copy of the paper. Resize fonts in figures to match the font in the body text, and choose line widths that render effectively in print.\n\nWhen placing figures in \\LaTeX, it's almost always best to use \\verb+\\includegraphics+, and to specify the figure width as a multiple of the line width as in the example below\n\n```latex\n{\\small\\begin{verbatim}\n   \\usepackage{graphicx} ...\n   \\includegraphics[width=0.8\\linewidth]\n                   {myfile.pdf}\n\\end{verbatim}}\n```\n\n## Color\nIf you use color in your plots, please keep in mind that a significant subset of reviewers and readers may have a color vision deficiency; red-green blindness is the most frequent kind.\nHence avoid relying only on color as the discriminative feature in plots (such as red \\vs green lines), but add a second discriminative feature to ease disambiguation.\n\n\n## Important Rules \n* DO NOT change `\\usepackage[capitalize]{cleveref}` into `\\usepackage[capitalize]{cleverref}`, as there's no `cleverref.sty`.\n* Keep the existing packages in the template unchanged.\n* For consistent compilation across environments, all figures will reside in the `figures` directory. Always include the `figures/` prefix in your `\\includegraphics` command. Failing to include this prefix (e.g., using `figure_1.png` instead of `figures/figure_1.png`) will result in figure loading errors during the build process.\n* Always use the following author information placeholder in your writeup:\n    * Ambitious AI Researcher, AI Research Institute, 123 AI Avenue, ML City, researcher@institute.ai\n\n\nCritical Constraints\n1. Scientific Integrity\n• All reported experimental results MUST match the provided experimental logs.\n• Never fabricate results, numbers, baselines, datasets, or metrics.\n• If results are weak, negative, or inconclusive, report them honestly and discuss possible explanations.\n2. Literature Cutoff Rule\nYou must behave as if the current date is: 2024-11. Do NOT cite or discuss papers published after this date.\n3. Page Limit\nThe main paper is limited to 8 pages (including figures and tables but excluding references and appendices). Use space efficiently while remaining concise.\n4. Template Compliance\n• Do not modify the overall LaTeX style or document structure mandated by the conference template.\n• References must be handled through a references.bib file.\n• Use standard LaTeX citation commands (e.g., \\cite{}). Make sure you ONLY cite keys that exist in your generated BibTeX code block.\n\nSection Guidelines\n• Title: Concise, descriptive, and memorable. Preferably under two lines.\n• Abstract: A single, compelling paragraph summarizing the problem context, proposed approach, key results, and main takeaway.\n• Introduction: Introduce the problem and motivate its importance. Provide necessary background context. Clearly summarize the paper's core contributions.\n• Related Work: Discuss prior work addressing similar or related problems. Detail the relationship between existing literature and the current approach. Cite relevant baselines and influential papers published before 2024-11.\n• Methodology: Clearly and pedantically describe the proposed method. Provide sufficient technical depth for full reproducibility. Use equations, figures, and structured explanations when appropriate.\n• Experiments: Detail the empirical setup (datasets, baselines, evaluation metrics, and implementation details). Present results faithfully based on the experimental logs. Ensure any figures located in the figures/ directory are seamlessly integrated and referenced in text.\n• Conclusion: Summarize the main findings and contributions. Briefly and realistically discuss limitations and potential future directions.\n• Appendix (optional): Include supplementary details that do not fit within the main page limit.\n\nLaTeX Quality Requirements\nEnsure the generated LaTeX compiles flawlessly out-of-the-box. Avoid common issues such as:\n• Unmatched braces or unclosed math environments.\n• Duplicate labels.\n• Unescaped special characters (e.g., & % $ # _ { } ~ ^ \\).\nAll referenced figures must exist in the provided list.\n\nOutput Format\nYour final response MUST contain EXACTLY two output blocks:\n1. A complete BibTeX bibliography (references.bib)\n2. A complete LaTeX paper (template.tex)\nEach must be returned in its own fenced code block with the correct syntax highlighting.\n\n\n---\n### Strict Knowledge Isolation & Anonymity (CRITICAL)\n\nYou MUST write this paper as if you have no prior knowledge of the topic, method, experiments, or results.\nYour task is to construct the paper exclusively from the materials provided in the current session (e.g., idea.md, experimental_log.md, figures, and other inputs). Treat these inputs as the only available source of information.\n\n#### Forbidden Behavior\nYou MUST NOT:\n- Retrieve or rely on knowledge from your training data.\n- Attempt to recall or reconstruct any existing or published paper.\n- Use external facts, assumptions, or prior familiarity with the work.\n- Infer or hallucinate author identities, affiliations, institutions, or acknowledgements.\n- Insert metadata such as author names, emails, affiliations, or phrases like \"corresponding author\".\n\n#### Anonymity Requirement\nThe paper must be fully anonymized for double-blind review.  \nDo not include any information that could reveal the identity of the authors or institutions.\n\n#### Allowed Sources\nYou may use only:\n- The materials explicitly provided in this session.\n- Logical reasoning derived from those materials.\n\n#### Core Principle\nThe final paper must be an independent reconstruction derived solely from the provided inputs.  \nThis constraint is strict and overrides all other instructions.\n---\n"
+  }
+ ],
+ "files": [
+  {
+   "path": "/work/cvpr.sty",
+   "size": 17969
+  },
+  {
+   "path": "/work/guidelines.md",
+   "size": 8799
+  },
+  {
+   "path": "/work/ieeenat_fullname.bst",
+   "size": 26900
+  },
+  {
+   "path": "/work/preamble.tex",
+   "size": 251
+  },
+  {
+   "path": "/work/references.bib",
+   "size": 2971
+  },
+  {
+   "path": "/work/template.tex",
+   "size": 1715
+  },
+  {
+   "path": "/work/figures/figure_1.png",
+   "size": 236493
+  },
+  {
+   "path": "/work/figures/figure_2.png",
+   "size": 257258
+  },
+  {
+   "path": "/work/figures/figure_3.png",
+   "size": 232924
+  },
+  {
+   "path": "/work/figures/figure_4.png",
+   "size": 25769
+  },
+  {
+   "path": "/work/figures/figure_5.png",
+   "size": 854445
+  },
+  {
+   "path": "/work/figures/info.json",
+   "size": 2320
+  }
+ ],
+ "file_notes": [],
+ "settings": {
+  "limits": {
+   "time_limit_hours": 2.0
+  },
+  "offline": false,
+  "image": null,
+  "deliverables": [
+   "template.pdf",
+   "template.tex",
+   "references.bib"
+  ],
+  "work": "paper",
+  "inputs": [
+   {
+    "path": "/work/figures",
+    "from": "figures"
+   }
+  ],
+  "software": false
+ },
+ "shield": {
+  "source": {
+   "title": "SAM2-LOVE: Segment Anything Model 2 in Language-aided Audio-Visual Scenes",
+   "authors": [
+    "Yuji Wang",
+    "Haoran Xu",
+    "Yong Liu",
+    "Jiaze Li",
+    "Yansong Tang"
+   ],
+   "time_cutoff": "2024-11-01",
+   "abs_url": "https://openaccess.thecvf.com/content/CVPR2025/html/Wang_SAM2-LOVE_Segment_Anything_Model_2_in_Language-aided_Audio-Visual_Scenes_CVPR_2025_paper.html",
+   "pdf_url": "https://openaccess.thecvf.com/content/CVPR2025/papers/Wang_SAM2-LOVE_Segment_Anything_Model_2_in_Language-aided_Audio-Visual_Scenes_CVPR_2025_paper.pdf",
+   "arxiv_id": "2506.01558",
+   "code_repository": [
+    "https://github.com/google-research/paper-orchestra"
+   ]
+  },
+  "extra": {
+   "urls": [
+    "https://huggingface.co/datasets/yiwen-song/PaperWritingBench",
+    "https://yiwen-song.github.io/paper_orchestra/",
+    "https://doi.org/10.1109/CVPR52734.2025.02694",
+    "https://arxiv.org/abs/2506.01558"
+   ]
+  },
+  "probe_url": "https://github.com/google-research/paper-orchestra"
+ },
+ "evaluator": {
+  "repo": "https://github.com/google-research/paper-orchestra",
+  "commit": "ca1b3fa01c2970fc7cda32d16245db38d57b3f56",
+  "dataset": "yiwen-song/PaperWritingBench",
+  "revision": "fbcfcafd042184ca954954b08dfcb92bd7942b51",
+  "paper_id": "cvpr2025_00ba0d5ace",
+  "venue": "cvpr2025",
+  "paper_dir": "cvpr2025/papers/cvpr2025_00ba0d5ace",
+  "idea": "idea_sparse.md",
+  "research_cutoff": "2024-11",
+  "prompt": "Single Agent (arXiv 2604.05018v1 App. F.1)",
+  "paper": "template.pdf"
+ },
+ "references": [
+  {
+   "name": "cvpr2025_00ba0d5ace.pdf",
+   "size": 1448246,
+   "text": null,
+   "note": "the original paper",
+   "file_reason": "not-in-batch"
+  },
+  {
+   "name": "raw_materials/idea_dense.md",
+   "size": 7822,
+   "text": "## Problem Statement\nThe field of Language-aided Audio-Visual Scenes (LAVS) requires a model to perform pixel-wise scene understanding by continuously segmenting objects referred to by diverse multimodal cues (text and audio) within a video. While recent works such as Music-AVQA and AVQA address question-answering in this domain, they lack fine-grained, pixel-level understanding.\n\nCurrent approaches to Reference Audio-Visual Segmentation (Ref-AVS) face two critical limitations. First, dual-modality methods (e.g., text-visual or audio-visual only) systematically fail when the object of interest requires a third modality for disambiguation (e.g., distinguishing a sounding object in a silent scene or understanding dynamic textual control over an audio source). Second, existing triple-modality methods (such as EEMC) struggle with spatio-temporal consistency; despite using memory caches, they often fail to track the target's position continuously, resulting in segmented area shifts over time. Furthermore, while the Segment Anything Model 2 (SAM2) provides powerful video tracking capabilities, it relies on manual visual prompts (points, boxes, masks) and lacks the inherent mechanism to interpret linguistic or acoustic control signals, restricting its application in LAVS.\n\n## Core Hypothesis\nWe propose a novel framework, **SAM2-LOVE** (Segment Anything Model 2 in Language-aided audiO-Visual scEnes), to bridge the gap between multimodal inputs and SAM2's prompting mechanism.\n\nOur core hypothesis is that we can compress information from three modalities (text, audio, and vision) into a single, learnable **segmentation token ([seg])**. By training a multimodal fusion module to align this token with the semantic space of SAM2, the token can serve as a \"visual clue\" to prompt SAM2 effectively. Furthermore, we hypothesize that implementing explicit **token propagation** (forward knowledge transfer) and **token accumulation** (backward knowledge transfer via history replay) strategies will enable the model to maintain robust spatio-temporal consistency across the entire video sequence, preventing the \"forgetting\" of historical context.\n\n## Proposed Methodology (Detailed Technical Approach)\n\n### 1. Multimodal Representations and Alignment\nWe will utilize distinct, pre-trained encoders to extract representations for audio, video, and text. We will define the following extraction process:\n*   **Audio:** We will use VGGish to encode audio clips into embeddings $F _ { A } \\in R ^ { N \\times d _ { A } }$, where $N$ represents the duration (and total video frames) and $d_A$ is the feature dimension.\n*   **Visual:** We will employ a ViT pre-trained on ImageNet to encode sampled frames into $F _ { V } \\in R ^ { N \\times d _ { V } \\times h \\times w }$.\n*   **Text:** We will utilize DistilRoBERTa to obtain textual representations $F _ { T } \\in R ^ { P \\times d _ { T } }$, where $P$ is the number of textual tokens.\n\nTo align these embeddings into a shared semantic space, we will project them using separate Multi-Layer Perceptrons (MLPs). For any modality $Z \\in \\{ A , V , T \\}$, the projection is defined as:\n$$ \\widehat { F } _ { Z } = L i n e a r ( \\mathrm { R e L U } ( L i n e a r ( F _ { Z } ) ) ) $$\n\n### 2. Multimodal Fusion Module\nWe will construct a multimodal fusion module based on a naive transformer encoder architecture consisting of $L$ stacked bi-directional transformer blocks. This module acts as the compressor for multimodal cues. It will process a sequence containing a learnable segmentation token `[seg]`.\n\nThe block operation for the $l$-th layer, where $z_{l-1}$ is the input sequence, is formulated as:\n$$ \\begin{array} { r l } & { z _ { l } ^ { \\prime } = M S A ( L N ( z _ { l - 1 } ) ) + z _ { l - 1 } , \\quad l = 1 . . . L } \\\\ & { z _ { l } = M L P ( L N ( z _ { l } ^ { \\prime } ) ) + z _ { l } ^ { \\prime } , \\quad l = 1 . . . L } \\end{array} $$\nHere, MSA denotes Multi-Head Self-Attention and LN denotes LayerNorm.\n\n### 3. Token Propagation Strategy (Forward Transfer)\nTo achieve spatio-temporal consistency, we will implement a self-propagation process for the `[seg]` token. For the $i$-th frame, we will construct a specific multimodal sequence $F _ { M } ^ { i }$ by prepending the current `[seg]` token to the concatenated modality features. We introduce fixed tokens `[aud]` and `[vis]` to demarcate modality boundaries:\n\n$$ F _ { M } ^ { i } = C o n c a t ( [ [ s e g ] ; \\widehat { F } _ { A } ; [ a u d ] ; \\widehat { F } _ { T } ; [ v i s ] ; \\widehat { F } _ { V } ^ { i } ] ) $$\n\nWe will extract the first element of the transformer output, $Q _ { i } = T r a n s f o r m e r ( F _ { M } ^ { i } )$, to serve as the updated `[seg]` token for the next step:\n$$ [ s e g ] _ { updated } = Q _ { i } ^ { 0 } $$\nThis allows the token to evolve by aggregating information from the current visual frame and invariant audio/text features.\n\n### 4. Token Accumulation Strategy (Backward Transfer)\nTo prevent the dilution of information from early frames during propagation, we will design a history accumulation mechanism. We will maintain a history sequence $[his]$ composed of the global representation tokens $[cls]$ from previous frames.\n\nFor the $i$-th frame, we define the history token sequence as:\n$$ [ h i s ] ^ { i } = C o n c a t ( [ [ c l s ] ^ { 0 } ; [ c l s ] ^ { 1 } ; . . . ; [ c l s ] ^ { i } ] ) $$\nwhere $[ c l s ] ^ { i }$ is the global representation of the $i$-th frame derived from the ViT. This sequence is concatenated into the input $F _ { M } ^ { i }$, enabling the current `[seg]` token to attend to global abstractions of all prior frames.\n\n### 5. Integration with SAM2 and Training\nWe will integrate the fusion module with SAM2 by using the final `[seg]` token to prompt the SAM2 mask decoder.\n\n**Training Strategy:**\n*   **Frozen Components:** We will freeze the audio, video, and text encoders, as well as the SAM2 image encoder and memory attention modules.\n*   **Trainable Components:** We will train the multimodal fusion transformer, the `[seg]` token, the projection MLPs, and the SAM2 prompt encoder and mask decoder.\n*   **Process:** During training, we will expose SAM2 only to the first frame (supervised), while the fusion module accesses the full video sequence to generate the prompt. During inference, we will leverage SAM2's zero-shot Video Object Segmentation (VOS) capabilities to propagate the mask from the prompted frame to the rest of the video.\n\n**Loss Function:**\nWe will define the total supervised mask loss $\\mathcal { L } _ { m a s k }$ as a combination of per-pixel Binary Cross-Entropy (BCE) and DICE loss:\n$$ \\mathcal { L } _ { m a s k } = \\lambda _ { b c e } \\mathbf { B } \\mathbf { C } \\mathbf { E } ( \\hat { M } , M ) + \\lambda _ { d i c e } \\mathbf { D } \\mathbf { I } \\mathbf { C } \\mathbf { E } ( \\hat { M } , M ) $$\nwhere $\\hat { M }$ is the mask prediction for the frame, $M$ is the ground truth label, and $\\lambda _ { b c e }$, $\\lambda _ { d i c e }$ are the corresponding loss weights.\n\n## Expected Contribution\n1.  **Framework Innovation:** We expect to provide the first framework that effectively prompts SAM2 using complex multimodal signals (Audio-Visual-Language) for pixel-wise scene understanding, eliminating the need for manual visual prompts in LAVS.\n2.  **Spatio-Temporal Consistency:** Through our proposed Token Propagation (forward flow) and Token Accumulation (backward flow) strategies, we anticipate solving the target shift issue prevalent in existing methods by maintaining a unified perspective of knowledge transfer.\n3.  **Modular Efficiency:** By designing a mechanism that aligns diverse modalities into a single token while freezing the majority of the SAM2 backbone, we expect to achieve State-of-the-Art performance with efficient training requirements.",
+   "note": "the dense idea (the method that produced the experimental log)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gpt-5-2025-08-07.json",
+   "size": 33209,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Sule Bai, Yong Liu, Yifei Han, Haoji Zhang, and Yansong Tang. Self-calibrated clip for training-free open-vocabulary segmentation. arXiv preprint arXiv:2411.15869, 2024. 2\",\n            \"extracted_paper_title\": \"Self-calibrated clip for training-free open-vocabulary segmentation\",\n            \"fetched_paper_id\": \"dc2a78a9665625bea8a085e38b13efeb1a1723b7\",\n            \"fetched_paper_title\": \"Self-Calibrated CLIP for Training-Free Open-Vocabulary Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuanhong Chen, Yuyuan Liu, Hu Wang, Fengbei Liu, Chong Wang, Helen Frazer, and Gustavo Carneiro. Unraveling in- stance associations: A closer look for audio-visual segmenta- tion. In Proceedings of the IEEE/CVF Conference on Com- puter Vision and Pattern Recognition, pages 26497\\u201326507, 2024. 3\",\n            \"extracted_paper_title\": \"Unraveling instance associations: A closer look for audio-visual segmentation.\",\n            \"fetched_paper_id\": \"93ed8ac3198db2a420c9e3bc3dcebbf7ac30a6a2\",\n            \"fetched_paper_title\": \"Unraveling Instance Associations: A Closer Look for Audio-Visual Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Alexey Dosovitskiy. An image is worth 16x16 words: Transformers for image recognition at scale. arXiv preprint arXiv:2010.11929, 2020. 3\",\n            \"extracted_paper_title\": \"An image is worth 16x16 words: Transformers for image recognition at scale.\",\n            \"fetched_paper_id\": \"268d347e8a55b5eb82fb5e7d2f800e33c75ab18a\",\n            \"fetched_paper_title\": \"An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Shengyi Gao, Zhe Chen, Guo Chen, Wenhai Wang, and Tong Lu. Avsegformer: Audio-visual segmentation with trans- former. In Proceedings of the AAAI Conference on Arti\\ufb01cial Intelligence, pages 12155\\u201312163, 2024. 3, 6\",\n            \"extracted_paper_title\": \"Avsegformer: Audio-visual segmentation with transformer\",\n            \"fetched_paper_id\": \"710553070b9737e61a59408b3fc6d4172b5b7ba6\",\n            \"fetched_paper_title\": \"AVSegFormer: Audio-Visual Segmentation with Transformer\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jort F Gemmeke, Daniel PW Ellis, Dylan Freedman, Aren Jansen, Wade Lawrence, R Channing Moore, Manoj Plakal, and Marvin Ritter. Audio set: An ontology and human- labeled dataset for audio events. In 2017 IEEE interna- tional conference on acoustics, speech and signal process- ing, pages 776\\u2013780. IEEE, 2017. 3\",\n            \"extracted_paper_title\": \"Audio set: An ontology and human-labeled dataset for audio events\",\n            \"fetched_paper_id\": \"5ba2218b708ca64ab556e39d5997202e012717d5\",\n            \"fetched_paper_title\": \"Audio Set: An ontology and human-labeled dataset for audio events\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Shawn Hershey, Sourish Chaudhuri, Daniel PW Ellis, Jort F Gemmeke, Aren Jansen, R Channing Moore, Manoj Plakal, Devin Platt, Rif A Saurous, Bryan Seybold, et al. Cnn archi- tectures for large-scale audio classi\\ufb01cation. In 2017 IEEE in- ternational conference on acoustics, speech and signal pro- cessing, pages 131\\u2013135. IEEE, 2017. 3\",\n            \"extracted_paper_title\": \"Cnn architectures for large-scale audio classification\",\n            \"fetched_paper_id\": \"59d8c68de09da69a608ceb149f40114f5538c5b1\",\n            \"fetched_paper_title\": \"CNN architectures for large-scale audio classification\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Sahar Kazemzadeh, Vicente Ordonez, Mark Matten, and Tamara Berg. Referitgame: Referring to objects in pho- tographs of natural scenes. In Proceedings of the 2014 con- ference on empirical methods in natural language process- ing, pages 787\\u2013798, 2014. 2\",\n            \"extracted_paper_title\": \"Referitgame: Referring to objects in photographs of natural scenes.\",\n            \"fetched_paper_id\": \"92c141447f51b6732242376164ff961e464731c8\",\n            \"fetched_paper_title\": \"ReferItGame: Referring to Objects in Photographs of Natural Scenes\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Alexander Kirillov, Eric Mintun, Nikhila Ravi, Hanzi Mao, Chloe Rolland, Laura Gustafson, Tete Xiao, Spencer White- head, Alexander C Berg, Wan-Yen Lo, et al. Segment any- thing. In Proceedings of the IEEE/CVF International Con- ference on Computer Vision, pages 4015\\u20134026, 2023. 2, 3\",\n            \"extracted_paper_title\": \"Segment anything\",\n            \"fetched_paper_id\": \"7470a1702c8c86e6f28d32cfa315381150102f5b\",\n            \"fetched_paper_title\": \"Segment Anything\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xin Lai, Zhuotao Tian, Yukang Chen, Yanwei Li, Yuhui Yuan, Shu Liu, and Jiaya Jia. Lisa: Reasoning segmentation via large language model. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 9579\\u20139589, 2024. 2\",\n            \"extracted_paper_title\": \"Lisa: Reasoning segmentation via large language model\",\n            \"fetched_paper_id\": \"ad113d8b6f8f6dace7abd12dc88af520aaaf3fc7\",\n            \"fetched_paper_title\": \"LISA: Reasoning Segmentation via Large Language Model\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Guangyao Li, Yake Wei, Yapeng Tian, Chenliang Xu, Ji- Rong Wen, and Di Hu. Learning to answer questions in dynamic audio-visual scenarios. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 19108\\u201319118, 2022. 1, 3\",\n            \"extracted_paper_title\": \"Learning to answer questions in dynamic audio-visual scenarios\",\n            \"fetched_paper_id\": \"12124de2038fda868fcb93c3da1996dd157e0390\",\n            \"fetched_paper_title\": \"Learning to Answer Questions in Dynamic Audio-Visual Scenarios\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xiang Li, Jinglu Wang, Xiaohao Xu, Xiao Li, Bhiksha Raj, and Yan Lu. Robust referring video object segmentation with cyclic structural consensus. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 22236\\u201322245, 2023. 6\",\n            \"extracted_paper_title\": \"Robust referring video object segmentation with cyclic structural consensus\",\n            \"fetched_paper_id\": \"efb8efd1cdf0f7b7ef04e7dc032485c2b15d209f\",\n            \"fetched_paper_title\": \"Robust Referring Video Object Segmentation with Cyclic Structural Consensus\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking knowl- edge transfer for lifelong robot learning. Advances in Neural Information Processing Systems, 36, 2024. 8\",\n            \"extracted_paper_title\": \"Libero: Benchmarking knowledge transfer for lifelong robot learning\",\n            \"fetched_paper_id\": \"98cfd7b1b29453c4e82536f5afdc6ddc58bbb1b3\",\n            \"fetched_paper_title\": \"LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chang Liu, Henghui Ding, and Xudong Jiang. GRES: Gen- eralized referring expression segmentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pat- tern Recognition, 2023. 2\",\n            \"extracted_paper_title\": \"GRES: Generalized referring expression segmentation\",\n            \"fetched_paper_id\": \"1ec4bc98fafa8d338f676f7a1b1b1131e8ca978e\",\n            \"fetched_paper_title\": \"GRES: Generalized Referring Expression Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Haotian Liu, Chunyuan Li, Yuheng Li, and Yong Jae Lee. Improved baselines with visual instruction tuning. In Pro- ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 26296\\u201326306, 2024. 2\",\n            \"extracted_paper_title\": \"Improved baselines with visual instruction tuning\",\n            \"fetched_paper_id\": \"124d4d374fbef2016fa9880489871a58a7450644\",\n            \"fetched_paper_title\": \"Improved Baselines with Visual Instruction Tuning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee. Visual instruction tuning. Advances in neural information processing systems, 36, 2024. 2\",\n            \"extracted_paper_title\": \"Visual instruction tuning\",\n            \"fetched_paper_id\": \"a5036f31f0e629dc661f120b8c3b1f374d479ab8\",\n            \"fetched_paper_title\": \"Visual Instruction Tuning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yinhan Liu. Roberta: A robustly optimized bert pretraining approach. arXiv preprint arXiv:1907.11692, 364, 2019. 3\",\n            \"extracted_paper_title\": \"Roberta: A robustly optimized bert pretraining approach\",\n            \"fetched_paper_id\": \"077f8329a7b6fa3b7c877a57b81eb6c18b5f87de\",\n            \"fetched_paper_title\": \"RoBERTa: A Robustly Optimized BERT Pretraining Approach\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yong Liu, Sule Bai, Guanbin Li, Yitong Wang, and Yansong Tang. Open-vocabulary segmentation with semantic-assisted calibration. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 3491\\u20133500, 2024. 2\",\n            \"extracted_paper_title\": \"Open-vocabulary segmentation with semantic-assisted calibration\",\n            \"fetched_paper_id\": \"28c2a8cd598dbb7651f29402e808e90977696bf6\",\n            \"fetched_paper_title\": \"Open-Vocabulary Segmentation with Semantic-Assisted Calibration\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yong Liu, Cairong Zhang, Yitong Wang, Jiahao Wang, Yujiu Yang, and Yansong Tang. Universal segmentation at arbi- trary granularity with language instruction. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pat- tern Recognition, pages 3459\\u20133469, 2024. 2\",\n            \"extracted_paper_title\": \"Universal segmentation at arbitrary granularity with language instruction\",\n            \"fetched_paper_id\": \"06773ee8ba36576f1408c20e16c5a5694a84f327\",\n            \"fetched_paper_title\": \"Universal Segmentation at Arbitrary Granularity with Language Instruction\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ilya Loshchilov and Frank Hutter. Decoupled weight de- cay regularization. In International Conference on Learning Representations, 2019. 6\",\n            \"extracted_paper_title\": \"Decoupled weight decay regularization\",\n            \"fetched_paper_id\": \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n            \"fetched_paper_title\": \"Decoupled Weight Decay Regularization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhuoyan Luo, Yicheng Xiao, Yong Liu, Shuyan Li, Yi- tong Wang, Yansong Tang, Xiu Li, and Yujiu Yang. Soc: Semantic-assisted object cluster for referring video object segmentation. Advances in Neural Information Processing Systems, 36, 2024. 6\",\n            \"extracted_paper_title\": \"Soc: Semantic-assisted object cluster for referring video object segmentation\",\n            \"fetched_paper_id\": \"9fc5dddf5a5431629e00d35a68dc583226352edb\",\n            \"fetched_paper_title\": \"SOC: Semantic-Assisted Object Cluster for Referring Video Object Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Varun K Nagaraja, Vlad I Morariu, and Larry S Davis. Mod- eling context between objects for referring expression un- derstanding. In IEEE European Conference on Computer Vision, pages 792\\u2013807. Springer, 2016. 2\",\n            \"extracted_paper_title\": \"Modeling context between objects for referring expression understanding\",\n            \"fetched_paper_id\": \"86eef3a1dff2bd2808847358cdb7f5ba2b7e0214\",\n            \"fetched_paper_title\": \"Modeling Context Between Objects for Referring Expression Understanding\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Nikhila Ravi, Valentin Gabeur, Yuan-Ting Hu, Ronghang Hu, Chaitanya Ryali, Tengyu Ma, Haitham Khedr, Roman R\\u00a8adle, Chloe Rolland, Laura Gustafson, Eric Mintun, Junt- ing Pan, Kalyan Vasudev Alwala, Nicolas Carion, Chao- Yuan Wu, Ross Girshick, Piotr Doll\\u00b4ar, and Christoph Feicht- enhofer. Sam 2: Segment anything in images and videos. arXiv preprint arXiv:2408.00714, 2024. 2, 3\",\n            \"extracted_paper_title\": \"Sam 2: Segment anything in images and videos.\",\n            \"fetched_paper_id\": \"92a09cdfc19f3f582d89c28c1b4f386299cc69e1\",\n            \"fetched_paper_title\": \"SAM 2: Segment Anything in Images and Videos\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Zhongwei Ren, Zhicheng Huang, Yunchao Wei, Yao Zhao, Dongmei Fu, Jiashi Feng, and Xiaojie Jin. Pixellm: Pixel reasoning with large multimodal model. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 26374\\u201326383, 2024. 2\",\n            \"extracted_paper_title\": \"PixelLM: Pixel reasoning with large multimodal model\",\n            \"fetched_paper_id\": \"adb969668f191839d273af5743948ed10b28c43c\",\n            \"fetched_paper_title\": \"PixelLM: Pixel Reasoning with Large Multimodal Model\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Victor Sanh, Lysandre Debut, Julien Chaumond, and Thomas Wolf. Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter. arXiv preprint arXiv:1910.01108, 2019. 3\",\n            \"extracted_paper_title\": \"Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter.\",\n            \"fetched_paper_id\": \"a54b56af24bb4873ed0163b77df63b92bd018ddc\",\n            \"fetched_paper_title\": \"DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Zhuoran Shen, Mingyuan Zhang, Haiyu Zhao, Shuai Yi, and Hongsheng Li. Ef\\ufb01cient attention: Attention with lin- ear complexities. In Proceedings of the IEEE/CVF winter conference on applications of computer vision, pages 3531\\u20133539, 2021. 8\",\n            \"extracted_paper_title\": \"Efficient attention: Attention with linear complexities.\",\n            \"fetched_paper_id\": \"5f4a22ee70ca613d9c0630eafc96364fe365fdf8\",\n            \"fetched_paper_title\": \"Efficient Attention: Attention with Linear Complexities\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. Roformer: Enhanced transformer with rotary position embedding. Neurocomputing, 568:127063, 2024. 8\",\n            \"extracted_paper_title\": \"Roformer: Enhanced transformer with rotary position embedding\",\n            \"fetched_paper_id\": \"66c10bf1f11bc1b2d92204d8f8391d087f6de1c4\",\n            \"fetched_paper_title\": \"RoFormer: Enhanced Transformer with Rotary Position Embedding\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Luoyi Sun, Xuenan Xu, Mengyue Wu, and Weidi Xie. Auto- acd: A large-scale dataset for audio-language representation learning. In Proceedings of the 32nd ACM International Conference on Multimedia, pages 5025\\u20135034, 2024. 3\",\n            \"extracted_paper_title\": \"Auto-acd: A large-scale dataset for audio-language representation learning\",\n            \"fetched_paper_id\": \"e88bd2fa2329b25ebddabd67bf4878c4644cfecc\",\n            \"fetched_paper_title\": \"Auto-ACD: A Large-scale Dataset for Audio-Language Representation Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yaoting Wang, Weisong Liu, Guangyao Li, Jian Ding, Di Hu, and Xi Li. Prompting segmentation with sound is generalizable audio-visual source localizer. arXiv preprint arXiv:2309.07929, 2023. 6\",\n            \"extracted_paper_title\": \"Prompting segmentation with sound is generalizable audio-visual source localizer\",\n            \"fetched_paper_id\": \"b6f2bf38db13fe0d9a9f6387bd4b8dfab7e5d040\",\n            \"fetched_paper_title\": \"Prompting Segmentation with Sound is Generalizable Audio-Visual Source Localizer\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yuji Wang, Ruojun Zhao, and Zijun Sun. Ef\\ufb01cient remote sensing transformer for coastline detection with sentinel-2 satellite imagery. In IGARSS 2023-2023 IEEE International Geoscience and Remote Sensing Symposium, pages 5439\\u20135442. IEEE, 2023. 2\",\n            \"extracted_paper_title\": \"Efficient remote sensing transformer for coastline detection with sentinel-2 satellite imagery\",\n            \"fetched_paper_id\": \"5caec02f12fdbb6ee2c4fe19d4d84b7bbb401b41\",\n            \"fetched_paper_title\": \"Efficient Remote Sensing Transformer for Coastline Detection with Sentinel-2 Satellite Imagery\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yaoting Wang, Weisong Liu, Guangyao Li, Jian Ding, Di Hu, and Xi Li. Prompting segmentation with sound is gen- eralizable audio-visual source localizer. In Proceedings of the AAAI Conference on Arti\\ufb01cial Intelligence, pages 5669\\u20135677, 2024. 2, 3\",\n            \"extracted_paper_title\": \"Prompting segmentation with sound is generalizable audio-visual source localizer\",\n            \"fetched_paper_id\": \"b6f2bf38db13fe0d9a9f6387bd4b8dfab7e5d040\",\n            \"fetched_paper_title\": \"Prompting Segmentation with Sound is Generalizable Audio-Visual Source Localizer\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yaoting Wang, Peiwen Sun, Dongzhan Zhou, Guangyao Li, Honggang Zhang, and Di Hu. Ref-avs: Refer and segment objects in audio-visual scenes. IEEE European Conference on Computer Vision, 2024. 1, 2, 3, 5, 6\",\n            \"extracted_paper_title\": \"Ref-avs: Refer and segment objects in audio-visual scenes\",\n            \"fetched_paper_id\": \"0bd6b872d8a0029223128443596763a43a8f1779\",\n            \"fetched_paper_title\": \"Ref-AVS: Refer and Segment Objects in Audio-Visual Scenes\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yuji Wang, Ruojun Zhao, Shicai Wei, Jingchen Ni, Meng Wu, Yang Luo, and Chunbo Luo. Convolution meets trans- former: Ef\\ufb01cient hybrid transformer for semantic segmenta- tion with very high resolution imagery. In IGARSS 2024-2024 IEEE International Geoscience and Remote Sensing Symposium, pages 9688\\u20139691. IEEE, 2024. 2\",\n            \"extracted_paper_title\": \"Convolution meets transformer: Efficient hybrid transformer for semantic segmentation with very high resolution imagery.\",\n            \"fetched_paper_id\": \"e6cdc4cf70eb2aacab5029b6f8f74bc2b8c973c7\",\n            \"fetched_paper_title\": \"Convolution Meets Transformer: Efficient Hybrid Transformer for Semantic Segmentation with Very High Resolution Imagery\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuji Wang, Jingchen Ni, Yong Liu, Chun Yuan, and Yan- song Tang. Iterprime: Zero-shot referring image segmen- tation with iterative grad-cam re\\ufb01nement and primary word emphasis. arXiv preprint arXiv:2503.00936, 2025. 2\",\n            \"extracted_paper_title\": \"Iterprime: Zero-shot referring image segmentation with iterative grad-cam refinement and primary word emphasis.\",\n            \"fetched_paper_id\": \"2ceaa2c095d7e13153b7ee6890cca5cd40ffc34b\",\n            \"fetched_paper_title\": \"IteRPrimE: Zero-shot Referring Image Segmentation with Iterative Grad-CAM Refinement and Primary Word Emphasis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dongming Wu, Tiancai Wang, Yuang Zhang, Xiangyu Zhang, and Jianbing Shen. Onlinerefer: A simple online baseline for referring video object segmentation. In Proceed- ings of the IEEE/CVF International Conference on Com- puter Vision, pages 2761\\u20132770, 2023. 2\",\n            \"extracted_paper_title\": \"Online Refer: A simple online baseline for referring video object segmentation\",\n            \"fetched_paper_id\": \"41f22592f4a495528674084f7159f2d1736cff4c\",\n            \"fetched_paper_title\": \"OnlineRefer: A Simple Online Baseline for Referring Video Object Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jiannan Wu, Yi Jiang, Peize Sun, Zehuan Yuan, and Ping Luo. Language as queries for referring video object seg- mentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 4974\\u20134984, 2022. 6\",\n            \"extracted_paper_title\": \"Language as queries for referring video object segmentation\",\n            \"fetched_paper_id\": \"2397eb2febb96e5a620147eff64e6875c4b63959\",\n            \"fetched_paper_title\": \"Language as Queries for Referring Video Object Segmentation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jiannan Wu, Yi Jiang, Peize Sun, Zehuan Yuan, and Ping Luo. Language as queries for referring video object seg- mentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 4974\\u20134984, 2022. 2\",\n            \"extracted_paper_title\": \"Language as queries for referring video object segmentation\",\n            \"fetched_paper_id\": \"2397eb2febb96e5a620147eff64e6875c4b63959\",\n            \"fetched_paper_title\": \"Language as Queries for Referring Video Object Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhuofan Xia, Dongchen Han, Yizeng Han, Xuran Pan, Shiji Song, and Gao Huang. Gsva: Generalized segmentation via multimodal large language models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 3858\\u20133869, 2024. 2\",\n            \"extracted_paper_title\": \"Gsva: Generalized segmentation via multimodal large language models\",\n            \"fetched_paper_id\": \"3cc0f0b40589f4e0f971280cad48919048d22a41\",\n            \"fetched_paper_title\": \"GSVA: Generalized Segmentation via Multimodal Large Language Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yunyang Xiong, Bala Varadarajan, Lemeng Wu, Xiaoyu Xi- ang, Fanyi Xiao, Chenchen Zhu, Xiaoliang Dai, Dilin Wang, Fei Sun, Forrest Iandola, et al. Ef\\ufb01cientsam: Leveraged masked image pretraining for ef\\ufb01cient segment anything. In Proceedings of the IEEE/CVF Conference on Computer Vi- sion and Pattern Recognition, pages 16111\\u201316121, 2024. 3\",\n            \"extracted_paper_title\": \"EfficientSAM: Leveraged masked image pretraining for efficient segment anything\",\n            \"fetched_paper_id\": \"30ee82b45277ff528e8419ee9543cb7e27d09311\",\n            \"fetched_paper_title\": \"EfficientSAM: Leveraged Masked Image Pretraining for Efficient Segment Anything\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Pinci Yang, Xin Wang, Xuguang Duan, Hong Chen, Runze Hou, Cong Jin, and Wenwu Zhu. Avqa: A dataset for audio- visual question answering on videos. In Proceedings of the 30th ACM International Conference on Multimedia, pages 3480\\u20133491, 2022. 1, 3\",\n            \"extracted_paper_title\": \"Avqa: A dataset for audio-visual question answering on videos\",\n            \"fetched_paper_id\": \"77937788fdbdefe4dd775075b5768c03eaaac008\",\n            \"fetched_paper_title\": \"AVQA: A Dataset for Audio-Visual Question Answering on Videos\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhao Yang, Jiaqi Wang, Yansong Tang, Kai Chen, Heng- shuang Zhao, and Philip HS Torr. Lavt: Language-aware vision transformer for referring image segmentation. In Pro- ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, 2022. 2\",\n            \"extracted_paper_title\": \"Lavt: Language-aware vision transformer for referring image segmentation.\",\n            \"fetched_paper_id\": \"ca1d5aa8f63707931692bf6a62642becf928c1fa\",\n            \"fetched_paper_title\": \"LAVT: Language-Aware Vision Transformer for Referring Image Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhao Yang, Jiaqi Wang, Xubing Ye, Yansong Tang, Kai Chen, Hengshuang Zhao, and Philip HS Torr. Language- aware vision transformer for referring segmentation. IEEE Transactions on Pattern Analysis and Machine Intelligence, 2024. 2\",\n            \"extracted_paper_title\": \"Language-aware vision transformer for referring segmentation\",\n            \"fetched_paper_id\": \"c600e44a58ca37f2696ec166e31ce0e89a1fa898\",\n            \"fetched_paper_title\": \"Language-Aware Vision Transformer for Referring Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chaoning Zhang, Dongshen Han, Yu Qiao, Jung Uk Kim, Sung-Ho Bae, Seungkyu Lee, and Choong Seon Hong. Faster segment anything: Towards lightweight sam for mo- bile applications. arXiv preprint arXiv:2306.14289, 2023. 3\",\n            \"extracted_paper_title\": \"Faster segment anything: Towards lightweight sam for mobile applications\",\n            \"fetched_paper_id\": \"fdaa21fce5ee5aadf1bb8c55d5f7c3155b905846\",\n            \"fetched_paper_title\": \"Faster Segment Anything: Towards Lightweight SAM for Mobile Applications\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuxuan Zhang, Tianheng Cheng, Rui Hu, Lei Liu, Heng Liu, Longjin Ran, Xiaoxin Chen, Wenyu Liu, and Xing- gang Wang. Evf-sam: Early vision-language fusion for text-prompted segment anything model. arXiv preprint arXiv:2406.20076, 2024. 2, 3\",\n            \"extracted_paper_title\": \"Evf-sam: Early vision-language fusion for text-prompted segment anything model\",\n            \"fetched_paper_id\": \"199b241269cd475710748973b02c182c11a3b4a8\",\n            \"fetched_paper_title\": \"EVF-SAM: Early Vision-Language Fusion for Text-Prompted Segment Anything Model\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xu Zhao, Wenchao Ding, Yongqi An, Yinglong Du, Tao Yu, Min Li, Ming Tang, and Jinqiao Wang. Fast segment any- thing. arXiv preprint arXiv:2306.12156, 2023. 3\",\n            \"extracted_paper_title\": \"Fast segment anything\",\n            \"fetched_paper_id\": \"c01e94a36be5b3578fedb17205205b330290a778\",\n            \"fetched_paper_title\": \"Fast Segment Anything\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jinxing Zhou, Jianyuan Wang, Jiayi Zhang, Weixuan Sun, Jing Zhang, Stan Birch\\ufb01eld, Dan Guo, Lingpeng Kong, Meng Wang, and Yiran Zhong. Audio-visual segmentation. In European Conference on Computer Vision, 2022. 3, 6\",\n            \"extracted_paper_title\": \"Audio-visual segmentation\",\n            \"fetched_paper_id\": \"46e2af2ce21fb2c3385ade876cf931a3727b5da8\",\n            \"fetched_paper_title\": \"Audio-Visual Segmentation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jinxing Zhou, Xuyang Shen, Jianyuan Wang, Jiayi Zhang, Weixuan Sun, Jing Zhang, Stan Birch\\ufb01ld, Dan Guo, Ling- peng Kong, Meng Wang, and Yiran Zhong. Audio- visual segmentation with semantics. arXiv preprint arXiv:2301.13190, 2023. 3\",\n            \"extracted_paper_title\": \"Audio-visual segmentation with semantics\",\n            \"fetched_paper_id\": \"45ac621b874177a4bdb9e9491dd9ed8520efe3ad\",\n            \"fetched_paper_title\": \"Audio-Visual Segmentation with Semantics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xueyan Zou, Zi-Yi Dou, Jianwei Yang, Zhe Gan, Linjie Li, Chunyuan Li, Xiyang Dai, Harkirat Behl, Jianfeng Wang, Lu Yuan, et al. Generalized decoding for pixel, image, and lan- guage. In Proceedings of the IEEE/CVF Conference on Com- puter Vision and Pattern Recognition, pages 15116\\u201315127, 2023. 2\",\n            \"extracted_paper_title\": \"Generalized decoding for pixel, image, and language\",\n            \"fetched_paper_id\": \"967907503b24423b9b74621051811fcf684e3957\",\n            \"fetched_paper_title\": \"Generalized Decoding for Pixel, Image, and Language\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"e88bd2fa2329b25ebddabd67bf4878c4644cfecc\",\n        \"0bd6b872d8a0029223128443596763a43a8f1779\",\n        \"28c2a8cd598dbb7651f29402e808e90977696bf6\",\n        \"77937788fdbdefe4dd775075b5768c03eaaac008\",\n        \"46e2af2ce21fb2c3385ade876cf931a3727b5da8\",\n        \"a54b56af24bb4873ed0163b77df63b92bd018ddc\",\n        \"59d8c68de09da69a608ceb149f40114f5538c5b1\",\n        \"077f8329a7b6fa3b7c877a57b81eb6c18b5f87de\",\n        \"3cc0f0b40589f4e0f971280cad48919048d22a41\",\n        \"7470a1702c8c86e6f28d32cfa315381150102f5b\",\n        \"c01e94a36be5b3578fedb17205205b330290a778\",\n        \"41f22592f4a495528674084f7159f2d1736cff4c\",\n        \"98cfd7b1b29453c4e82536f5afdc6ddc58bbb1b3\",\n        \"a5036f31f0e629dc661f120b8c3b1f374d479ab8\",\n        \"5f4a22ee70ca613d9c0630eafc96364fe365fdf8\",\n        \"710553070b9737e61a59408b3fc6d4172b5b7ba6\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"45ac621b874177a4bdb9e9491dd9ed8520efe3ad\",\n        \"967907503b24423b9b74621051811fcf684e3957\",\n        \"ad113d8b6f8f6dace7abd12dc88af520aaaf3fc7\",\n        \"30ee82b45277ff528e8419ee9543cb7e27d09311\",\n        \"86eef3a1dff2bd2808847358cdb7f5ba2b7e0214\",\n        \"93ed8ac3198db2a420c9e3bc3dcebbf7ac30a6a2\",\n        \"124d4d374fbef2016fa9880489871a58a7450644\",\n        \"9fc5dddf5a5431629e00d35a68dc583226352edb\",\n        \"1ec4bc98fafa8d338f676f7a1b1b1131e8ca978e\",\n        \"92c141447f51b6732242376164ff961e464731c8\",\n        \"5caec02f12fdbb6ee2c4fe19d4d84b7bbb401b41\",\n        \"adb969668f191839d273af5743948ed10b28c43c\",\n        \"2ceaa2c095d7e13153b7ee6890cca5cd40ffc34b\",\n        \"12124de2038fda868fcb93c3da1996dd157e0390\",\n        \"66c10bf1f11bc1b2d92204d8f8391d087f6de1c4\",\n        \"ca1d5aa8f63707931692bf6a62642becf928c1fa\",\n        \"fdaa21fce5ee5aadf1bb8c55d5f7c3155b905846\",\n        \"efb8efd1cdf0f7b7ef04e7dc032485c2b15d209f\",\n        \"2397eb2febb96e5a620147eff64e6875c4b63959\",\n        \"199b241269cd475710748973b02c182c11a3b4a8\",\n        \"06773ee8ba36576f1408c20e16c5a5694a84f327\",\n        \"92a09cdfc19f3f582d89c28c1b4f386299cc69e1\",\n        \"e6cdc4cf70eb2aacab5029b6f8f74bc2b8c973c7\",\n        \"c600e44a58ca37f2696ec166e31ce0e89a1fa898\",\n        \"268d347e8a55b5eb82fb5e7d2f800e33c75ab18a\",\n        \"5ba2218b708ca64ab556e39d5997202e012717d5\",\n        \"b6f2bf38db13fe0d9a9f6387bd4b8dfab7e5d040\",\n        \"dc2a78a9665625bea8a085e38b13efeb1a1723b7\"\n    ],\n    \"all_ids_count\": 45,\n    \"p0_ids\": [\n        \"a54b56af24bb4873ed0163b77df63b92bd018ddc\",\n        \"0bd6b872d8a0029223128443596763a43a8f1779\",\n        \"710553070b9737e61a59408b3fc6d4172b5b7ba6\",\n        \"077f8329a7b6fa3b7c877a57b81eb6c18b5f87de\",\n        \"46e2af2ce21fb2c3385ade876cf931a3727b5da8\",\n        \"268d347e8a55b5eb82fb5e7d2f800e33c75ab18a\",\n        \"efb8efd1cdf0f7b7ef04e7dc032485c2b15d209f\",\n        \"92a09cdfc19f3f582d89c28c1b4f386299cc69e1\",\n        \"59d8c68de09da69a608ceb149f40114f5538c5b1\",\n        \"2397eb2febb96e5a620147eff64e6875c4b63959\",\n        \"b6f2bf38db13fe0d9a9f6387bd4b8dfab7e5d040\",\n        \"5ba2218b708ca64ab556e39d5997202e012717d5\"\n    ],\n    \"p0_ids_count\": 12,\n    \"p1_ids\": [\n        \"12124de2038fda868fcb93c3da1996dd157e0390\",\n        \"1ec4bc98fafa8d338f676f7a1b1b1131e8ca978e\",\n        \"c600e44a58ca37f2696ec166e31ce0e89a1fa898\",\n        \"fdaa21fce5ee5aadf1bb8c55d5f7c3155b905846\",\n        \"30ee82b45277ff528e8419ee9543cb7e27d09311\",\n        \"e6cdc4cf70eb2aacab5029b6f8f74bc2b8c973c7\",\n        \"92c141447f51b6732242376164ff961e464731c8\",\n        \"5caec02f12fdbb6ee2c4fe19d4d84b7bbb401b41\",\n        \"c01e94a36be5b3578fedb17205205b330290a778\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"86eef3a1dff2bd2808847358cdb7f5ba2b7e0214\",\n        \"2ceaa2c095d7e13153b7ee6890cca5cd40ffc34b\",\n        \"98cfd7b1b29453c4e82536f5afdc6ddc58bbb1b3\",\n        \"5f4a22ee70ca613d9c0630eafc96364fe365fdf8\",\n        \"45ac621b874177a4bdb9e9491dd9ed8520efe3ad\",\n        \"adb969668f191839d273af5743948ed10b28c43c\",\n        \"66c10bf1f11bc1b2d92204d8f8391d087f6de1c4\",\n        \"a5036f31f0e629dc661f120b8c3b1f374d479ab8\",\n        \"967907503b24423b9b74621051811fcf684e3957\",\n        \"28c2a8cd598dbb7651f29402e808e90977696bf6\",\n        \"9fc5dddf5a5431629e00d35a68dc583226352edb\",\n        \"06773ee8ba36576f1408c20e16c5a5694a84f327\",\n        \"ca1d5aa8f63707931692bf6a62642becf928c1fa\",\n        \"3cc0f0b40589f4e0f971280cad48919048d22a41\",\n        \"77937788fdbdefe4dd775075b5768c03eaaac008\",\n        \"7470a1702c8c86e6f28d32cfa315381150102f5b\",\n        \"124d4d374fbef2016fa9880489871a58a7450644\",\n        \"ad113d8b6f8f6dace7abd12dc88af520aaaf3fc7\",\n        \"199b241269cd475710748973b02c182c11a3b4a8\",\n        \"93ed8ac3198db2a420c9e3bc3dcebbf7ac30a6a2\",\n        \"41f22592f4a495528674084f7159f2d1736cff4c\",\n        \"dc2a78a9665625bea8a085e38b13efeb1a1723b7\",\n        \"e88bd2fa2329b25ebddabd67bf4878c4644cfecc\"\n    ],\n    \"p1_ids_count\": 33\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gemini-3.1-pro-preview.json",
+   "size": 32959,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Sule Bai, Yong Liu, Yifei Han, Haoji Zhang, and Yansong Tang. Self-calibrated clip for training-free open-vocabulary segmentation. arXiv preprint arXiv:2411.15869, 2024. 2\",\n            \"extracted_paper_title\": \"Self-calibrated clip for training-free open-vocabulary segmentation\",\n            \"fetched_paper_id\": \"dc2a78a9665625bea8a085e38b13efeb1a1723b7\",\n            \"fetched_paper_title\": \"Self-Calibrated CLIP for Training-Free Open-Vocabulary Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuanhong Chen, Yuyuan Liu, Hu Wang, Fengbei Liu, Chong Wang, Helen Frazer, and Gustavo Carneiro. Unraveling instance associations: A closer look for audio-visual segmentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 26497\\u201326507, 2024. 3\",\n            \"extracted_paper_title\": \"Unraveling instance associations: A closer look for audio-visual segmentation.\",\n            \"fetched_paper_id\": \"93ed8ac3198db2a420c9e3bc3dcebbf7ac30a6a2\",\n            \"fetched_paper_title\": \"Unraveling Instance Associations: A Closer Look for Audio-Visual Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Alexey Dosovitskiy. An image is worth 16x16 words: Transformers for image recognition at scale. arXiv preprint arXiv:2010.11929, 2020. 3\",\n            \"extracted_paper_title\": \"An image is worth 16x16 words: Transformers for image recognition at scale\",\n            \"fetched_paper_id\": \"268d347e8a55b5eb82fb5e7d2f800e33c75ab18a\",\n            \"fetched_paper_title\": \"An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Shengyi Gao, Zhe Chen, Guo Chen, Wenhai Wang, and Tong Lu. Avsegformer: Audio-visual segmentation with transformer. In Proceedings of the AAAI Conference on Arti\\ufb01cial Intelligence, pages 12155\\u201312163, 2024. 3, 6\",\n            \"extracted_paper_title\": \"Avsegformer: Audio-visual segmentation with transformer\",\n            \"fetched_paper_id\": \"710553070b9737e61a59408b3fc6d4172b5b7ba6\",\n            \"fetched_paper_title\": \"AVSegFormer: Audio-Visual Segmentation with Transformer\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jort F Gemmeke, Daniel PW Ellis, Dylan Freedman, Aren Jansen, Wade Lawrence, R Channing Moore, Manoj Plakal, and Marvin Ritter. Audio set: An ontology and human-labeled dataset for audio events. In 2017 IEEE international conference on acoustics, speech and signal processing, pages 776\\u2013780. IEEE, 2017. 3\",\n            \"extracted_paper_title\": \"Audio set: An ontology and human-labeled dataset for audio events.\",\n            \"fetched_paper_id\": \"5ba2218b708ca64ab556e39d5997202e012717d5\",\n            \"fetched_paper_title\": \"Audio Set: An ontology and human-labeled dataset for audio events\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Shawn Hershey, Sourish Chaudhuri, Daniel PW Ellis, Jort F Gemmeke, Aren Jansen, R Channing Moore, Manoj Plakal, Devin Platt, Rif A Saurous, Bryan Seybold, et al. Cnn architectures for large-scale audio classi\\ufb01cation. In 2017 IEEE international conference on acoustics, speech and signal processing, pages 131\\u2013135. IEEE, 2017. 3\",\n            \"extracted_paper_title\": \"Cnn architectures for large-scale audio classification\",\n            \"fetched_paper_id\": \"59d8c68de09da69a608ceb149f40114f5538c5b1\",\n            \"fetched_paper_title\": \"CNN architectures for large-scale audio classification\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Sahar Kazemzadeh, Vicente Ordonez, Mark Matten, and Tamara Berg. Referitgame: Referring to objects in photographs of natural scenes. In Proceedings of the 2014 conference on empirical methods in natural language processing, pages 787\\u2013798, 2014. 2\",\n            \"extracted_paper_title\": \"Referitgame: Referring to objects in photographs of natural scenes\",\n            \"fetched_paper_id\": \"92c141447f51b6732242376164ff961e464731c8\",\n            \"fetched_paper_title\": \"ReferItGame: Referring to Objects in Photographs of Natural Scenes\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Alexander Kirillov, Eric Mintun, Nikhila Ravi, Hanzi Mao, Chloe Rolland, Laura Gustafson, Tete Xiao, Spencer Whitehead, Alexander C Berg, Wan-Yen Lo, et al. Segment anything. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 4015\\u20134026, 2023. 2, 3\",\n            \"extracted_paper_title\": \"Segment anything\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xin Lai, Zhuotao Tian, Yukang Chen, Yanwei Li, Yuhui Yuan, Shu Liu, and Jiaya Jia. Lisa: Reasoning segmentation via large language model. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 9579\\u20139589, 2024. 2\",\n            \"extracted_paper_title\": \"Lisa: Reasoning segmentation via large language model\",\n            \"fetched_paper_id\": \"ad113d8b6f8f6dace7abd12dc88af520aaaf3fc7\",\n            \"fetched_paper_title\": \"LISA: Reasoning Segmentation via Large Language Model\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Guangyao Li, Yake Wei, Yapeng Tian, Chenliang Xu, Ji-Rong Wen, and Di Hu. Learning to answer questions in dynamic audio-visual scenarios. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 19108\\u201319118, 2022. 1, 3\",\n            \"extracted_paper_title\": \"Learning to answer questions in dynamic audio-visual scenarios\",\n            \"fetched_paper_id\": \"12124de2038fda868fcb93c3da1996dd157e0390\",\n            \"fetched_paper_title\": \"Learning to Answer Questions in Dynamic Audio-Visual Scenarios\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xiang Li, Jinglu Wang, Xiaohao Xu, Xiao Li, Bhiksha Raj, and Yan Lu. Robust referring video object segmentation with cyclic structural consensus. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 22236\\u201322245, 2023. 6\",\n            \"extracted_paper_title\": \"Robust referring video object segmentation with cyclic structural consensus\",\n            \"fetched_paper_id\": \"efb8efd1cdf0f7b7ef04e7dc032485c2b15d209f\",\n            \"fetched_paper_title\": \"Robust Referring Video Object Segmentation with Cyclic Structural Consensus\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking knowledge transfer for lifelong robot learning. Advances in Neural Information Processing Systems, 36, 2024. 8\",\n            \"extracted_paper_title\": \"Libero: Benchmarking knowledge transfer for lifelong robot learning\",\n            \"fetched_paper_id\": \"98cfd7b1b29453c4e82536f5afdc6ddc58bbb1b3\",\n            \"fetched_paper_title\": \"LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chang Liu, Henghui Ding, and Xudong Jiang. GRES: Generalized referring expression segmentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, 2023. 2\",\n            \"extracted_paper_title\": \"GRES: Generalized referring expression segmentation\",\n            \"fetched_paper_id\": \"1ec4bc98fafa8d338f676f7a1b1b1131e8ca978e\",\n            \"fetched_paper_title\": \"GRES: Generalized Referring Expression Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Haotian Liu, Chunyuan Li, Yuheng Li, and Yong Jae Lee. Improved baselines with visual instruction tuning. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 26296\\u201326306, 2024. 2\",\n            \"extracted_paper_title\": \"Improved baselines with visual instruction tuning\",\n            \"fetched_paper_id\": \"124d4d374fbef2016fa9880489871a58a7450644\",\n            \"fetched_paper_title\": \"Improved Baselines with Visual Instruction Tuning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee. Visual instruction tuning. Advances in neural information processing systems, 36, 2024. 2\",\n            \"extracted_paper_title\": \"Visual instruction tuning\",\n            \"fetched_paper_id\": \"a5036f31f0e629dc661f120b8c3b1f374d479ab8\",\n            \"fetched_paper_title\": \"Visual Instruction Tuning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yinhan Liu. Roberta: A robustly optimized bert pretraining approach. arXiv preprint arXiv:1907.11692, 364, 2019. 3\",\n            \"extracted_paper_title\": \"Roberta: A robustly optimized bert pretraining approach\",\n            \"fetched_paper_id\": \"077f8329a7b6fa3b7c877a57b81eb6c18b5f87de\",\n            \"fetched_paper_title\": \"RoBERTa: A Robustly Optimized BERT Pretraining Approach\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yong Liu, Sule Bai, Guanbin Li, Yitong Wang, and Yansong Tang. Open-vocabulary segmentation with semantic-assisted calibration. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 3491\\u20133500, 2024. 2\",\n            \"extracted_paper_title\": \"Open-vocabulary segmentation with semantic-assisted calibration\",\n            \"fetched_paper_id\": \"28c2a8cd598dbb7651f29402e808e90977696bf6\",\n            \"fetched_paper_title\": \"Open-Vocabulary Segmentation with Semantic-Assisted Calibration\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yong Liu, Cairong Zhang, Yitong Wang, Jiahao Wang, Yujiu Yang, and Yansong Tang. Universal segmentation at arbitrary granularity with language instruction. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 3459\\u20133469, 2024. 2\",\n            \"extracted_paper_title\": \"Universal segmentation at arbitrary granularity with language instruction\",\n            \"fetched_paper_id\": \"06773ee8ba36576f1408c20e16c5a5694a84f327\",\n            \"fetched_paper_title\": \"Universal Segmentation at Arbitrary Granularity with Language Instruction\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In International Conference on Learning Representations, 2019. 6\",\n            \"extracted_paper_title\": \"Decoupled weight decay regularization\",\n            \"fetched_paper_id\": \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n            \"fetched_paper_title\": \"Decoupled Weight Decay Regularization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhuoyan Luo, Yicheng Xiao, Yong Liu, Shuyan Li, Yitong Wang, Yansong Tang, Xiu Li, and Yujiu Yang. Soc: Semantic-assisted object cluster for referring video object segmentation. Advances in Neural Information Processing Systems, 36, 2024. 6\",\n            \"extracted_paper_title\": \"Soc: Semantic-assisted object cluster for referring video object segmentation.\",\n            \"fetched_paper_id\": \"9fc5dddf5a5431629e00d35a68dc583226352edb\",\n            \"fetched_paper_title\": \"SOC: Semantic-Assisted Object Cluster for Referring Video Object Segmentation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Varun K Nagaraja, Vlad I Morariu, and Larry S Davis. Modeling context between objects for referring expression understanding. In IEEE European Conference on Computer Vision, pages 792\\u2013807. Springer, 2016. 2\",\n            \"extracted_paper_title\": \"Modeling context between objects for referring expression understanding\",\n            \"fetched_paper_id\": \"86eef3a1dff2bd2808847358cdb7f5ba2b7e0214\",\n            \"fetched_paper_title\": \"Modeling Context Between Objects for Referring Expression Understanding\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Nikhila Ravi, Valentin Gabeur, Yuan-Ting Hu, Ronghang Hu, Chaitanya Ryali, Tengyu Ma, Haitham Khedr, Roman R\\u00a8adle, Chloe Rolland, Laura Gustafson, Eric Mintun, Junting Pan, Kalyan Vasudev Alwala, Nicolas Carion, Chao-Yuan Wu, Ross Girshick, Piotr Doll\\u00b4ar, and Christoph Feichtenhofer. Sam 2: Segment anything in images and videos. arXiv preprint arXiv:2408.00714, 2024. 2, 3\",\n            \"extracted_paper_title\": \"Sam 2: Segment anything in images and videos\",\n            \"fetched_paper_id\": \"92a09cdfc19f3f582d89c28c1b4f386299cc69e1\",\n            \"fetched_paper_title\": \"SAM 2: Segment Anything in Images and Videos\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Zhongwei Ren, Zhicheng Huang, Yunchao Wei, Yao Zhao, Dongmei Fu, Jiashi Feng, and Xiaojie Jin. Pixellm: Pixel reasoning with large multimodal model. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 26374\\u201326383, 2024. 2\",\n            \"extracted_paper_title\": \"Pixellm: Pixel reasoning with large multimodal model\",\n            \"fetched_paper_id\": \"adb969668f191839d273af5743948ed10b28c43c\",\n            \"fetched_paper_title\": \"PixelLM: Pixel Reasoning with Large Multimodal Model\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Victor Sanh, Lysandre Debut, Julien Chaumond, and Thomas Wolf. Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter. arXiv preprint arXiv:1910.01108, 2019. 3\",\n            \"extracted_paper_title\": \"Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter.\",\n            \"fetched_paper_id\": \"a54b56af24bb4873ed0163b77df63b92bd018ddc\",\n            \"fetched_paper_title\": \"DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Zhuoran Shen, Mingyuan Zhang, Haiyu Zhao, Shuai Yi, and Hongsheng Li. Ef\\ufb01cient attention: Attention with linear complexities. In Proceedings of the IEEE/CVF winter conference on applications of computer vision, pages 3531\\u20133539, 2021. 8\",\n            \"extracted_paper_title\": \"Efficient attention: Attention with linear complexities.\",\n            \"fetched_paper_id\": \"5f4a22ee70ca613d9c0630eafc96364fe365fdf8\",\n            \"fetched_paper_title\": \"Efficient Attention: Attention with Linear Complexities\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. Roformer: Enhanced transformer with rotary position embedding. Neurocomputing, 568:127063, 2024. 8\",\n            \"extracted_paper_title\": \"Roformer: Enhanced transformer with rotary position embedding\",\n            \"fetched_paper_id\": \"66c10bf1f11bc1b2d92204d8f8391d087f6de1c4\",\n            \"fetched_paper_title\": \"RoFormer: Enhanced Transformer with Rotary Position Embedding\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Luoyi Sun, Xuenan Xu, Mengyue Wu, and Weidi Xie. Auto-acd: A large-scale dataset for audio-language representation learning. In Proceedings of the 32nd ACM International Conference on Multimedia, pages 5025\\u20135034, 2024. 3\",\n            \"extracted_paper_title\": \"Auto-acd: A large-scale dataset for audio-language representation learning\",\n            \"fetched_paper_id\": \"e88bd2fa2329b25ebddabd67bf4878c4644cfecc\",\n            \"fetched_paper_title\": \"Auto-ACD: A Large-scale Dataset for Audio-Language Representation Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yaoting Wang, Weisong Liu, Guangyao Li, Jian Ding, Di Hu, and Xi Li. Prompting segmentation with sound is generalizable audio-visual source localizer. arXiv preprint arXiv:2309.07929, 2023. 6\",\n            \"extracted_paper_title\": \"Prompting segmentation with sound is generalizable audio-visual source localizer.\",\n            \"fetched_paper_id\": \"b6f2bf38db13fe0d9a9f6387bd4b8dfab7e5d040\",\n            \"fetched_paper_title\": \"Prompting Segmentation with Sound is Generalizable Audio-Visual Source Localizer\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yuji Wang, Ruojun Zhao, and Zijun Sun. Ef\\ufb01cient remote sensing transformer for coastline detection with sentinel-2 satellite imagery. In IGARSS 2023-2023 IEEE International Geoscience and Remote Sensing Symposium, pages 5439\\u20135442. IEEE, 2023. 2\",\n            \"extracted_paper_title\": \"Efficient remote sensing transformer for coastline detection with sentinel-2 satellite imagery\",\n            \"fetched_paper_id\": \"5caec02f12fdbb6ee2c4fe19d4d84b7bbb401b41\",\n            \"fetched_paper_title\": \"Efficient Remote Sensing Transformer for Coastline Detection with Sentinel-2 Satellite Imagery\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yaoting Wang, Weisong Liu, Guangyao Li, Jian Ding, Di Hu, and Xi Li. Prompting segmentation with sound is generalizable audio-visual source localizer. In Proceedings of the AAAI Conference on Arti\\ufb01cial Intelligence, pages 5669\\u20135677, 2024. 2, 3\",\n            \"extracted_paper_title\": \"Prompting segmentation with sound is generalizable audio-visual source localizer.\",\n            \"fetched_paper_id\": \"b6f2bf38db13fe0d9a9f6387bd4b8dfab7e5d040\",\n            \"fetched_paper_title\": \"Prompting Segmentation with Sound is Generalizable Audio-Visual Source Localizer\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yaoting Wang, Peiwen Sun, Dongzhan Zhou, Guangyao Li, Honggang Zhang, and Di Hu. Ref-avs: Refer and segment objects in audio-visual scenes. IEEE European Conference on Computer Vision, 2024. 1, 2, 3, 5, 6\",\n            \"extracted_paper_title\": \"Ref-avs: Refer and segment objects in audio-visual scenes\",\n            \"fetched_paper_id\": \"0bd6b872d8a0029223128443596763a43a8f1779\",\n            \"fetched_paper_title\": \"Ref-AVS: Refer and Segment Objects in Audio-Visual Scenes\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yuji Wang, Ruojun Zhao, Shicai Wei, Jingchen Ni, Meng Wu, Yang Luo, and Chunbo Luo. Convolution meets transformer: Ef\\ufb01cient hybrid transformer for semantic segmentation with very high resolution imagery. In IGARSS 2024-2024 IEEE International Geoscience and Remote Sensing Symposium, pages 9688\\u20139691. IEEE, 2024. 2\",\n            \"extracted_paper_title\": \"Convolution meets transformer: Efficient hybrid transformer for semantic segmentation with very high resolution imagery.\",\n            \"fetched_paper_id\": \"e6cdc4cf70eb2aacab5029b6f8f74bc2b8c973c7\",\n            \"fetched_paper_title\": \"Convolution Meets Transformer: Efficient Hybrid Transformer for Semantic Segmentation with Very High Resolution Imagery\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuji Wang, Jingchen Ni, Yong Liu, Chun Yuan, and Yansong Tang. Iterprime: Zero-shot referring image segmentation with iterative grad-cam re\\ufb01nement and primary word emphasis. arXiv preprint arXiv:2503.00936, 2025. 2\",\n            \"extracted_paper_title\": \"Iterprime: Zero-shot referring image segmentation with iterative grad-cam refinement and primary word emphasis\",\n            \"fetched_paper_id\": \"2ceaa2c095d7e13153b7ee6890cca5cd40ffc34b\",\n            \"fetched_paper_title\": \"IteRPrimE: Zero-shot Referring Image Segmentation with Iterative Grad-CAM Refinement and Primary Word Emphasis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dongming Wu, Tiancai Wang, Yuang Zhang, Xiangyu Zhang, and Jianbing Shen. Onlinerefer: A simple online baseline for referring video object segmentation. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 2761\\u20132770, 2023. 2\",\n            \"extracted_paper_title\": \"OnlineRefer: A simple online baseline for referring video object segmentation.\",\n            \"fetched_paper_id\": \"41f22592f4a495528674084f7159f2d1736cff4c\",\n            \"fetched_paper_title\": \"OnlineRefer: A Simple Online Baseline for Referring Video Object Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jiannan Wu, Yi Jiang, Peize Sun, Zehuan Yuan, and Ping Luo. Language as queries for referring video object segmentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 4974\\u20134984, 2022. 6\",\n            \"extracted_paper_title\": \"Language as queries for referring video object segmentation\",\n            \"fetched_paper_id\": \"2397eb2febb96e5a620147eff64e6875c4b63959\",\n            \"fetched_paper_title\": \"Language as Queries for Referring Video Object Segmentation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jiannan Wu, Yi Jiang, Peize Sun, Zehuan Yuan, and Ping Luo. Language as queries for referring video object segmentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 4974\\u20134984, 2022. 2\",\n            \"extracted_paper_title\": \"Language as queries for referring video object segmentation\",\n            \"fetched_paper_id\": \"2397eb2febb96e5a620147eff64e6875c4b63959\",\n            \"fetched_paper_title\": \"Language as Queries for Referring Video Object Segmentation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Zhuofan Xia, Dongchen Han, Yizeng Han, Xuran Pan, Shiji Song, and Gao Huang. Gsva: Generalized segmentation via multimodal large language models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 3858\\u20133869, 2024. 2\",\n            \"extracted_paper_title\": \"Gsva: Generalized segmentation via multimodal large language models\",\n            \"fetched_paper_id\": \"3cc0f0b40589f4e0f971280cad48919048d22a41\",\n            \"fetched_paper_title\": \"GSVA: Generalized Segmentation via Multimodal Large Language Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yunyang Xiong, Bala Varadarajan, Lemeng Wu, Xiaoyu Xiang, Fanyi Xiao, Chenchen Zhu, Xiaoliang Dai, Dilin Wang, Fei Sun, Forrest Iandola, et al. Ef\\ufb01cientsam: Leveraged masked image pretraining for ef\\ufb01cient segment anything. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 16111\\u201316121, 2024. 3\",\n            \"extracted_paper_title\": \"EfficientSAM: Leveraged masked image pretraining for efficient segment anything\",\n            \"fetched_paper_id\": \"30ee82b45277ff528e8419ee9543cb7e27d09311\",\n            \"fetched_paper_title\": \"EfficientSAM: Leveraged Masked Image Pretraining for Efficient Segment Anything\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Pinci Yang, Xin Wang, Xuguang Duan, Hong Chen, Runze Hou, Cong Jin, and Wenwu Zhu. Avqa: A dataset for audio-visual question answering on videos. In Proceedings of the 30th ACM International Conference on Multimedia, pages 3480\\u20133491, 2022. 1, 3\",\n            \"extracted_paper_title\": \"Avqa: A dataset for audio-visual question answering on videos.\",\n            \"fetched_paper_id\": \"77937788fdbdefe4dd775075b5768c03eaaac008\",\n            \"fetched_paper_title\": \"AVQA: A Dataset for Audio-Visual Question Answering on Videos\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhao Yang, Jiaqi Wang, Yansong Tang, Kai Chen, Hengshuang Zhao, and Philip HS Torr. Lavt: Language-aware vision transformer for referring image segmentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, 2022. 2\",\n            \"extracted_paper_title\": \"Lavt: Language-aware vision transformer for referring image segmentation\",\n            \"fetched_paper_id\": \"ca1d5aa8f63707931692bf6a62642becf928c1fa\",\n            \"fetched_paper_title\": \"LAVT: Language-Aware Vision Transformer for Referring Image Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhao Yang, Jiaqi Wang, Xubing Ye, Yansong Tang, Kai Chen, Hengshuang Zhao, and Philip HS Torr. Language-aware vision transformer for referring segmentation. IEEE Transactions on Pattern Analysis and Machine Intelligence, 2024. 2\",\n            \"extracted_paper_title\": \"Language-aware vision transformer for referring segmentation\",\n            \"fetched_paper_id\": \"c600e44a58ca37f2696ec166e31ce0e89a1fa898\",\n            \"fetched_paper_title\": \"Language-Aware Vision Transformer for Referring Segmentation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chaoning Zhang, Dongshen Han, Yu Qiao, Jung Uk Kim, Sung-Ho Bae, Seungkyu Lee, and Choong Seon Hong. Faster segment anything: Towards lightweight sam for mobile applications. arXiv preprint arXiv:2306.14289, 2023. 3\",\n            \"extracted_paper_title\": \"Faster segment anything: Towards lightweight sam for mobile applications\",\n            \"fetched_paper_id\": \"fdaa21fce5ee5aadf1bb8c55d5f7c3155b905846\",\n            \"fetched_paper_title\": \"Faster Segment Anything: Towards Lightweight SAM for Mobile Applications\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuxuan Zhang, Tianheng Cheng, Rui Hu, Lei Liu, Heng Liu, Longjin Ran, Xiaoxin Chen, Wenyu Liu, and Xinggang Wang. Evf-sam: Early vision-language fusion for text-prompted segment anything model. arXiv preprint arXiv:2406.20076, 2024. 2, 3\",\n            \"extracted_paper_title\": \"Evf-sam: Early vision-language fusion for text-prompted segment anything model\",\n            \"fetched_paper_id\": \"199b241269cd475710748973b02c182c11a3b4a8\",\n            \"fetched_paper_title\": \"EVF-SAM: Early Vision-Language Fusion for Text-Prompted Segment Anything Model\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xu Zhao, Wenchao Ding, Yongqi An, Yinglong Du, Tao Yu, Min Li, Ming Tang, and Jinqiao Wang. Fast segment anything. arXiv preprint arXiv:2306.12156, 2023. 3\",\n            \"extracted_paper_title\": \"Fast segment anything\",\n            \"fetched_paper_id\": \"c01e94a36be5b3578fedb17205205b330290a778\",\n            \"fetched_paper_title\": \"Fast Segment Anything\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jinxing Zhou, Jianyuan Wang, Jiayi Zhang, Weixuan Sun, Jing Zhang, Stan Birch\\ufb01eld, Dan Guo, Lingpeng Kong, Meng Wang, and Yiran Zhong. Audio-visual segmentation. In European Conference on Computer Vision, 2022. 3, 6\",\n            \"extracted_paper_title\": \"Audio-visual segmentation\",\n            \"fetched_paper_id\": \"46e2af2ce21fb2c3385ade876cf931a3727b5da8\",\n            \"fetched_paper_title\": \"Audio-Visual Segmentation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jinxing Zhou, Xuyang Shen, Jianyuan Wang, Jiayi Zhang, Weixuan Sun, Jing Zhang, Stan Birch\\ufb01eld, Dan Guo, Lingpeng Kong, Meng Wang, and Yiran Zhong. Audio-visual segmentation with semantics. arXiv preprint arXiv:2301.13190, 2023. 3\",\n            \"extracted_paper_title\": \"Audio-visual segmentation with semantics\",\n            \"fetched_paper_id\": \"45ac621b874177a4bdb9e9491dd9ed8520efe3ad\",\n            \"fetched_paper_title\": \"Audio-Visual Segmentation with Semantics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xueyan Zou, Zi-Yi Dou, Jianwei Yang, Zhe Gan, Linjie Li, Chunyuan Li, Xiyang Dai, Harkirat Behl, Jianfeng Wang, Lu Yuan, et al. Generalized decoding for pixel, image, and language. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 15116\\u201315127, 2023. 2\",\n            \"extracted_paper_title\": \"Generalized decoding for pixel, image, and language\",\n            \"fetched_paper_id\": \"967907503b24423b9b74621051811fcf684e3957\",\n            \"fetched_paper_title\": \"Generalized Decoding for Pixel, Image, and Language\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"077f8329a7b6fa3b7c877a57b81eb6c18b5f87de\",\n        \"124d4d374fbef2016fa9880489871a58a7450644\",\n        \"9fc5dddf5a5431629e00d35a68dc583226352edb\",\n        \"2397eb2febb96e5a620147eff64e6875c4b63959\",\n        \"0bd6b872d8a0029223128443596763a43a8f1779\",\n        \"e88bd2fa2329b25ebddabd67bf4878c4644cfecc\",\n        \"12124de2038fda868fcb93c3da1996dd157e0390\",\n        \"c01e94a36be5b3578fedb17205205b330290a778\",\n        \"b6f2bf38db13fe0d9a9f6387bd4b8dfab7e5d040\",\n        \"45ac621b874177a4bdb9e9491dd9ed8520efe3ad\",\n        \"fdaa21fce5ee5aadf1bb8c55d5f7c3155b905846\",\n        \"06773ee8ba36576f1408c20e16c5a5694a84f327\",\n        \"199b241269cd475710748973b02c182c11a3b4a8\",\n        \"5caec02f12fdbb6ee2c4fe19d4d84b7bbb401b41\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"efb8efd1cdf0f7b7ef04e7dc032485c2b15d209f\",\n        \"967907503b24423b9b74621051811fcf684e3957\",\n        \"98cfd7b1b29453c4e82536f5afdc6ddc58bbb1b3\",\n        \"710553070b9737e61a59408b3fc6d4172b5b7ba6\",\n        \"92c141447f51b6732242376164ff961e464731c8\",\n        \"66c10bf1f11bc1b2d92204d8f8391d087f6de1c4\",\n        \"5ba2218b708ca64ab556e39d5997202e012717d5\",\n        \"dc2a78a9665625bea8a085e38b13efeb1a1723b7\",\n        \"92a09cdfc19f3f582d89c28c1b4f386299cc69e1\",\n        \"ad113d8b6f8f6dace7abd12dc88af520aaaf3fc7\",\n        \"41f22592f4a495528674084f7159f2d1736cff4c\",\n        \"268d347e8a55b5eb82fb5e7d2f800e33c75ab18a\",\n        \"c600e44a58ca37f2696ec166e31ce0e89a1fa898\",\n        \"93ed8ac3198db2a420c9e3bc3dcebbf7ac30a6a2\",\n        \"a54b56af24bb4873ed0163b77df63b92bd018ddc\",\n        \"ca1d5aa8f63707931692bf6a62642becf928c1fa\",\n        \"2ceaa2c095d7e13153b7ee6890cca5cd40ffc34b\",\n        \"3cc0f0b40589f4e0f971280cad48919048d22a41\",\n        \"a5036f31f0e629dc661f120b8c3b1f374d479ab8\",\n        \"59d8c68de09da69a608ceb149f40114f5538c5b1\",\n        \"e6cdc4cf70eb2aacab5029b6f8f74bc2b8c973c7\",\n        \"77937788fdbdefe4dd775075b5768c03eaaac008\",\n        \"1ec4bc98fafa8d338f676f7a1b1b1131e8ca978e\",\n        \"30ee82b45277ff528e8419ee9543cb7e27d09311\",\n        \"86eef3a1dff2bd2808847358cdb7f5ba2b7e0214\",\n        \"5f4a22ee70ca613d9c0630eafc96364fe365fdf8\",\n        \"28c2a8cd598dbb7651f29402e808e90977696bf6\",\n        \"46e2af2ce21fb2c3385ade876cf931a3727b5da8\",\n        \"adb969668f191839d273af5743948ed10b28c43c\"\n    ],\n    \"all_ids_count\": 44,\n    \"p0_ids\": [\n        \"077f8329a7b6fa3b7c877a57b81eb6c18b5f87de\",\n        \"59d8c68de09da69a608ceb149f40114f5538c5b1\",\n        \"9fc5dddf5a5431629e00d35a68dc583226352edb\",\n        \"92a09cdfc19f3f582d89c28c1b4f386299cc69e1\",\n        \"2397eb2febb96e5a620147eff64e6875c4b63959\",\n        \"0bd6b872d8a0029223128443596763a43a8f1779\",\n        \"efb8efd1cdf0f7b7ef04e7dc032485c2b15d209f\",\n        \"268d347e8a55b5eb82fb5e7d2f800e33c75ab18a\",\n        \"b6f2bf38db13fe0d9a9f6387bd4b8dfab7e5d040\",\n        \"a54b56af24bb4873ed0163b77df63b92bd018ddc\",\n        \"710553070b9737e61a59408b3fc6d4172b5b7ba6\",\n        \"46e2af2ce21fb2c3385ade876cf931a3727b5da8\",\n        \"5ba2218b708ca64ab556e39d5997202e012717d5\"\n    ],\n    \"p0_ids_count\": 13,\n    \"p1_ids\": [\n        \"124d4d374fbef2016fa9880489871a58a7450644\",\n        \"e88bd2fa2329b25ebddabd67bf4878c4644cfecc\",\n        \"12124de2038fda868fcb93c3da1996dd157e0390\",\n        \"c01e94a36be5b3578fedb17205205b330290a778\",\n        \"45ac621b874177a4bdb9e9491dd9ed8520efe3ad\",\n        \"fdaa21fce5ee5aadf1bb8c55d5f7c3155b905846\",\n        \"06773ee8ba36576f1408c20e16c5a5694a84f327\",\n        \"199b241269cd475710748973b02c182c11a3b4a8\",\n        \"5caec02f12fdbb6ee2c4fe19d4d84b7bbb401b41\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"967907503b24423b9b74621051811fcf684e3957\",\n        \"98cfd7b1b29453c4e82536f5afdc6ddc58bbb1b3\",\n        \"92c141447f51b6732242376164ff961e464731c8\",\n        \"66c10bf1f11bc1b2d92204d8f8391d087f6de1c4\",\n        \"dc2a78a9665625bea8a085e38b13efeb1a1723b7\",\n        \"ad113d8b6f8f6dace7abd12dc88af520aaaf3fc7\",\n        \"41f22592f4a495528674084f7159f2d1736cff4c\",\n        \"c600e44a58ca37f2696ec166e31ce0e89a1fa898\",\n        \"93ed8ac3198db2a420c9e3bc3dcebbf7ac30a6a2\",\n        \"ca1d5aa8f63707931692bf6a62642becf928c1fa\",\n        \"28c2a8cd598dbb7651f29402e808e90977696bf6\",\n        \"2ceaa2c095d7e13153b7ee6890cca5cd40ffc34b\",\n        \"3cc0f0b40589f4e0f971280cad48919048d22a41\",\n        \"a5036f31f0e629dc661f120b8c3b1f374d479ab8\",\n        \"77937788fdbdefe4dd775075b5768c03eaaac008\",\n        \"1ec4bc98fafa8d338f676f7a1b1b1131e8ca978e\",\n        \"30ee82b45277ff528e8419ee9543cb7e27d09311\",\n        \"86eef3a1dff2bd2808847358cdb7f5ba2b7e0214\",\n        \"5f4a22ee70ca613d9c0630eafc96364fe365fdf8\",\n        \"e6cdc4cf70eb2aacab5029b6f8f74bc2b8c973c7\",\n        \"adb969668f191839d273af5743948ed10b28c43c\"\n    ],\n    \"p1_ids_count\": 31\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  }
+ ],
+ "conditions": [
+  {
+   "name": "RW-opus",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-sonnet",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-mixed",
+   "system": "researchworld",
+   "agent": null,
+   "provider": null,
+   "model": null,
+   "effort": null,
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "mixed",
+     "name": "Antigravity (Gemini) + Claude Code + Codex CLI",
+     "version": "antigravity agy_acp_server 1.4.1; claude-code @anthropic-ai/claude-agent-sdk 0.3.300; codex @openai/codex 0.163.0",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container; roles use antigravity, claude-code, codex"
+    },
+    "model": {
+     "provider": "per role",
+     "model": "per role",
+     "effort": "per role"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "codex",
+      "agent_name": "Codex CLI",
+      "agent_version": "@openai/codex 0.163.0",
+      "how": "codex-acp",
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "CC-opus",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CC-sonnet",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-astra",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6-astra",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6-astra",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-sol",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6.1-sol",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-opus",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-sonnet",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-opus",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-opus-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-sonnet",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-sonnet-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-opus",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-sonnet",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  }
+ ],
+ "batches": [],
+ "runs": []
+}

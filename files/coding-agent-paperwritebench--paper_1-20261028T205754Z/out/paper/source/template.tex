@@ -1,0 +1,319 @@
+\documentclass[10pt,twocolumn]{article}
+\PassOptionsToPackage{numbers,sort&compress}{natbib}
+\usepackage{draftwatermark}
+\SetWatermarkText{AI-Generated}
+\SetWatermarkScale{0.5}
+\SetWatermarkColor[gray]{0.6}
+% Preserve the supplied conference package. The explicitly named fallback
+% permits local proofing when that external dependency is absent.
+\IfFileExists{neurips_2025.sty}{\usepackage[preprint]{neurips_2025}}{\usepackage{paper_preview}}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{booktabs,multirow}
+\usepackage[table]{xcolor}
+\usepackage{microtype}
+\IfFileExists{inconsolata.sty}{\usepackage{inconsolata}}{\usepackage{courier}}
+\usepackage{caption,subcaption}
+\usepackage{xspace}
+\usepackage{algorithm,algpseudocode}
+\usepackage{enumitem}
+\usepackage{url}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,citecolor=blue,linkcolor=blue,urlcolor=blue}
+\newcommand{\model}{VL-Rethinker\xspace}
+\newcommand{\reasoner}{VL-Reasoner\xspace}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\ind}{\mathbb{1}}
+\newcommand{\clip}{\operatorname{clip}}
+\setlength{\emergencystretch}{1em}
+\captionsetup{font=small,labelfont=bf}
+\setcounter{dbltopnumber}{2}
+\renewcommand{\dbltopfraction}{0.85}
+\renewcommand{\textfraction}{0.1}
+\title{VL-Rethinker: Reinforcement Learning\\for Reflective Vision--Language Reasoning}
+\author{Anonymous Author}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+Vision--language reasoning requires models to revisit both their interpretation of an image and the deductions built on it. Outcome-based reinforcement learning can improve answer accuracy, but does not directly ensure that models learn useful self-reflection. We present VL-Rethinker, a framework combining Selective Sample Replay with Forced Rethinking. Replay retains trajectories with nonzero group-relative advantages and emphasizes informative successes and failures, while rethinking introduces self-checking continuations during training and reinforces successful reflective responses. We formalize the disappearance of the group-relative learning signal when all sampled answers receive the same reward, and distinguish this mechanism from the stronger claim that it causes shallow reasoning. Across the supplied benchmark comparisons, the 72B model achieves 80.4\% on MathVista, 63.5\% on MathVerse, and 44.9\% on MathVision, exceeding the strongest listed external open models by 5.6, 6.3, and 6.5 percentage points. The 7B model leads all seven reported comparisons in its table. Ablations support contributions from replay, rethinking, and training-data diversity, while the 72B model remains below the strongest listed open model on MMMU. The results support training explicit self-checking alongside informative policy updates without teacher-generated reasoning distillation; they do not establish uniform gains across tasks or a measured inference-time speedup.
+\end{abstract}
+
+\section{Introduction}
+Visual reasoning combines perception, domain knowledge, and sequential inference. A model answering a geometry question must identify the relevant segments before applying a theorem; a model interpreting a chart must connect labels and quantities before calculating an answer. Strong vision--language models (VLMs) provide an effective starting point \citep{qwen2_5_vl,internvl_2_5,llavaov}, yet benchmarks designed around visual mathematics and cross-modal reasoning expose substantial remaining errors \citep{mathvista,mathverse,mathvision,emma}. A fluent explanation can propagate an early perceptual mistake through otherwise plausible deductions.
+
+Reasoning-oriented language models motivate using additional computation to check intermediate conclusions \citep{openai-o1,deepseek-r1}. However, producing a longer explanation and verifying an explanation are different behaviors. Chain-of-thought prompting elicits intermediate steps \citep{wei2022chain}, whereas useful self-reflection requires reconsidering a premise, checking a calculation, or correcting an interpretation. Outcome rewards alone do not specify which of these behaviors led to success. Our question is whether direct reinforcement learning (RL) can make explicit self-checking useful in multimodal reasoning without requiring a teacher's reasoning traces.
+
+We address two complementary obstacles. First, group-relative policy optimization can lose its task-reward learning signal when every response to a query receives the same reward. Both uniformly correct and uniformly incorrect groups have zero centered advantages. As more queries fall into these categories, generating a fixed number of responses provides fewer informative policy updates. Second, even informative updates may reinforce the first successful solution without exposing the policy to a continuation that revisits it. Improving sample selection therefore does not by itself provide an explicit training mechanism for reflection.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{overview-2.jpg}
+\caption{\textbf{VL-Rethinker overview.} Selective Sample Replay retains informative group-relative experiences and redistributes their sampling probability. Forced Rethinking then introduces checking continuations into training, with successful reflective trajectories contributing to learning. The intermediate model is denoted VL-Reasoner in the supplied figures. The drawing summarizes the intended training design; implementation qualifications are given in Section~\ref{sec:implementation}.}
+\label{fig:overview}
+\end{figure*}
+
+\model combines \emph{Selective Sample Replay} (SSR) with \emph{Forced Rethinking}. SSR keeps recent nonzero-advantage experiences and prioritizes them by advantage magnitude. It retains both successful and unsuccessful responses, so the policy can increase the probability of useful decisions and decrease the probability of poor ones. Forced Rethinking appends a short checking cue to selected responses, generates a continuation with the same model, and retains successful continuations for training. An auxiliary likelihood objective reinforces reflective trajectories. Figure~\ref{fig:overview} illustrates how these mechanisms address informative updates and reflective exploration, respectively.
+
+We contribute a characterization of vanishing group-relative advantages, a training framework combining informative replay with reflective exploration, and an evaluation of 7B, 32B, and 72B checkpoints across seven benchmarks. Component ablations and training diagnostics support the design while identifying uneven transfer and gaps to proprietary reasoning models.
+
+\section{Group-Relative Learning and Its Signal}
+\label{sec:prelim}
+\subsection{Outcome supervision}
+Let $x=(I,u)$ contain an image or image collection $I$ and a textual query $u$. A policy $\pi_\theta$ generates a response $y=(y_1,\ldots,y_T)$ containing reasoning and a final answer. A verifier compares the extracted answer with a reference $a^\star$. For the basic analysis, define
+\begin{equation}
+ r(x,y)=\ind\{\operatorname{Verify}(y,a^\star)=1\}.
+ \label{eq:reward}
+\end{equation}
+This outcome signal does not certify every reasoning step. It differs from process supervision that evaluates intermediate decisions \citep{letsverify,r1vl}. It also does not require demonstrations of a complete correct derivation, making it suitable for verifiable question--answer data.
+
+For each query, sample $G$ responses from a behavior policy $\pi_b$. With rewards $r_1,\ldots,r_G$, the usual normalized group-relative advantage is
+\begin{align}
+ \bar r &= G^{-1}\sum_{j=1}^{G}r_j,\nonumber\\
+ s^2 &= G^{-1}\sum_{j=1}^{G}(r_j-\bar r)^2,\nonumber\\
+ A_i^{\mathrm{std}} &= \frac{r_i-\bar r}{s+\varepsilon}.
+ \label{eq:grpo}
+\end{align}
+Group-relative reasoning RL avoids fitting a separate value function \citep{deepseek-r1}. The released \texttt{group} and \texttt{group\_sft} branches instead use the centered advantage $A_i=r_i-\bar r$ without group standard-deviation normalization. We distinguish these choices because they share the zero-signal pathology but assign different magnitudes to informative samples. Related analyses also show that objective normalization affects reasoning RL \citep{drgrpo,dapo}.
+
+\subsection{Vanishing advantages}
+If every reward in a group equals a constant $c$, then $r_i-\bar r=0$ for all $i$. Consequently both definitions above give zero advantages. In the clipped policy objective, each task-reward term and its gradient are then zero. The conclusion applies to this component of the loss; auxiliary likelihood or regularization losses may still update the model.
+
+To characterize the phenomenon, suppose responses are conditionally independent given $x$, with binary success probability $p_x$. The probability that a group contains both a success and a failure is
+\begin{equation}
+ P_{\mathrm{active}}(x)=1-p_x^G-(1-p_x)^G.
+ \label{eq:active}
+\end{equation}
+This is an analytical identity under the stated assumptions, not an empirical fit. It is symmetric about $p_x=1/2$, largest there, and tends to zero at either endpoint. Thus, a query can stop producing useful comparisons because it becomes consistently easy or remains consistently hard. Increasing group size reduces this problem for intermediate success probabilities, but requires additional rollouts and cannot help a deterministic all-success or all-failure query.
+
+For $B$ queries, the expected number of informative groups is $\sum_{b=1}^{B}P_{\mathrm{active}}(x_b)$. Nominal batch size therefore does not capture the available learning signal, motivating monitoring group outcomes alongside mean reward.
+
+This identity does not prove that zero advantages cause shallow reasoning. With format or reflection bonuses, equal correctness also need not imply equal rewards. ``Vanishing advantages'' denotes disappearance of reward contrasts, with binary correctness as a transparent special case.
+
+\section{VL-Rethinker}
+\label{sec:method}
+\subsection{Selective Sample Replay}
+\label{sec:ssr}
+SSR allocates updates to experiences that distinguish better and worse responses to the same query. Each stored item includes its query, response, advantage, token mask, and behavior-policy log probabilities. After evaluating a fresh group, retain items with $A_i\ne0$ in a bounded first-in, first-out memory $\mathcal B$. Retaining negative advantages is essential: replay is not equivalent to training only on correct answers.
+
+For an eligible item $i$, define priority
+\begin{equation}
+ P(i\mid\mathcal B)=\frac{(|A_i|+\delta)^\alpha}
+ {\sum_{j\in\mathcal B}(|A_j|+\delta)^\alpha},
+ \label{eq:priority}
+\end{equation}
+where $\alpha\geq0$ controls prioritization and $\delta\geq0$ provides numerical smoothing. The conceptual rule uses $\delta=0$ on nonzero items. The released replay branch uses linear priorities, corresponding to $\alpha=1$, and adds $10^{-4}$ for historical items. It does not implement or evaluate an exponent sweep. This approach is related to prioritized experience replay \citep{per}, but uses a within-query outcome contrast rather than a temporal-difference error.
+
+With centered binary rewards and empirical group success rate $\hat p$, a successful response has $A_+=1-\hat p$ and an unsuccessful response has $A_-=-\hat p$. A rare success in a difficult group and a rare failure in an easy group therefore receive high per-item priority. These are informative exceptions to the prevailing behavior. This is more precise than interpreting high advantage as a calibrated measure of uncertainty or proximity to a learned decision boundary.
+
+The intended update combines informative fresh samples with recent stored samples, replenishing the training set when fresh groups provide too few contrasts. A bounded memory reduces the range of policy versions represented, but does not make historical experiences on-policy. We retain behavior log probabilities for the token ratio
+\begin{equation}
+ \rho_{i,t}(\theta)=\frac{\pi_\theta(y_{i,t}\mid x_i,y_{i,<t})}
+ {\pi_{b_i}(y_{i,t}\mid x_i,y_{i,<t})}.
+ \label{eq:ratio}
+\end{equation}
+Using the PPO clipping principle \citep{ppo}, the policy loss over selected masked tokens is
+\begin{align}
+ \ell_{i,t}(\theta)&=-\min\bigl\{\rho_{i,t}A_i,\nonumber\\
+ &\qquad\clip(\rho_{i,t},1-\epsilon_-,1+\epsilon_+)A_i\bigr\},\nonumber\\
+ \mathcal L_{\mathrm{RL}}&=
+ \frac{\sum_{i,t}m_{i,t}\ell_{i,t}(\theta)}{\sum_{i,t}m_{i,t}}.
+ \label{eq:policy}
+\end{align}
+Here $m_{i,t}$ marks response tokens. The released loss uses asymmetric clipping, $\epsilon_-=0.2$ and $\epsilon_+=0.35$, and a token-level masked mean, consistent with design choices explored in DAPO \citep{dapo}. No inverse-priority correction is applied. SSR intentionally changes the empirical sampling distribution; token ratios alone do not make it an unbiased estimator of the original query-distribution objective.
+
+\subsection{Forced Rethinking}
+\label{sec:rethink}
+SSR addresses which experiences receive updates. Forced Rethinking addresses which reasoning behaviors the policy explores. Given an initial response $y$, retain a prefix $y^{\mathrm{pre}}$, append a checking cue $c$, and sample a continuation $z$:
+\begin{equation}
+ z\sim\pi_\theta(\cdot\mid x,y^{\mathrm{pre}},c),\qquad
+ \tilde y=y^{\mathrm{pre}}\oplus c\oplus z.
+ \label{eq:rethink}
+\end{equation}
+The image remains part of the context. The final answer in $\tilde y$ is verified using the same answer-based criterion. This intervention can elicit verification of an initially correct response or correction of an initially incorrect one. It does not use a teacher model to supply the continuation.
+
+The implementation provides four cues: ``Wait'', ``Wait, does it seem right?'', ``Wait, let's double check'', and ``Wait, there might be a mistake''. Cue selection during training can depend on original-answer correctness, using verifier information unavailable at deployment.
+
+Let $q$ denote the probability of attempting a continuation for an eligible response. The force-append branch skips each otherwise eligible candidate with probability $0.35$, corresponding to a nominal $q=0.65$. Eligibility also depends on termination, remaining token budget, and group correctness, so $q$ is not the fraction of all responses actually extended. With probability $0.5$, the prefix is shortened using existing checking phrases, answer markers, or paragraph boundaries. This can remove a prematurely committed final answer before continuation.
+
+The code retains successful continuations of more than 30 and fewer than 1,024 generated tokens, accepts at most two per query in the force-append training branch, and rejects excessive repeated checking markers. The training continuation temperature is $0.9$. These filters constrain the demonstration pool without certifying every reasoning step.
+
+For the selected reflective trajectories $\mathcal S_+$, add
+\begin{equation}
+ \mathcal L_{\mathrm{reflect}}=
+ -\frac{\sum_{i\in\mathcal S_+}\sum_t m_{i,t}
+ \log\pi_\theta(y_{i,t}\mid x_i,y_{i,<t})}
+ {\sum_{i\in\mathcal S_+}\sum_t m_{i,t}}.
+ \label{eq:sft}
+\end{equation}
+In the released loss, the selection test is a positive advantage and at least one detected checking marker. This proxy can include spontaneous reflection and is not an explicit correctness test under shaped rewards. The loss covers the entire masked response, not only the appended suffix. The combined objective is
+\begin{equation}
+ \mathcal L=\mathcal L_{\mathrm{RL}}+
+ \lambda\mathcal L_{\mathrm{reflect}}.
+ \label{eq:combined}
+\end{equation}
+The launcher defaults to $\lambda=0.05$, with KL and entropy coefficients set to zero. This self-generated supervision differs from teacher distillation and from test-time-only forcing \citep{s1,vision-r1}.
+
+\begin{algorithm}[t]
+\caption{Intended SSR and rethinking update}
+\label{alg:method}
+\begin{algorithmic}[1]
+\Require Policy $\pi_\theta$, queries, verifier, memory $\mathcal B$
+\State Sample $G$ responses for each fresh query.
+\State Verify the initial answers.
+\If{Forced Rethinking is enabled}
+\State Select eligible responses with probability $q$.
+\State Append checking cues; generate continuations.
+\State Retain successful continuations under the filters.
+\EndIf
+\State Compute group-relative advantages.
+\State Store nonzero-advantage items and behavior log probabilities in $\mathcal B$; evict oldest items.
+\State Select informative fresh items and replay items using advantage-based priorities.
+\If{no eligible items exist}
+\State Collect fresh groups; skip an empty RL update.
+\Else
+\State Update with $\mathcal L_{\mathrm{RL}}+\lambda\mathcal L_{\mathrm{reflect}}$.
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Implementation and reproducibility}
+\label{sec:implementation}
+Algorithm~\ref{alg:method} describes the intended mechanism. The supplied source provides important qualifications to a strictly binary, near-on-policy account. Its default group estimator subtracts the group mean without division by the standard deviation. Training rewards include an invalid-response value of $-0.1$, a value of $1.1$ for a correct spontaneous response with one or two checking markers, and penalties for other correct spontaneous responses with repeated markers. Evaluation correctness remains binary. Consequently, the binary analysis in Section~\ref{sec:prelim} is an explanatory model rather than a complete description of all training rewards.
+
+Replay memory holds half the initial local item count and persists across batch clearing. SSR targets half the current item count, prioritizes fresh informative items, and fills remaining positions from memory. A common historical-priority factor of $0.8$ cancels during normalization. Filtering repeats current nonzero items to fill its batch, so the branches need not have identical update budgets.
+
+There is also a dispatch mismatch in the released snapshot: \texttt{ppo\_train} calls \texttt{active\_sampling} with \texttt{do\_ssr}, but omits \texttt{do\_filter}; the latter defaults to false and causes an early return before sampling. Accordingly, the supplied code cannot establish that its default execution reproduces the reported SSR experiments. Algorithm~\ref{alg:method} specifies the intended behavior, including an empty-pool guard, rather than claiming this snapshot runs it unchanged. The experimental tables remain the source of the reported measurements; they are not independently reproduced here.
+
+\input{writeup_tables/table_rr}
+\section{Experimental Setup}
+\label{sec:setup}
+\subsection{Models and training data}
+The documented 7B and 72B models initialize from Qwen2.5-VL-Instruct checkpoints \citep{qwen2_5_vl}. The comparison table also includes a 32B \model checkpoint, which we report without inferring an undocumented training configuration. 
+
+The released dataset is ViRL39K, described as approximately 39K verifiable queries spanning eight categories, with capability annotations for selecting data at different model scales. Its documentation mentions mathematics, broader STEM and social topics, charts, diagrams, tables, documents, and spatial relationships. The ablation table specifically uses a 16K mixture, with 13K after removing text data and 11K after removing both science and text. Exact source proportions, filtering thresholds, and per-scale manifests are unavailable; the released pool should not be confused with each checkpoint's training subset.
+
+The training script defaults to eight responses per query, learning rate $10^{-6}$, three dataset episodes, one optimization epoch per rollout batch, temperature $1.0$, and top-$p=0.95$. It specifies 2,048 prompt tokens, a nominal generation-length argument of 6,144, and a separate output-token argument of 2,048. The experience maker overrides generation length with the latter. Thus, treating the 6,144 argument alone as the effective generation budget would misdescribe this code path. These settings are launcher defaults rather than recovered run configurations.
+
+\subsection{Benchmarks and comparisons}
+We use the reported splits: MathVista testmini \citep{mathvista}, MathVerse testmini \citep{mathverse}, MathVision test \citep{mathvision}, MMMU-Pro overall \citep{mmmupro}, MMMU validation \citep{yue2024mmmu}, EMMA full \citep{emma}, and MEGA core \citep{chen2024mega}. The first three emphasize visual mathematics; MMMU, MMMU-Pro, and EMMA assess broader disciplinary reasoning; MEGA covers heterogeneous real-world tasks. Scores are reported on a 0--100 scale. MEGA is its benchmark aggregate, so comparisons across columns should not be interpreted as a common per-question accuracy.
+
+The 7B table compares general VLMs and reasoning-oriented models, including MM-Eureka, R1-VL, R1-OneVision, and OpenVLThinker \citep{mmeureka,r1vl,R1OneVision,OpenVLThinker}. The larger-model table includes proprietary systems and external open models, as well as the 32B and 72B variants. Comparisons are not uniformly matched in parameter count or inference budget. Daggered entries denote scores identified as reproduced with the authors' protocol.
+
+The evaluation launcher defaults to one sample per query. For this setting, the shared experience maker overrides sampling arguments with greedy decoding (temperature zero and top-$p=1$). For multiple evaluation samples it instead uses the validation temperature, defaulting to $0.6$, and top-$p=0.95$. Run manifests, predictions, and repeated-seed results are absent. We report descriptive differences without claiming statistical significance or identical decoding across every table entry.
+
+\input{writeup_tables/table_le}
+\section{Benchmark Results}
+\label{sec:results}
+
+\subsection{Larger models}
+Table~\ref{table:main_results} shows that \model-72B reaches 80.4 on MathVista, 63.5 on MathVerse, and 44.9 on MathVision. Against the strongest listed external open result in each column, the gains are 5.6, 6.3, and 6.5 points. The MathVision comparator is the 32B Qwen2.5-VL result of 38.4, not the 72B result of 38.1. Relative to the latter alone, the gain is 6.8 points. This distinction prevents conflating improvement over the corresponding backbone with improvement over every listed open baseline.
+
+The 72B model also obtains 55.9 on MMMU-Pro, 38.5 on EMMA, and 51.3 on MEGA, exceeding the external open maxima by 3.7, 4.4, and 2.3 points. On MMMU, however, its 68.8 is below QvQ-72B's 70.3, a gap of 1.5 points. It nevertheless improves on the reproduced backbone score of 67.0. The contrast between MMMU and MMMU-Pro also argues against treating the benchmarks as interchangeable measures \citep{yue2024mmmu,mmmupro}.
+
+Against proprietary systems, the picture is mixed. \model-72B exceeds all listed systems on MathVista and MathVerse. OpenAI-o1 remains ahead on MathVision by 15.4 points, MMMU-Pro by 6.5, MMMU by 9.4, EMMA by 7.2, and MEGA by 4.9. Thus, the reported results support strong open-model performance on this comparison set, rather than a general claim that multimodal reasoning has caught up with the strongest proprietary model \citep{openai-o1}.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{teaser-2.jpg}
+\caption{\textbf{Comparison with the listed proprietary systems.} The supplied plot displays five of the seven benchmark columns. The 72B model leads on MathVista and MathVerse, while OpenAI-o1 leads on MathVision, MMMU-Pro, and EMMA. Table~\ref{table:main_results} also includes MMMU and MEGA and defines the full comparison set.}
+\label{fig:teaser}
+\end{figure*}
+
+\subsection{Smaller models and scale}
+\model-7B obtains 74.9, 54.2, and 32.3 on the three mathematics benchmarks, together with 41.7 on MMMU-Pro, 56.7 on MMMU, 29.7 on EMMA, and 37.2 on MEGA. These are the best values among the rows in Table~\ref{table:7b_results}. The corresponding gains over the strongest external row are 1.9, 3.9, 2.4, 4.4, 0.7, 3.1, and 2.2 points. In particular, MM-Eureka-7B provides the strongest listed mathematical baselines on MathVista and MathVerse, so using OpenVLThinker's values would overstate the gains against the table's best result \citep{mmeureka,OpenVLThinker}.
+
+Relative to Qwen2.5-VL-7B, all seven columns improve, with gains from 2.2 points on MEGA to 8.2 on EMMA. Broader benchmark gains are compatible with transfer beyond mathematics, without isolating which training component causes it.
+
+The 32B checkpoint reaches 78.8 on MathVista, 56.9 on MathVerse, 40.5 on MathVision, and 37.9 on EMMA. Its MEGA score is 19.9, substantially below the 7B model's 37.2 and the 72B model's 51.3. This nonmonotonic behavior is important because MEGA explicitly assesses diverse real-world tasks \citep{chen2024mega}. Without per-task predictions and matched training settings, we cannot attribute the gap to output formatting, data balance, or architecture. The aggregate evidence therefore supports scale-dependent performance differences, not a universal monotonic scaling law.
+
+\section{Analysis}
+\label{sec:analysis}
+\subsection{Component and data ablations}
+\input{writeup_tables/table_im}
+Table~\ref{table:ablation_results} reports five benchmarks for 7B variants. Removing Forced Rethinking from the 16K SSR setting changes MathVision from 32.3 to 29.8, MathVista from 74.9 to 72.4, MathVerse from 54.2 to 53.2, MMMU-Pro from 41.7 to 40.9, and EMMA from 29.7 to 29.5. The respective differences are 2.5, 2.5, 1.0, 0.8, and 0.2 points. These measurements support the combined intervention, without isolating cue choice, continuation filtering, and auxiliary supervision.
+
+The rows replacing SSR with filtering or vanilla GRPO occur beneath the no-rethinking row. We interpret them as the reported progressive algorithm comparison, while retaining the source's configuration ambiguity: no separate trigger flag or complete run configuration is recorded for those rows. Comparing the SSR/no-rethinking row with the filtering row gives differences of 1.3, 0.4, 3.2, 0.9, and 2.6 points. Against vanilla GRPO, the corresponding differences are 3.8, 1.5, 1.8, 2.1, and 3.3. Filtering itself is not uniformly superior to GRPO: MathVerse is 50.0 with filtering versus 51.4 with GRPO. This is consistent with the fact that removing zero-advantage samples alone does not guarantee useful sample diversity or identical optimization budgets \citep{per,dapo}.
+
+Removing text examples reduces the data count from 16K to 13K and yields 29.1 on MathVision and 28.7 on EMMA, compared with 32.3 and 29.7 for the full system. Removing both science and text reduces the count further to 11K and gives 28.0 and 28.0. All five listed scores are lower than the full system in both rows. These results favor the tested mixture, but confound data amount with composition. They do not isolate text-to-visual transfer at fixed sample count \citep{lmm-r1}.
+
+\subsection{Training dynamics and advantage allocation}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{vanishing_adv.jpg}
+\caption{\textbf{Group-outcome dynamics.} In the supplied trace, the fraction of effective queries declines from roughly 0.41 to 0.20 as all-correct groups become more common. All-incorrect groups also persist. The horizontal axis is labeled in units of 16 training steps. Values quoted from the curve are approximate.}
+\label{fig:vanishing}
+\end{figure}
+
+Figure~\ref{fig:vanishing} shows a declining fraction of effective queries, from approximately 0.41 at the start to 0.20 at the final displayed point. The all-correct fraction rises from approximately 0.19 to 0.47, while all-incorrect queries remain substantial. Under the binary interpretation, both homogeneous outcomes remove task-reward contrasts. This trace is consistent with Equation~\eqref{eq:active}, but does not estimate per-query success probabilities or establish a causal connection to response length.
+
+\begin{figure*}[t]
+\centering
+\begin{subfigure}[t]{0.49\textwidth}
+\centering\includegraphics[width=\linewidth]{adv_histogram.jpg}
+\caption{Distribution of sampled advantages.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.49\textwidth}
+\centering\includegraphics[width=\linewidth]{ssr_eval_curve.jpg}
+\caption{Validation reward over training.}
+\end{subfigure}
+\caption{\textbf{Diagnostics for GRPO, filtering, and SSR.} GRPO concentrates substantial mass around zero; SSR redistributes mass toward larger positive and negative advantages. In the displayed validation run, SSR maintains a higher reward than the alternatives after the initial phase. The validation set composition, seeds, and uncertainty bands are not supplied, so these plots are descriptive evidence rather than a convergence guarantee.}
+\label{fig:dynamics}
+\end{figure*}
+
+The advantage histogram in Figure~\ref{fig:dynamics} illustrates the intended sampling effect. GRPO has a pronounced central peak; filtering reduces the concentration, while SSR puts more mass on positive and negative values away from zero. This histogram describes selected samples; fresh rollouts may still contain saturated groups. SSR reallocates existing signal rather than creating a contrast for an unsolved query.
+
+The validation curve offers a complementary performance diagnostic. SSR rises to approximately 0.45 and stays above the filtering and GRPO curves in the later overlapping interval. GRPO initially improves but subsequently declines; filtering reaches a lower plateau and ends earlier in the plot. Comparing shared steps avoids mistaking different endpoint times for a controlled equal-budget experiment. The curve supports sustained validation performance in this run, not a convergence guarantee.
+
+\subsection{Learning to rethink versus forcing at inference}
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{foret_ablation.jpg}
+\caption{\textbf{Different rethinking strategies.} The supplied plot compares VL-Reasoner, inference-time forcing, an answer-aware bound, and VL-Rethinker. Bar heights are relative percentage improvements over VL-Reasoner; parenthesized labels are absolute scores. The right axis shows the plotted rethinking ratio. The bound uses correctness information and is not a deployable inference procedure. Figure values have higher precision and small discrepancies from the rounded ablation table; each is reported at its source precision.}
+\label{fig:rethinking_ablation}
+\end{figure*}
+
+Figure~\ref{fig:rethinking_ablation} helps separate a training intervention from a test-time prompt. For MathVision, the baseline score is 29.75, inference-time forcing gives 30.49, the answer-aware bound gives 33.68, and \model gives 32.27. The relative improvements printed in the figure are 2.49\%, 13.21\%, and 8.46\%, respectively. In absolute terms, the learned model improves by 2.52 points, whereas forcing the baseline improves by 0.74. Relative percentages and absolute points are distinct units.
+
+The same ordering holds for the other three plotted tasks. Inference forcing changes MathVista from 72.35 to 72.90, MathVerse from 53.13 to 53.56, and MMMU-Pro from 40.94 to 41.15. The learned model instead reaches 74.90, 54.19, and 41.69. Its scores remain below the plotted bounds of 76.00, 55.14, and 42.51. The result supports training the policy to use a continuation, rather than expecting the same benefit from appending a cue at evaluation time \citep{s1,OpenVLThinker}.
+
+The bound should be interpreted carefully. The evaluation continuation logic consults answer correctness and can discard unsuccessful rethinking, making it answer-aware. Such a diagnostic reveals opportunities available under favorable selection, but cannot serve as a fair deployable baseline. Some figure scores differ slightly from the table: the MathVerse baseline is 53.13 versus 53.2. We preserve each source's values.
+
+The plotted rethinking ratio varies considerably across tasks, with MathVerse much higher than MMMU-Pro. This is consistent with nonuniform use of reflection, but not proof that the model has learned an optimal allocation of inference compute. No paired token counts, latency measurements, or equal-compute accuracy curves are available. Extra continuations can improve accuracy while increasing cost; the present results establish the accuracy comparison without quantifying that tradeoff.
+
+\subsection{What a reflective trace establishes}
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth,trim=0 480bp 0 0,clip]{rethinking.jpg}
+\caption{\textbf{Qualitative reflection example from the supplied material.} The response initially applies the triangle midsegment relation to the wrong side, then identifies that $JH$ is parallel to $LM$. The continuation distinguishes the inferred length of $LM$ from the queried length of $KL$. This illustrates revisiting a visual premise, not a verified success on the original question. Only the reasoning panel is shown; the source word cloud has no quantitative annotations.}
+\label{fig:example}
+\end{figure*}
+
+Figure~\ref{fig:example} illustrates why a checking step can be useful in a VLM. The initial response treats $JH$ as half of $KL$. The continuation recognizes that the relevant parallel side is $LM$, and states that $KL$ needs additional information. This is a meaningful correction of the premise used in the first derivation. However, the displayed boxed quantity concerns $LM$ rather than the requested $KL$. Without a benchmark annotation and verifier outcome for this example, it cannot be counted as a successful answer correction.
+
+More generally, correct final answers and checking phrases do not certify intermediate reasoning. The implementation's lexical markers are filters, not semantic reflection measures. Process-level correctness would require additional annotations \citep{letsverify,r1vl}.
+
+\section{Related Work}
+\label{sec:related}
+\paragraph{Reasoning through RL.}
+Reasoning-oriented systems demonstrate the value of RL and additional deliberation \citep{openai-o1,deepseek-r1,kimi-1_5}. Direct-RL analyses emphasize interactions between initialization, task difficulty, and optimization \citep{simplerl,drgrpo}; DAPO studies dynamic sampling and other improvements to reasoning RL \citep{dapo}. Our focus is maintaining informative group-relative experiences while creating self-checking continuations in VLMs. The equal-reward degeneracy is not specific to multimodal models.
+
+\paragraph{Replay and sample selection.}
+Prioritized replay allocates updates by experience importance \citep{per}, PPO clips policy updates \citep{ppo}, and dynamic sampling can remove groups without reward contrasts \citep{dapo}. SSR combines recent memory with advantage-based priorities. It differs from filtering through historical reuse and nonuniform sampling, which change the training distribution. Neither clipping nor a bounded memory establishes equivalence to on-policy optimization.
+
+\paragraph{Multimodal reasoning.}
+Qwen2.5-VL, InternVL, and LLaVA-OneVision supply strong general VLM foundations \citep{qwen2_5_vl,internvl_2_5,llavaov}. OpenVLThinker studies iterative self-improvement, R1-OneVision cross-modal formalization, and R1-VL step-wise rewards \citep{OpenVLThinker,R1OneVision,r1vl}. MM-Eureka explores rule-based multimodal RL, while Vision-R1 uses a reasoning cold start before RL \citep{mmeureka,vision-r1}. Our post-training procedure instead emphasizes replay and self-generated checking continuations without a separate reasoning teacher. This distinction does not describe the backbone's pretraining provenance.
+
+\paragraph{Deliberation and evaluation.}
+Chain-of-thought prompting elicits intermediate reasoning, while budget forcing extends test-time deliberation \citep{wei2022chain,s1}. Outcome and process supervision evaluate different aspects of a trace \citep{letsverify}. Forced Rethinking moves a continuation intervention into training. MathVerse and EMMA test integrated visual reasoning \citep{mathverse,emma}, and MEGA broadens evaluation to real-world tasks \citep{chen2024mega}. These benchmarks motivate reporting both mathematical improvements and uneven transfer.
+
+\section{Conclusion}
+\model combines replay of informative group-relative experiences with explicit training-time self-checking. The method targets two distinct needs: preserving a task-reward learning signal and exposing the policy to successful reflective continuations. Across the reported comparisons, the 7B model leads all seven columns in its table, and the 72B model leads the external open-model comparisons on six of seven benchmarks. Ablations and diagnostic plots support the combined design, while the MMMU gap, the 32B MEGA result, and the difference between test-time forcing and learned rethinking constrain broader claims. In the context of direct reasoning RL and multimodal evaluation \citep{deepseek-r1,emma}, the central finding is that useful self-checking can be trained alongside informative policy updates, without relying on a separate teacher's reasoning trajectories.
+
+\small
+\bibliographystyle{unsrtnat}
+\bibliography{references}
+\end{document}

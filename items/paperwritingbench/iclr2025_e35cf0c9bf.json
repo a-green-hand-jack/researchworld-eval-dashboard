@@ -1,0 +1,1693 @@
+{
+ "key": "paperwritingbench/iclr2025_e35cf0c9bf",
+ "benchmark": "paperwritingbench",
+ "item": "iclr2025_e35cf0c9bf",
+ "prompt": [
+  {
+   "name": "TASK.md",
+   "size": 22290,
+   "text": "Your task is to generate a complete research paper using the materials below.\nYou must produce:\n1. A BibTeX bibliography file (references.bib)\n2. The full LaTeX paper (template.tex)\n\nInstructions\n• Use the research idea and experimental logs to construct a coherent, rigorous ML paper.\n• For related work and baselines:\n  – Search for and include influential papers published up until 2024-10.\n  – Incorporate relevant literature and add the corresponding BibTeX entries to references.bib.\n  – Do NOT hallucinate papers or reference keys; all citation entries must be real.\n• In the LaTeX paper, cite papers using \\cite{} with keys that match exactly with your entries in references.bib.\n• Do not fabricate experimental results or make claims unsupported by the logs.\n\nMaterials\nHere are all the raw research materials to assist with the writing process:\n\n[RESEARCH IDEA]\n## Problem Statement\nTraining Large Language Models (LLMs) currently relies heavily on synchronous distributed paradigms. This approach faces three critical bottlenecks: significant communication overhead, the \"straggler\" problem (where the entire cluster waits for the slowest GPU), and a lack of elasticity in heterogeneous environments. While \"Local SGD\" (performing multiple local updates before synchronizing) offers a theoretical solution to communication bottlenecks, it fails in the context of LLMs. Existing Local SGD methods are incompatible with **model sharding** (essential for models exceeding single-GPU memory), incur prohibitive memory overheads, and suffer from severe instability when trained on the noisy, vast datasets required for LLMs. There is currently no framework that effectively marries Local SGD efficiency with the memory constraints and stability requirements of modern LLM training.\n\n## Core Hypothesis\nWe hypothesize that we can make distributed LLM training efficient and robust by strictly integrating Local SGD with model sharding techniques. By fundamentally altering the synchronization schedule—specifically, synchronizing parameters layer-by-layer during the **forward pass** rather than globally at the end—we can mask communication costs behind computation. Furthermore, we propose that the \"drift\" between a local worker's parameters and the global model (the pseudo-gradient) acts as a signal for data quality. By statistically analyzing and penalizing these pseudo-gradients during synchronization, we can suppress loss spikes caused by low-quality data, thereby stabilizing training at scale without requiring smaller batch sizes.\n\n## Proposed Methodology (High-Level Technical Approach)\n\nWe propose a method named **EDiT** (Efficient Distributed Training), designed to operate on a hierarchical device mesh. The approach consists of three main conceptual pillars:\n\n**1. Forward-Pass Layer-wise Synchronization**\nInstead of the standard \"compute-then-sync\" approach, we will interleave synchronization with computation.\n*   **Logical Flow:** As the model executes the forward pass, we trigger the synchronization of sharded parameters for upcoming layers asynchronously.\n*   **Prefetching & Overlap:** We will utilize a prefetch strategy that aggregates parameters for the next module while the current module is computing. This ensures that the communication overhead of the \"outer loop\" optimization is effectively hidden (overlapped) by the compute time of the forward pass.\n*   **Memory Efficiency:** To handle LLM scale, we will offload the states of the outer optimizer (momentum, etc.) to the CPU, transferring only the active layer's data to the GPU as needed.\n\n**2. Pseudo-Gradient Penalty Strategy (Stability Mechanism)**\nTo address the instability inherent in Local SGD on noisy datasets, we will implement a filtering mechanism during the synchronization phase:\n*   **Anomaly Elimination:** We will treat the difference between local and global parameters as a \"pseudo-gradient.\" Using a running statistical analysis (moving averages of mean and variance), we will identify workers whose local updates diverge significantly (anomalies) and exclude them from the aggregation.\n*   **Weighted Averaging:** Rather than a simple average, we will weigh the contributions of valid workers based on their stability. Workers with large divergent norms will be suppressed to prevent them from dragging the global model in incorrect directions.\n*   **Global Clipping:** The aggregated update will be clipped to ensure the global step size remains within a safe bound.\n\n**3. Asynchronous Variant (Handling Heterogeneity)**\nTo support clusters with consistent stragglers (e.g., mixed GPU generations):\n*   We will introduce a fully asynchronous mode where synchronization is triggered by a **time threshold** rather than a fixed number of steps.\n*   Faster workers will perform more local iterations within the time window, while slower workers perform fewer, removing the \"lockstep\" constraint entirely while maintaining convergence through the weighted aggregation mechanism.\n\n## Expected Contribution\n*   **System Efficiency:** By overlapping communication with the forward pass and utilizing specific memory offloading, we expect to eliminate the communication bottleneck typical of synchronous training, enabling higher throughput.\n*   **Scalability & Elasticity:** The approach will allow LLM training to scale efficiently on heterogeneous clusters (different network speeds or GPU types) and support elastic training (dynamic addition/removal of nodes) without severe performance penalties.\n*   **Training Stability:** The proposed pseudo-gradient penalty mechanism aims to theoretically resolve the convergence instability of Local SGD on noisy corpora, making it a viable standard for large-scale pre-training.\n\n[EXPERIMENTAL LOGS]\n## 1. Experimental Setup\n\nWe constructed a distributed training environment to evaluate the proposed EDiT and A-EDiT methods against various baselines.\n\n*   **Hardware and Infrastructure:**\n    *   Cluster: Eight Nvidia A100 GPU nodes.\n    *   Total GPUs: 64 A100 GPUs.\n    *   Device Mesh: $8 \\times 8$ configuration.\n    *   Communication: Intra-node and inter-node connections were utilized, with specific simulations for bandwidth constraints and stragglers in later experiments.\n\n*   **Datasets:**\n    *   **FineWeb-Edu:** A large-scale open-source dataset comprising 1.3 trillion tokens of educational web pages filtered from the FineWeb repository.\n    *   **In-house Dataset:** A private pre-training dataset containing a diverse collection of corpus with varying quality (used to test robustness against noisy data).\n\n*   **Models:**\n    *   We utilized four scales of Llama models: 350M, 1B, 3B, and 7B parameters.\n    *   Context length: 4,096 tokens.\n\n*   **Baselines Compared:**\n    *   **Baseline:** Standard mini-batch SGD.\n    *   **Post Local SGD (PLS):** Starts with standard synchronized training (warm-up) before switching to Local SGD.\n    *   **DiLoCo:** Uses Nesterov optimizer as an outer optimizer.\n    *   **CO2:** Local SGD with asynchronous communication.\n    *   **CO2\\*:** Memory-efficient version of CO2 that shards extra parameters and outer momentum.\n\n*   **Implementation Details:**\n    *   **Framework:** ZeRO-3/FSDP compatible implementation.\n    *   **Optimizers:** AdamW (inner optimizer), Nesterov momentum (outer optimizer).\n    *   **Initialization:** $\\mu P$ (maximal update parametrization) for hyperparameter transfer.\n    *   **Synchronization Intervals:** $\\tau = 128$ steps (EDiT), $\\tau_{time} = 600s$ (A-EDiT).\n    *   **Pseudo Gradient Clip Threshold ($\\phi$):** 10.\n    *   **Learning Rate Schedule:** Cosine decay.\n    *   **FineWeb-Edu Specifics:** Total Batch Size = 1,024; Training Steps = 100,000 (~420B tokens); Baseline LR = 3e-4; Inner LR = 1.5e-4; Outer LR = 0.8; Outer Momentum = 0.85.\n    *   **In-house Dataset Specifics:** Total Batch Size = 1,536; Training Steps = 150,000 (~950B tokens); Baseline LR = 6e-4; Inner LR = 6e-4; Outer LR = 1.0; Outer Momentum = 0.8.\n\n*   **Evaluation Metrics:**\n    *   **Training:** Training Loss, Validation Perplexity (PPL), Throughput (tokens/sec), TFLOPS.\n    *   **Downstream Benchmarks:** MMLU, ARC-E, ARC-C, HellaSwag, PIQA, CommonSense-QA, OpenBookQA, WinoGrande.\n\n## 2. Raw Numeric Data\n\n**Model Configurations**\n| Hyperparameter | 350M | 1B | 3B | 7B |\n| :--- | :--- | :--- | :--- | :--- |\n| Number of Layers | 32 | 32 | 32 | 32 |\n| Hidden Size | 768 | 1,536 | 2,560 | 4,096 |\n| Intermediate Size | 2,048 | 4,096 | 6,912 | 11,008 |\n| Number of Heads | 6 | 12 | 20 | 32 |\n| Number of K/V Heads | 6 | 12 | 20 | 32 |\n| Vocab Size | 79,800 | 79,800 | 79,800 | 79,800 |\n\n**Hyperparameter Search Space**\n| Hyperparameter | Values Evaluated |\n| :--- | :--- |\n| Inner Learning Rate | 3e-5, 6e-5, 1.5e-4, 3e-4, 6e-4 |\n| Synchronization Interval | 16, 64, 128, 256, 512 |\n| Outer Learning Rate | 0.5, 0.7, 0.8, 0.9, 1.0 |\n| Outer Momentum | 0.6, 0.8, 0.85, 0.9, 0.95 |\n\n**Evaluation Results on Public Benchmarks (Llama 1B Model)**\n*Note: PLS = Post Local SGD. \"Baseline\" refers to standard mini-batch SGD.*\n\n| Benchmark | Dataset | Baseline | PLS | DiLoCo | CO2 | EDiT | A-EDiT |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| MMLU (↑) | FineWeb-Edu | 32.28 | 30.86 | 32.55 | 31.33 | 32.29 | 31.96 |\n| ARC-E (↑) | FineWeb-Edu | 59.90 | 57.60 | 58.60 | 57.00 | 60.00 | 57.70 |\n| ARC-C (↑) | FineWeb-Edu | 30.20 | 28.60 | 31.00 | 30.50 | 32.40 | 30.20 |\n| HellaSwag (↑) | FineWeb-Edu | 50.99 | 48.03 | 51.64 | 48.66 | 51.75 | 51.60 |\n| PIQA (↑) | FineWeb-Edu | 69.90 | 67.80 | 69.50 | 67.00 | 68.10 | 69.90 |\n| CommonSense-QA (↑) | FineWeb-Edu | 37.40 | 33.80 | 35.40 | 34.40 | 36.30 | 35.30 |\n| OpenBookQA (↑) | FineWeb-Edu | 25.40 | 22.80 | 25.20 | 24.40 | 26.00 | 24.00 |\n| WinoGrande (↑) | FineWeb-Edu | 50.70 | 49.20 | 47.80 | 50.70 | 51.70 | 50.50 |\n| **Average (↑)** | **FineWeb-Edu** | **44.60** | **42.34** | **43.96** | **43.00** | **44.82** | **43.90** |\n| MMLU (↑) | in-house | 24.12 | - | 24.63 | - | 24.47 | 24.56 |\n| ARC-E (↑) | in-house | 36.80 | - | 36.70 | - | 38.70 | 37.40 |\n| ARC-C (↑) | in-house | 22.50 | - | 22.80 | - | 23.00 | 22.40 |\n| HellaSwag (↑) | in-house | 40.60 | - | 40.80 | - | 40.90 | 40.20 |\n| PIQA (↑) | in-house | 67.10 | - | 66.80 | - | 67.00 | 66.40 |\n| CommonSense-QA (↑) | in-house | 18.50 | - | 18.20 | - | 18.50 | 17.90 |\n| OpenBookQA (↑) | in-house | 18.00 | - | 17.80 | - | 18.00 | 18.20 |\n| WinoGrande (↑) | in-house | 49.10 | - | 49.20 | - | 49.10 | 48.80 |\n| **Average (↑)** | **in-house** | **34.59** | - | **34.62** | - | **34.96** | **34.49** |\n\n**Training Speed (Throughput and TFLOPS) across Model Scales**\n*Values are formatted as: Throughput (tokens/sec) / TFLOPS. OOM indicates Out of Memory.*\n\n| Model Size | Baseline | Post Local SGD | DiLoCo | CO2 | CO2* | EDiT | A-EDiT |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| 350M | 4.52e5 / 107 | 4.67e5 / 111 | 4.56e5 / 108 | 4.84e5 / 116 | 4.66e5 / 110 | 4.81e5 / 114 | 4.82e5 / 115 |\n| 1B | 2.08e5 / 146 | 2.12e5 / 149 | 1.87e5 / 131 | OOM | 2.12e5 / 148 | 2.25e5 / 158 | 2.27e5 / 160 |\n| 3B | 1.05e5 / 177 | OOM | OOM | OOM | OOM | 1.11e5 / 187 | 1.12e5 / 189 |\n| 7B | 5.14e4 / 200 | OOM | OOM | OOM | OOM | 5.42e4 / 211 | 5.45e4 / 213 |\n\n**Evaluation Results for EDiT across Model Scales (FineWeb-Edu)**\n\n| Benchmark | 350M | 1B | 3B | 7B |\n| :--- | :--- | :--- | :--- | :--- |\n| MMLU (↑) | 28.96 | 32.29 | 34.70 | 36.20 |\n| ARC-E (↑) | 53.00 | 60.00 | 67.60 | 68.30 |\n| ARC-C (↑) | 25.40 | 32.40 | 36.10 | 39.20 |\n| HellaSwag (↑) | 39.44 | 51.75 | 58.55 | 62.31 |\n| PIQA (↑) | 65.00 | 68.10 | 72.40 | 73.70 |\n| CommonSense-QA (↑) | 29.50 | 36.30 | 37.30 | 42.60 |\n| OpenBookQA (↑) | 21.40 | 26.00 | 27.40 | 28.60 |\n| WinoGrande (↑) | 50.50 | 51.70 | 52.00 | 52.40 |\n| **Average (↑)** | **39.15** | **44.82** | **48.26** | **50.41** |\n\n**Training Speed (TFLOPS) under Simulated Stress Conditions (Llama 7B)**\n\n| Scenario | Condition | Baseline (TFLOPS) | EDiT (TFLOPS) | A-EDiT (TFLOPS) |\n| :--- | :--- | :--- | :--- | :--- |\n| **Random Straggler** | Lag 0s | 225.75 | 236.50 | 237.45 |\n| | Lag 1.5s | 175.21 | 228.06 | 230.05 |\n| | Lag 2.5s | 150.26 | 219.72 | 224.38 |\n| | Lag 3.5s | 130.94 | 214.36 | 219.49 |\n| | Lag 4.5s | 115.29 | 209.44 | 214.53 |\n| **Consistent Straggler** | Lag 0s | 225.75 | 236.50 | 237.45 |\n| | Lag 1.5s | 175.12 | 181.20 | 230.12 |\n| | Lag 2.5s | 150.03 | 154.12 | 227.58 |\n| | Lag 3.5s | 130.80 | 134.00 | 225.08 |\n| | Lag 4.5s | 115.94 | 118.47 | 223.07 |\n| **Limited Bandwidth** | Repeat 0 | 225.75 | 236.50 | 237.45 |\n| | Repeat 10 | 205.71 | 234.74 | 237.85 |\n| | Repeat 20 | 136.64 | 236.20 | 238.04 |\n| | Repeat 30 | 105.06 | 236.46 | 237.73 |\n| | Repeat 40 | 85.18 | 236.39 | 238.03 |\n\n## 3. Qualitative Observations\n\n**Convergence and Performance**\n*   **Observation:** EDiT consistently achieved the lowest training loss on both FineWeb-Edu and in-house datasets compared to all baselines.\n*   **Observation:** On the FineWeb-Edu dataset, EDiT achieved the lowest validation Perplexity (PPL), surpassing the Baseline.\n*   **Observation:** A-EDiT marginally lagged behind EDiT due to lagging workers but outperformed other baselines in most scenarios.\n*   **Observation:** The DiLoCo method showed a noticeable decline in performance on the in-house dataset, which contained lower-quality corpora.\n*   **Observation:** EDiT and A-EDiT effectively filtered out low-quality data using the pseudo gradient penalty strategy, maintaining performance comparable to the Baseline on the in-house dataset.\n*   **Observation:** EDiT demonstrated consistent performance across model scales (350M, 1B, 3B, 7B).\n\n**Acceleration and Profiling**\n*   **Observation:** All Local SGD-based methods achieved higher throughput than the Baseline.\n*   **Observation:** DiLoCo required placing extra parameters and momentum on CPUs for the 1B model to avoid OOM, resulting in non-overlapped data transfer overhead.\n*   **Observation:** CO2 achieved the highest throughput on the 350M model but failed (OOM) on larger models due to memory overhead from holding complete parameter copies.\n*   **Observation:** CO2\\* (memory efficient) alleviated memory pressure but introduced additional non-overlapping communication (approx. 300ms delay), negating throughput gains.\n*   **Observation:** EDiT's layer-wise synchronization and prefetch strategy reduced communication delay to approximately 19ms, achieving throughput nearly identical to CO2 (-0.5%) without the memory penalty.\n*   **Observation:** Post Local SGD introduced significant additional communication overhead (160ms) during model synchronization.\n\n**Robustness (Stragglers and Bandwidth)**\n*   **Observation:** Baseline training speed declined rapidly with increased lag time or inter-node congestion.\n*   **Observation:** In Random Straggler scenarios, EDiT and A-EDiT experienced only slight speed reductions due to periodic synchronization.\n*   **Observation:** In Consistent Straggler scenarios, EDiT performance declined visibly because periodic synchronization could not eliminate cumulative delays.\n*   **Observation:** A-EDiT maintained high training speeds in Consistent Straggler scenarios due to its asynchronous nature.\n*   **Observation:** Both EDiT and A-EDiT were unaffected by bandwidth constraints (simulated by repeating communications) due to large synchronization intervals minimizing inter-node communication overhead.\n\n**Scalability and Elasticity**\n*   **Observation:** As worker count increased, the optimal learning rate for the Baseline method shifted upwards.\n*   **Observation:** The optimal learning rate for EDiT remained constant (1.5e-4) regardless of the number of workers (tested on 350M model), facilitating elastic scaling.\n*   **Observation:** EDiT training loss was more stable than the Baseline across different worker counts and learning rates.\n*   **Observation:** In a simulated elastic training scenario (scaling workers 1-2-4-8-4-2-1), EDiT maintained a significant decline rate in later stages and achieved better final PPL values (4.5% and 2.6% improvement) compared to Baseline.\n\n**Ablation Studies (Pseudo Gradient Penalty)**\n*   **Observation:** Removing the entire pseudo gradient penalty strategy resulted in noticeable spikes in the PPL curve and deviation from the Baseline.\n*   **Observation:** Individually removing Anomaly Elimination, Weighted Averaging, or Gradient Clipping each adversely affected stability and validation PPL.\n*   **Observation:** In DiLoCo, all workers encountered loss spikes simultaneously and took a long time to recover.\n*   **Observation:** EDiT swiftly rectified deviations in individual workers; even when all workers experienced abnormal losses, the rollback strategy allowed prompt return to normal loss levels.\n\n[AVAILABLE FIGURES]\n### AVAILABLE FIGURES LIST\nItem 1:\n  - Filename: figure_3.png\n  - Caption: Figure 3: A comparison of the synchronization scheme of EDiT and A-EDiT.\n--------------------------------------------------\nItem 2:\n  - Filename: figure_1.png\n  - Caption: Figure 1: The schematic illustration of our proposed EDiT method with 4 workers and a 2×2 device mesh as an example. The left part shows the communication groups and parameter sharding, and the right part presents the detailed computation and communication flows within worker B.\n--------------------------------------------------\nItem 3:\n  - Filename: figure_4.png\n  - Caption: Figure 4: The loss and PPL curves of different methods on the (a) & (b) FineWeb-Edu dataset and (c) & (d) in-house dataset. The final values are marked, with the best ones in bold. Here we use the average of the last 10 values as results to prevent randomness. PLS is short for Post Local SGD.\n--------------------------------------------------\nItem 4:\n  - Filename: figure_9.png\n  - Caption: Figure 9: The profiling results of Baseline, Post Local SGD, CO2, and EDiT during synchronization while training the Llama 1B model. The parts corresponding to model synchronization and computation are highlighted with red boxes.\n--------------------------------------------------\nItem 5:\n  - Filename: figure_5.png\n  - Caption: Figure 5: The TFLOPS of different methods under different training scenarios.\n--------------------------------------------------\nItem 6:\n  - Filename: figure_2.png\n  - Caption: Figure 2: Illustration of model synchronization and our proposed pseudo gradient penalty method, depicted with an example of four workers in a model sync group.\n--------------------------------------------------\nItem 7:\n  - Filename: figure_10.png\n  - Caption: Figure 10: The training loss curves of the Baseline and EDiT methods under different numbers of workers and distinct learning rates.\n--------------------------------------------------\nItem 8:\n  - Filename: figure_6.png\n  - Caption: Figure 6: (a) & (b) The PPL results against learning rates (log 2 scale) under different number of workers for the Baseline and EDiT methods. (c) The PPL curves in the simulated training scenarios.\n--------------------------------------------------\nItem 9:\n  - Filename: figure_7.png\n  - Caption: Figure 7: (a) The validation PPL curves of different versions of EDiT with the final PPL values marked. (b) & (c) The training loss curves for DiLoCo and EDiT, respectively.\n--------------------------------------------------\nItem 10:\n  - Filename: figure_8.png\n  - Caption: Figure 8: The training loss and validation PPL curves for the 350M, 1B, 3B, and 7B models trained with the EDiT method on the FineWeb-Edu dataset. The final loss and PPL values are marked in the figures, which are the average values of the last 10 values to prevent randomness.\n--------------------------------------------------\n\nFigures are located in the figures/ directory and should be referenced appropriately in the paper using standard \\includegraphics commands.\n\n[LATEX TEMPLATE]\n\\documentclass{article} % For LaTeX2e\n\\usepackage{iclr2025_conference,times}\n\n% Optional math commands from https://github.com/goodfeli/dlbook_notation.\n\\input{math_commands.tex}\n\n\\usepackage{hyperref}\n\\usepackage{url}\n\n%%%%%%%%% TITLE - PLEASE UPDATE TITLE HERE\n\\title{My Title}\n\n\\author{Ambitious AI Researcher\\\\\nAI Research Institute\\\\\n123 AI Avenue, ML City\\\\\n\\texttt{researcher@institute.ai}\n}\n\n\\newcommand{\\fix}{\\marginpar{FIX}}\n\\newcommand{\\new}{\\marginpar{NEW}}\n\n\\begin{document}\n\n\\maketitle\n\n\\begin{abstract}\n%%%%%%%%% ABSTRACT %%%%%%%%%\nAbstract here.\n%%%%%%%%% ABSTRACT %%%%%%%%%\n\\end{abstract}\n\n\\section{Introduction}\n\\label{sec:intro}\n%%%%%%%%% INTRODUCTION %%%%%%%%%\nIntroduction here.\n%%%%%%%%% INTRODUCTION %%%%%%%%%\n\n\\section{Related Work}\n\\label{sec:related_work}\n%%%%%%%%% RELATED WORK %%%%%%%%%\nRelated work here.\n%%%%%%%%% RELATED WORK %%%%%%%%%\n\n\\section{Methodology}\n\\label{sec:method}\n%%%%%%%%% METHOD %%%%%%%%%\nMethodology here.\n%%%%%%%%% METHOD %%%%%%%%%\n\n\\section{Experiments}\n\\label{sec:experiments}\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\nExperimental setup, results, and analysis here.\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\n\n\\section{Conclusion}\n\\label{sec:conclusion}\n%%%%%%%%% CONCLUSION %%%%%%%%%\nConclusion here.\n%%%%%%%%% CONCLUSION %%%%%%%%%\n\n%%%%%%%%% REFERENCES %%%%%%%%%\n\\bibliography{references}\n\\bibliographystyle{iclr2025_conference}\n%%%%%%%%% REFERENCES %%%%%%%%%\n\n%%%%%%%%% Appendix %%%%%%%%%\n% If you want to add appendix, uncomment the following lines:\n% \\appendix\n% \\section{xxx}\n%%%%%%%%% Appendix %%%%%%%%%\n\n\\end{document}\n\n\nResponse Format\nReturn EXACTLY TWO fenced code blocks.\n1. First code block: the BibTeX file:\n```bibtex\n@article{example2023,\ntitle={Example Title},\nauthor={Author, First},\njournal={Example Journal},\nyear={2023}\n}\n```\n2. Second code block: the generated LaTeX paper:\n```latex\n% The complete LaTeX paper here\n```\nThe final paper must be coherent, highly polished, and scientifically accurate.\n\n[Delivery in this environment]\nYour working directory is /work: it holds the conference's LaTeX template files and the figures/ directory. Write the two files there as /work/references.bib and /work/template.tex (you may also return them as the two code blocks), and compile /work/template.tex with pdflatex and bibtex into /work/template.pdf. The compiled template.pdf is the paper that is evaluated.\n"
+  },
+  {
+   "name": "SYSTEM.md",
+   "size": 9869,
+   "text": "Role: Senior AI Researcher and Academic Writer.\nObjective: Complete a machine learning research paper by filling in missing sections of a provided LaTeX template and generating a corresponding bibliography file. You must produce a scientifically sound, well-structured paper suitable for submission to a top-tier ML conference.\n\nInputs\nYou will receive the following materials:\n• idea.md: Detailed description of the proposed method and technical ideas.\n• experimental_log.md: Raw experimental results and observations used to construct tables, figures, and analysis.\n• conference_guidelines.md: Formatting and stylistic requirements for the target conference.\n• figures_list: A list of figures that may be referenced in the paper.\n\nConference Guidelines\n# ICLR 2025 Paper Writing Guidelines\n\nBelow are the instructions to help you with the LaTeX paper writing process for ICLR 2025.\n\n## General Setup\n* **Document Class:** `\\documentclass{article}`\n* **Required Packages:**\n    ```latex\n    \\usepackage{iclr2025_conference,times}\n    \\usepackage{hyperref}\n    \\usepackage{url}\n    % Optional but recommended for math\n    \\input{math_commands.tex}\n    ```\n* **Style Files:** You must use `iclr2025_conference.sty` and `iclr2025_conference.bst`.\n\n## Anonymity (Crucial)\n* ICLR is double-blind. **Do not** include real author names or affiliations in the submission version, use \"Ambitious AI Researcher\" instead.\n* Use the third person when citing your own prior work (e.g., \"Earlier work by Smalle (2024)...\" instead of \"In our earlier work...\").\n* You may post your paper on arXiv, but do not explicitly refer to the arXiv version in the paper to maintain anonymity.\n\n## Paper Length\n* **Main Text:** Strict upper limit of **10 pages**.\n* **Citations:** Unlimited additional pages.\n* **Ethics & Reproducibility Statements:** Optional. Do not count toward the page limit (max 1 page each).\n* **Acknowledgments:** Do not count toward the page limit.\n\n## Abstract\nThe abstract must be limited to **one paragraph**.\n* **Margins:** Indented 1/2 inch (3 picas) on both left and right-hand margins.\n* **Font:** 10-point type, vertical spacing of 11-points.\n* **Title:** The word `\\textsc{Abstract}` must be centered, in small caps, and in point size 12.\n* **Spacing:** Two line spaces precede the abstract.\n\n## Formatting Your Paper\nThe text must be confined within a rectangle 5.5 inches (33 picas) wide and 9 inches (54 picas) long. The left margin is 1.5 inch (9 picas).\n* **Font:** Times New Roman (via `times` package) is preferred.\n* **Size:** 10-point type with 11-point vertical spacing.\n* **Paragraphs:** Separated by 1/2 line space, with **no indentation**.\n* **Paper Title:** 17-point, small caps, left-aligned.\n\n### Headings\n* **First Level:** Small caps (`\\textsc`), flush left, 12-point. One line space before, 1/2 after.\n* **Second Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n* **Third Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n\n## Citations and References\nUse the `natbib` package (loaded automatically by the style file).\n* **Narrative citation:** Use `\\citet{Gomu2024}` $\\rightarrow$ \"Gomu et al. (2024)\".\n* **Parenthetical citation:** Use `\\citep{Gomu2024}` $\\rightarrow$ \"(Gomu et al., 2024)\".\n* **Bibliography:**\n    ```latex\n    \\bibliography{references}\n    \\bibliographystyle{iclr2025_conference}\n    ```\n\n## Figures and Tables\n* All artwork must be neat, clean, and legible.\n* **Captions:** Lower case (except for first word and proper nouns).\n* **Placement:**\n    * **Figures:** Caption appears **after** (below) the figure.\n    * **Tables:** Caption appears **before** (above) the table.\n\n### Example Code for Figures\n```latex\n\\begin{figure}[h]\n\\begin{center}\n%\\framebox[4.0in]{$\\;$}\n\\fbox{\\rule[-.5cm]{0cm}{4cm} \\rule[-.5cm]{4cm}{0cm}}\n\\end{center}\n\\caption{Sample figure caption.}\n\\end{figure}\n```\n\n### Example Code for Tables\n```latex\n\\begin{table}[t]\n\\caption{Sample table title}\n\\label{sample-table}\n\\begin{center}\n\\begin{tabular}{ll}\n\\multicolumn{1}{c}{\\bf PART}  &\\multicolumn{1}{c}{\\bf DESCRIPTION}\n\\\\ \\hline \\\\\nDendrite         &Input terminal \\\\\nAxon             &Output terminal \\\\\nSoma             &Cell body (contains cell nucleus) \\\\\n\\end{tabular}\n\\end{center}\n\\end{table}\n```\n\n## Math Notation\n* ICLR encourages standardized notation using `\\input{math_commands.tex}` (based on the Deep Learning book notation).\n* Variables: Italics ($a$, $\\va$, $\\mA$).\n* Random Variables: Roman ($P(\\ra)$).\n* Sets: Blackboard bold ($\\R$, $\\sA$).\n* Functions: Standard LaTeX ($f(\\vx)$).\n\n## Optional Statements\nThese should appear at the end of the main text, before references.\n1.  **Ethics Statement:** (Optional, max 1 page) Address potential concerns (human subjects, sensitive data, bias, etc.).\n2.  **Reproducibility Statement:** (Optional, max 1 page) Reference code, proofs, or data processing steps to ensure reproducibility.\n\n## Important Rules\n* **Formatting:** Do not modify the width or length of the text rectangle or font sizes.\n* **Line Numbers:** Do not refer to line numbers in your text (the style file adds them automatically for review).\n* **Appendix:** You may include an appendix at the very end of the main PDF (after references). Use `\\appendix` to start this section.\n* **Figures Directory:** For consistent compilation, all figures will reside in the `figures` directory. Always include the `figures/` prefix in your `\\includegraphics` command (e.g., `figures/figure_1.pdf`).\n* **Author Information:** Always use the following author information placeholder in your writeup:\n    * Ambitious AI Researcher, AI Research Institute, 123 AI Avenue, ML City, researcher@institute.ai\n\nCritical Constraints\n1. Scientific Integrity\n• All reported experimental results MUST match the provided experimental logs.\n• Never fabricate results, numbers, baselines, datasets, or metrics.\n• If results are weak, negative, or inconclusive, report them honestly and discuss possible explanations.\n2. Literature Cutoff Rule\nYou must behave as if the current date is: 2024-10. Do NOT cite or discuss papers published after this date.\n3. Page Limit\nThe main paper is limited to 10 pages (including figures and tables but excluding references and appendices). Use space efficiently while remaining concise.\n4. Template Compliance\n• Do not modify the overall LaTeX style or document structure mandated by the conference template.\n• References must be handled through a references.bib file.\n• Use standard LaTeX citation commands (e.g., \\cite{}). Make sure you ONLY cite keys that exist in your generated BibTeX code block.\n\nSection Guidelines\n• Title: Concise, descriptive, and memorable. Preferably under two lines.\n• Abstract: A single, compelling paragraph summarizing the problem context, proposed approach, key results, and main takeaway.\n• Introduction: Introduce the problem and motivate its importance. Provide necessary background context. Clearly summarize the paper's core contributions.\n• Related Work: Discuss prior work addressing similar or related problems. Detail the relationship between existing literature and the current approach. Cite relevant baselines and influential papers published before 2024-10.\n• Methodology: Clearly and pedantically describe the proposed method. Provide sufficient technical depth for full reproducibility. Use equations, figures, and structured explanations when appropriate.\n• Experiments: Detail the empirical setup (datasets, baselines, evaluation metrics, and implementation details). Present results faithfully based on the experimental logs. Ensure any figures located in the figures/ directory are seamlessly integrated and referenced in text.\n• Conclusion: Summarize the main findings and contributions. Briefly and realistically discuss limitations and potential future directions.\n• Appendix (optional): Include supplementary details that do not fit within the main page limit.\n\nLaTeX Quality Requirements\nEnsure the generated LaTeX compiles flawlessly out-of-the-box. Avoid common issues such as:\n• Unmatched braces or unclosed math environments.\n• Duplicate labels.\n• Unescaped special characters (e.g., & % $ # _ { } ~ ^ \\).\nAll referenced figures must exist in the provided list.\n\nOutput Format\nYour final response MUST contain EXACTLY two output blocks:\n1. A complete BibTeX bibliography (references.bib)\n2. A complete LaTeX paper (template.tex)\nEach must be returned in its own fenced code block with the correct syntax highlighting.\n\n\n---\n### Strict Knowledge Isolation & Anonymity (CRITICAL)\n\nYou MUST write this paper as if you have no prior knowledge of the topic, method, experiments, or results.\nYour task is to construct the paper exclusively from the materials provided in the current session (e.g., idea.md, experimental_log.md, figures, and other inputs). Treat these inputs as the only available source of information.\n\n#### Forbidden Behavior\nYou MUST NOT:\n- Retrieve or rely on knowledge from your training data.\n- Attempt to recall or reconstruct any existing or published paper.\n- Use external facts, assumptions, or prior familiarity with the work.\n- Infer or hallucinate author identities, affiliations, institutions, or acknowledgements.\n- Insert metadata such as author names, emails, affiliations, or phrases like \"corresponding author\".\n\n#### Anonymity Requirement\nThe paper must be fully anonymized for double-blind review.  \nDo not include any information that could reveal the identity of the authors or institutions.\n\n#### Allowed Sources\nYou may use only:\n- The materials explicitly provided in this session.\n- Logical reasoning derived from those materials.\n\n#### Core Principle\nThe final paper must be an independent reconstruction derived solely from the provided inputs.  \nThis constraint is strict and overrides all other instructions.\n---\n"
+  }
+ ],
+ "files": [
+  {
+   "path": "/work/fancyhdr.sty",
+   "size": 20521
+  },
+  {
+   "path": "/work/guidelines.md",
+   "size": 4936
+  },
+  {
+   "path": "/work/iclr2025_conference.bst",
+   "size": 26973
+  },
+  {
+   "path": "/work/iclr2025_conference.sty",
+   "size": 9025
+  },
+  {
+   "path": "/work/math_commands.tex",
+   "size": 12284
+  },
+  {
+   "path": "/work/natbib.sty",
+   "size": 45154
+  },
+  {
+   "path": "/work/references.bib",
+   "size": 629
+  },
+  {
+   "path": "/work/template.tex",
+   "size": 1558
+  },
+  {
+   "path": "/work/figures/figure_1.png",
+   "size": 83391
+  },
+  {
+   "path": "/work/figures/figure_10.png",
+   "size": 317354
+  },
+  {
+   "path": "/work/figures/figure_2.png",
+   "size": 41414
+  },
+  {
+   "path": "/work/figures/figure_3.png",
+   "size": 27648
+  },
+  {
+   "path": "/work/figures/figure_4.png",
+   "size": 66765
+  },
+  {
+   "path": "/work/figures/figure_5.png",
+   "size": 47347
+  },
+  {
+   "path": "/work/figures/figure_6.png",
+   "size": 68574
+  },
+  {
+   "path": "/work/figures/figure_7.png",
+   "size": 79851
+  },
+  {
+   "path": "/work/figures/figure_8.png",
+   "size": 63470
+  },
+  {
+   "path": "/work/figures/figure_9.png",
+   "size": 375562
+  },
+  {
+   "path": "/work/figures/info.json",
+   "size": 2567
+  }
+ ],
+ "file_notes": [],
+ "settings": {
+  "limits": {
+   "time_limit_hours": 2.0
+  },
+  "offline": false,
+  "image": null,
+  "deliverables": [
+   "template.pdf",
+   "template.tex",
+   "references.bib"
+  ],
+  "work": "paper",
+  "inputs": [
+   {
+    "path": "/work/figures",
+    "from": "figures"
+   }
+  ],
+  "software": false
+ },
+ "shield": {
+  "source": {
+   "title": "EDiT: A Local-SGD-Based Efficient Distributed Training Method for Large Language Models",
+   "authors": [
+    "Jialiang Cheng",
+    "Ning Gao",
+    "Yun Yue",
+    "Zhiling Ye",
+    "Jiadi Jiang",
+    "Jian Sha"
+   ],
+   "time_cutoff": "2024-10-01",
+   "abs_url": "https://openreview.net/forum?id=xtlMtbVfWu",
+   "pdf_url": "https://openreview.net/pdf?id=xtlMtbVfWu",
+   "openreview_forum": "xtlMtbVfWu",
+   "arxiv_id": "2412.07210",
+   "code_repository": [
+    "https://github.com/google-research/paper-orchestra"
+   ]
+  },
+  "extra": {
+   "urls": [
+    "https://huggingface.co/datasets/yiwen-song/PaperWritingBench",
+    "https://yiwen-song.github.io/paper_orchestra/",
+    "https://arxiv.org/abs/2412.07210"
+   ]
+  },
+  "probe_url": "https://github.com/google-research/paper-orchestra"
+ },
+ "evaluator": {
+  "repo": "https://github.com/google-research/paper-orchestra",
+  "commit": "ca1b3fa01c2970fc7cda32d16245db38d57b3f56",
+  "dataset": "yiwen-song/PaperWritingBench",
+  "revision": "fbcfcafd042184ca954954b08dfcb92bd7942b51",
+  "paper_id": "iclr2025_e35cf0c9bf",
+  "venue": "iclr2025",
+  "paper_dir": "iclr2025/papers/iclr2025_e35cf0c9bf",
+  "idea": "idea_sparse.md",
+  "research_cutoff": "2024-10",
+  "prompt": "Single Agent (arXiv 2604.05018v1 App. F.1)",
+  "paper": "template.pdf"
+ },
+ "references": [
+  {
+   "name": "iclr2025_e35cf0c9bf.pdf",
+   "size": 2178568,
+   "text": null,
+   "note": "the original paper",
+   "file_reason": "not-in-batch"
+  },
+  {
+   "name": "raw_materials/idea_dense.md",
+   "size": 8304,
+   "text": "## Problem Statement\nTraining Large Language Models (LLMs) currently relies heavily on synchronous data-parallel paradigms (e.g., All-Reduce), which introduce significant communication overhead and susceptibility to the \"straggler\" problem—where the entire cluster waits for the slowest device. While Local Stochastic Gradient Descent (Local SGD) methods have been proposed to mitigate communication bottlenecks by performing multiple local updates before synchronization, they are currently ill-suited for LLMs. Existing Local SGD implementations typically require each worker to hold a complete model copy, leading to Out-Of-Memory (OOM) errors for large parameter sets. Furthermore, current Local SGD approaches struggle with the instability inherent in training on vast, noisy datasets and fail to effectively handle \"consistent stragglers\" in heterogeneous hardware environments. There is a critical lack of a distributed training framework that simultaneously supports model sharding, computation-communication overlap, and training stability for billion-scale parameters.\n\n## Core Hypothesis\nWe propose **EDiT (Efficient Distributed Training)**, a novel framework designed to integrate Local SGD with model sharding techniques (such as ZeRO/FSDP). By constructing a hierarchical device mesh, we hypothesize that we can shard parameters across workers to solve memory constraints while using periodic synchronization to reduce communication frequency.\n\nSpecifically, we propose that:\n1.  **Layer-wise Synchronization during the Forward Pass** will allow us to overlap parameter synchronization with computation, minimizing idle time.\n2.  A **Pseudo Gradient Penalty** strategy utilizing anomaly detection and weighted averaging will suppress loss spikes caused by low-quality data in local updates.\n3.  An asynchronous variant, **A-EDiT**, utilizing time-based synchronization thresholds ($\\tau_{time}$), will decouple worker progress, thereby neutralizing the impact of consistent stragglers in heterogeneous clusters.\n\n## Proposed Methodology (Detailed Technical Approach)\n\n### 1. Hierarchical Device Mesh and Sharding Strategy\nWe will establish an $M \\times N$ device mesh across $K$ total workers, where $K = M \\times N$. The mesh will be organized into two distinct groups:\n*   **Model Sync Groups ($\\mathcal{G}^r$):** Comprising $N$ workers each. Workers in this group will maintain identical parameter shards and synchronize them periodically.\n*   **Model Shard Groups ($\\mathcal{G}^s$):** Comprising $M$ workers each. Collectively, workers in this group will hold a complete replica of the model parameters $\\pmb{\\theta}$.\n\nLet $\\pmb{\\theta}^{(i)} = \\{ \\pmb{\\theta}^{(i, 1)}, \\dots, \\pmb{\\theta}^{(i, L)} \\}$ represent the parameters held by worker $\\mathcal{W}_i$ for $L$ modules. The complete model is formed by concatenating shards within a Model Shard Group: $\\pmb{\\theta} = \\mathrm{Concat}(\\{ \\pmb{\\theta}^{(i)} : \\pmb{\\theta}^{(i)} \\in \\mathcal{G}_i^s \\})$.\n\n### 2. Execution Flow and Layer-wise Overlap\nWe will implement a two-phase training strategy: a warmup phase using standard mini-batch SGD, followed by the EDiT phase using Local SGD.\n\n**Forward Pass Synchronization:**\nUnlike traditional Local SGD which syncs after a full backward pass, we will perform synchronization *layer-by-layer* during the forward pass. For the $l$-th module at outer step $t$ and inner step $p$, if the synchronization interval $\\tau$ is reached (i.e., $p=0$), we will trigger synchronization within the Model Sync Group $\\mathcal{G}^r$. By utilizing a **prefetch strategy**, we will aggregate parameters for the upcoming module concurrently with the computation of the current module, effectively overlapping communication with forward propagation.\n\n**Backward Pass:**\nDuring the backward pass, workers will aggregate parameters via Model Shard Groups $\\mathcal{G}^s$ for gradient calculation, followed immediately by a reduce-scatter operation to average gradients and free memory.\n\n### 3. Pseudo Gradient Penalty Strategy\nTo address training instability in the Local SGD regime, we will introduce a penalty mechanism applied during parameter synchronization. We define the **pseudo gradient** $\\pmb{\\Delta}_t^{(i, l)}$ for worker $\\mathcal{W}_i$ and module $l$ as the difference between the locally updated parameters and the synchronized parameters from the start of the interval:\n$$ \\pmb{\\Delta}_t^{(i, l)} = \\pmb{\\theta}_{t, \\tau}^{(i, l)} - \\pmb{\\theta}_{t}^{(i, l)} $$\nwhere $\\pmb{\\theta}_{t, \\tau}^{(i, l)}$ is the local parameter shard after $\\tau$ local steps, and $\\pmb{\\theta}_{t}^{(i, l)}$ is the global parameter at step $t$.\n\nWe will implement this strategy via three components:\n\n**A. Anomaly Elimination (EMA Z-Test):**\nWe will track the pseudo gradient norm $G_t^{(i, l)} = \\| \\pmb{\\Delta}_t^{(i, l)} \\|_2$. We will compute an Exponential Moving Average (EMA) Z-score to identify divergent workers. The Z-score $z_t^{(i, l)}$ is defined as:\n$$ z_t^{(i, l)} = \\frac{G_t^{(i, l)} - \\mu_t^{(i, l)}}{\\sigma_t^{(i, l)}} $$\nwhere $\\mu$ and $\\sigma$ are the EMA mean and standard deviation, updated as follows:\n$$ \\mu_{t+1}^{(i, l)} = \\alpha G_t^{(i, l)} + (1 - \\alpha)\\mu_t^{(i, l)} $$\n$$ \\sigma_{t+1}^{(i, l)} = \\sqrt{(1 - \\alpha)(\\sigma_t^{(i, l)})^2 + \\alpha(G_t^{(i, l)} - \\mu_{t+1}^{(i, l)})^2} $$\nWorkers exceeding a threshold $\\delta$ will be flagged as anomalies, and their contribution effectively removed (norm set to $\\infty$).\n\n**B. Weighted Averaging:**\nWe will weigh the contribution of each worker based on their stability. Workers with larger gradient norms will be suppressed to prevent destabilization. The weight $w_{t,i}$ for worker $\\mathcal{W}_i$ is calculated as:\n$$ w_{t, i} = \\frac{\\exp(-G_t^{(i, l)})}{\\sum_j \\exp(-G_t^{(j, l)})} $$\nThe synchronized pseudo gradient becomes:\n$$ \\bar{\\Delta}_t^{(i, l)} = \\sum_j w_{t, j} \\pmb{\\Delta}_t^{(j, l)} $$\n\n**C. Gradient Clipping:**\nFinally, we apply clipping to the aggregated pseudo gradient. Let $\\bar{G}_t^{(i, l)} = \\| \\bar{\\Delta}_t^{(i, l)} \\|_2$. The clipping coefficient $\\beta_t$ is:\n$$ \\beta_t = \\min(\\phi / (\\bar{G}_t^{(i, l)} + \\epsilon), 1) $$\nThe final update applied to the global model is:\n$$ \\widehat{\\Delta}_t^{(i, l)} = \\beta_t \\bar{\\Delta}_t^{(i, l)} $$\n\nThe global parameters are then updated using an outer optimizer (OuterOpt):\n$$ \\pmb{\\theta}_{t+1}^{(i, l)} = \\mathrm{OuterOpt}(\\pmb{\\theta}_{t}^{(i, l)}, \\widehat{\\Delta}_t^{(i, l)}) $$\n\n### 4. Asynchronous Variant (A-EDiT)\nTo handle heterogeneous clusters with consistent stragglers, we will develop A-EDiT. Instead of a fixed step count $\\tau$, we will define a time interval $\\tau_{time}$. Each worker $\\mathcal{W}_i$ will perform local updates until the elapsed time surpasses $\\tau_{time}$. Upon completion, the worker initiates synchronization. This removes the barrier that forces fast workers to wait for slow workers, allowing the global training process to progress based on the aggregate throughput rather than the slowest node.\n\n### 5. Memory Optimization\nWe will offload the extra parameters required for the outer optimizer (momentum states) to the CPU. Given the layer-wise synchronization approach, we only need to transfer the specific layer's optimizer states to the GPU during that layer's specific sync window, ensuring that GPU-CPU data transfer is overlapped with computation.\n\n## Expected Contribution\n1.  **Engineering Feasibility for LLMs:** By integrating model sharding with Local SGD, we expect to enable the training of multi-billion parameter models that previously could not fit in memory using standard Local SGD methods.\n2.  **Communication Efficiency:** The layer-wise synchronization and prefetch strategy are theoretically expected to mask the majority of communication overhead, yielding higher system throughput compared to synchronous baselines.\n3.  **Algorithmic Robustness:** The pseudo gradient penalty strategy is expected to theoretically filter out noise and stabilize training, allowing Local SGD to converge effectively even on large, uncurated corpora.\n4.  **Elasticity and Heterogeneity:** Through A-EDiT, we expect to provide a theoretical guarantee that the training speed is not bottlenecked by the slowest worker, making the system viable for elastic, heterogeneous hardware environments.",
+   "note": "the dense idea (the method that produced the experimental log)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gpt-5-2025-08-07.json",
+   "size": 27894,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Alon Albalak, Yanai Elazar, Sang Michael Xie, Shayne Longpre, Nathan Lambert, Xinyi Wang, Niklas Muennighoff, Bairu Hou, Liangming Pan, Haewon Jeong, Colin Raffel, Shiyu Chang, Tatsunori Hashimoto, and William Yang Wang. A survey on data selection for language models. arXiv preprint arXiv:2402.16827, 2024. https://arxiv.org/abs/2402.16827.\",\n            \"extracted_paper_title\": \"A survey on data selection for language models.\",\n            \"fetched_paper_id\": \"e95bb39748a497fbeed1b221fb3d1296c2b1eec2\",\n            \"fetched_paper_title\": \"A Survey on Data Selection for Language Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jinze Bai, Shuai Bai, Yunfei Chu, Zeyu Cui, Kai Dang, Xiaodong Deng, Yang Fan, Wenbin Ge, Yu Han, Fei Huang, et al. Qwen technical report. arXiv preprint arXiv:2309.16609, 2023.\",\n            \"extracted_paper_title\": \"Qwen technical report\",\n            \"fetched_paper_id\": \"5fc1a3a49e8f1d106118b69d1d6be3b6caa23da0\",\n            \"fetched_paper_title\": \"Qwen Technical Report\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Lukas Balles, Cedric Archambeau, et al. On the choice of learning rate for local sgd. Transactions on Machine Learning Research, 2023.\",\n            \"extracted_paper_title\": \"On the choice of learning rate for local sgd\",\n            \"fetched_paper_id\": \"0b15ec181efd73af6d73160c6ccddce306dfd7fa\",\n            \"fetched_paper_title\": \"On the Choice of Learning Rate for Local SGD\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Timothy Castiglia, Anirban Das, and Stacy Patterson. Multi-level local sgd: Distributed sgd for heterogeneous hierarchical networks. In International Conference on Learning Representations, 2020.\",\n            \"extracted_paper_title\": \"Multi-level local sgd: Distributed sgd for heterogeneous hierarchical networks.\",\n            \"fetched_paper_id\": \"b97d07c6dc6132dbcbddf203d4a3f2d2a803f414\",\n            \"fetched_paper_title\": \"Multi-Level Local SGD for Heterogeneous Hierarchical Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yiming Chen, Kun Yuan, Yingya Zhang, Pan Pan, Yinghui Xu, and Wotao Yin. Accelerating gossip sgd with periodic global averaging. In International Conference on Machine Learning, pp. 1791\\u20131802. PMLR, 2021.\",\n            \"extracted_paper_title\": \"Accelerating gossip sgd with periodic global averaging\",\n            \"fetched_paper_id\": \"42da19a0537bcdc0d59eee3870eae7428b342b62\",\n            \"fetched_paper_title\": \"Accelerating Gossip SGD with Periodic Global Averaging\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jeffrey Dean, Greg Corrado, Rajat Monga, Kai Chen, Matthieu Devin, Mark Mao, Marc\\u2019aurelio Ranzato, Andrew Senior, Paul Tucker, Ke Yang, et al. Large scale distributed deep networks. Advances in neural information processing systems, 25, 2012.\",\n            \"extracted_paper_title\": \"Large scale distributed deep networks\",\n            \"fetched_paper_id\": \"3127190433230b3dc1abd0680bb58dced4bcd90e\",\n            \"fetched_paper_title\": \"Large Scale Distributed Deep Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuyang Deng, Mohammad Mahdi Kamani, and Mehrdad Mahdavi. Local sgd optimizes overparameterized neural networks in polynomial time. In International Conference on Artificial Intelligence and Statistics, pp. 6840\\u20136861. PMLR, 2022.\",\n            \"extracted_paper_title\": \"Local sgd optimizes overparameterized neural networks in polynomial time\",\n            \"fetched_paper_id\": \"702cddc8c3694d1f44b84d92a75aa0e5d4593cee\",\n            \"fetched_paper_title\": \"Local SGD Optimizes Overparameterized Neural Networks in Polynomial Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Arthur Douillard, Qixuan Feng, Andrei A Rusu, Rachita Chhaparia, Yani Donchev, Adhiguna Kuncoro, Marc\\u2019Aurelio Ranzato, Arthur Szlam, and Jiajun Shen. Diloco: Distributed low-communication training of language models. arXiv preprint arXiv:2311.08105, 2023.\",\n            \"extracted_paper_title\": \"Diloco: Distributed low-communication training of language models\",\n            \"fetched_paper_id\": \"f56ad6a6a588945c4ee9ddd7b0d1efef2f2f3f31\",\n            \"fetched_paper_title\": \"DiLoCo: Distributed Low-Communication Training of Language Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Cl\\u00e9mentine Fourrier, Nathan Habib, Thomas Wolf, and Lewis Tunstall. Lighteval: A lightweight framework for llm evaluation, 2023. URL https://github.com/huggingface/lighteval.\",\n            \"extracted_paper_title\": \"Lighteval: A lightweight framework for llm evaluation\",\n            \"fetched_paper_id\": \"cf968326de2af8eb2e088e5154f24bf6c1384ffb\",\n            \"fetched_paper_title\": \"Between Generation and Judgment: A Cloud-Native Framework for Adversarial Evaluation of LLM Alignment\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xinran Gu, Kaifeng Lyu, Longbo Huang, and Sanjeev Arora. Why (and when) does local sgd generalize better than sgd? In The Eleventh International Conference on Learning Representations, 2022.\",\n            \"extracted_paper_title\": \"Why (and when) does local sgd generalize better than sgd?\",\n            \"fetched_paper_id\": \"4539dcc4672a86b8f1e0bc64b92790d33518f55d\",\n            \"fetched_paper_title\": \"Why (and When) does Local SGD Generalize Better than SGD?\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ahmed Khaled, Konstantin Mishchenko, and Peter Richt\\u00e1rik. Tighter theory for local sgd on identical and heterogeneous data. In International Conference on Artificial Intelligence and Statistics, pp. 4519\\u20134529. PMLR, 2020.\",\n            \"extracted_paper_title\": \"Tighter theory for local sgd on identical and heterogeneous data\",\n            \"fetched_paper_id\": \"4f783752a59c28df08bad9b22dd9c7bafe4efb08\",\n            \"fetched_paper_title\": \"Tighter Theory for Local SGD on Identical and Heterogeneous Data\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jiamin Li, Hong Xu, Yibo Zhu, Zherui Liu, Chuanxiong Guo, and Cong Wang. Lyra: Elastic scheduling for deep learning clusters. In Proceedings of the Eighteenth European Conference on Computer Systems, pp. 835\\u2013850, 2023.\",\n            \"extracted_paper_title\": \"Lyra: Elastic scheduling for deep learning clusters\",\n            \"fetched_paper_id\": \"15822ae7035dec57b3126dac84386a415cb4d59e\",\n            \"fetched_paper_title\": \"Lyra: Elastic Scheduling for Deep Learning Clusters\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xiangru Lian, Ce Zhang, Huan Zhang, Cho-Jui Hsieh, Wei Zhang, and Ji Liu. Can decentralized algorithms outperform centralized algorithms? a case study for decentralized parallel stochastic gradient descent. Advances in neural information processing systems, 30, 2017.\",\n            \"extracted_paper_title\": \"Can decentralized algorithms outperform centralized algorithms? a case study for decentralized parallel stochastic gradient descent.\",\n            \"fetched_paper_id\": \"3f1ab8b484f7881a68c8562ff908390742e4ba90\",\n            \"fetched_paper_title\": \"Can Decentralized Algorithms Outperform Centralized Algorithms? A Case Study for Decentralized Parallel Stochastic Gradient Descent\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xiangru Lian, Wei Zhang, Ce Zhang, and Ji Liu. Asynchronous decentralized parallel stochastic gradient descent. In International Conference on Machine Learning, pp. 3043\\u20133052. PMLR, 2018.\",\n            \"extracted_paper_title\": \"Asynchronous decentralized parallel stochastic gradient descent\",\n            \"fetched_paper_id\": \"4bdf72818dd7235637c01f0964c56776e54fd9bb\",\n            \"fetched_paper_title\": \"Asynchronous Decentralized Parallel Stochastic Gradient Descent\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Tao Lin, Sebastian U Stich, Kumar Kshitij Patel, and Martin Jaggi. Don\\u2019t use large mini-batches, use local sgd. In International Conference on Learning Representations, 2019.\",\n            \"extracted_paper_title\": \"Don\\u2019t use large mini-batches, use local sgd.\",\n            \"fetched_paper_id\": \"93ef5b740fa1b54929ead6eb177e0698d7f19719\",\n            \"fetched_paper_title\": \"Don't Use Large Mini-Batches, Use Local SGD\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Bo Liu, Rachita Chhaparia, Arthur Douillard, Satyen Kale, Andrei A Rusu, Jiajun Shen, Arthur Szlam, and Marc\\u2019Aurelio Ranzato. Asynchronous local-sgd training for language modeling. arXiv preprint arXiv:2401.09135, 2024.\",\n            \"extracted_paper_title\": \"Asynchronous local-sgd training for language modeling\",\n            \"fetched_paper_id\": \"1f8786ee58b5957039cdaf0dd70df62586bbcff4\",\n            \"fetched_paper_title\": \"Asynchronous Local-SGD Training for Language Modeling\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In International Conference on Learning Representations, 2019. URL https://openreview.net/forum?id=Bkg6RiCqY7.\",\n            \"extracted_paper_title\": \"Decoupled weight decay regularization\",\n            \"fetched_paper_id\": \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n            \"fetched_paper_title\": \"Decoupled Weight Decay Regularization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Anton Lozhkov, Loubna Ben Allal, Leandro von Werra, and Thomas Wolf. Fineweb-edu, May 2024. URL https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu.\",\n            \"extracted_paper_title\": \"Fineweb-edu\",\n            \"fetched_paper_id\": \"e2fdba09774fa5804ceeaccce198464415f6027d\",\n            \"fetched_paper_title\": \"Fineweb-Edu-Ar: Machine-translated Corpus to Support Arabic Small Language Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Deepak Narayanan, Mohammad Shoeybi, Jared Casper, Patrick LeGresley, Mostofa Patwary, Vijay Korthikanti, Dmitri Vainbrand, Prethvi Kashinkunti, Julie Bernauer, Bryan Catanzaro, et al. Efficient large-scale language model training on gpu clusters using megatron-lm. In Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis, pp. 1\\u201315, 2021.\",\n            \"extracted_paper_title\": \"Efficient large-scale language model training on gpu clusters using megatron-lm\",\n            \"fetched_paper_id\": \"774591fdd988eaaff3917e7c5171d044b0843e63\",\n            \"fetched_paper_title\": \"Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Y. E. Nesterov. A method for solving the convex programming problem with convergence rate O 1 k2 . Proceedings of the USSR Academy of Sciences, 269:543\\u2013547, 1 1983. URL https://ci.nii.ac.jp/naid/10029946121/.\",\n            \"extracted_paper_title\": \"A method for solving the convex programming problem with convergence rate O 1 k2\",\n            \"fetched_paper_id\": \"8d3a318b62d2e970122da35b2a2e70a5d12cc16f\",\n            \"fetched_paper_title\": \"A method for solving the convex programming problem with convergence rate O(1/k^2)\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"John Nguyen, Kshitiz Malik, Hongyuan Zhan, Ashkan Yousefpour, Mike Rabbat, Mani Malek, and Dzmitry Huba. Federated learning with buffered asynchronous aggregation. In International Conference on Artificial Intelligence and Statistics, pp. 3581\\u20133607. PMLR, 2022.\",\n            \"extracted_paper_title\": \"Federated learning with buffered asynchronous aggregation\",\n            \"fetched_paper_id\": \"38fca90fef15b226dbae8db408c5efe8066dde1c\",\n            \"fetched_paper_title\": \"Federated Learning with Buffered Asynchronous Aggregation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"OpenCompass Contributors. Opencompass: A universal evaluation platform for foundation models. https://github.com/open-compass/opencompass, 2023.\",\n            \"extracted_paper_title\": \"Opencompass: A universal evaluation platform for foundation models\",\n            \"fetched_paper_id\": \"6fd33c0aca297b3c7d7e786d71362f93aaf8188f\",\n            \"fetched_paper_title\": \"Earth Action in Transition: Highlights From the 2025 ESA\\u2013NASA International Workshop on AI Foundation Models for EO [Space-Agencies]\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Linxuan Pan and Shenghui Song. Local sgd accelerates convergence by exploiting second order information of the loss function. arXiv preprint arXiv:2305.15013, 2023.\",\n            \"extracted_paper_title\": \"Local sgd accelerates convergence by exploiting second order information of the loss function\",\n            \"fetched_paper_id\": \"2dad5fa0105945478132f39d9a98a91a0109cfbd\",\n            \"fetched_paper_title\": \"Local SGD Accelerates Convergence by Exploiting Second Order Information of the Loss Function\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Guilherme Penedo, Hynek Kydl\\u00ed\\u010dek, Loubna Ben allal, Anton Lozhkov, Margaret Mitchell, Colin Raffel, Leandro Von Werra, and Thomas Wolf. The fineweb datasets: Decanting the web for the finest text data at scale, 2024. URL https://arxiv.org/abs/2406.17557.\",\n            \"extracted_paper_title\": \"The fineweb datasets: Decanting the web for the finest text data at scale\",\n            \"fetched_paper_id\": \"b83a9e35c3aeeb37708e362473c7617d59b815b5\",\n            \"fetched_paper_title\": \"The FineWeb Datasets: Decanting the Web for the Finest Text Data at Scale\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He. Zero: Memory optimizations toward training trillion parameter models. In SC20: International Conference for High Performance Computing, Networking, Storage and Analysis, pp. 1\\u201316. IEEE, 2020.\",\n            \"extracted_paper_title\": \"Zero: Memory optimizations toward training trillion parameter models\",\n            \"fetched_paper_id\": \"00c957711b12468cb38424caccdf5291bb354033\",\n            \"fetched_paper_title\": \"ZeRO: Memory optimizations Toward Training Trillion Parameter Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Herbert Robbins and Sutton Monro. A stochastic approximation method. The annals of mathematical statistics, pp. 400\\u2013407, 1951.\",\n            \"extracted_paper_title\": \"A stochastic approximation method\",\n            \"fetched_paper_id\": \"34ddd8865569c2c32dec9bf7ffc817ff42faaa01\",\n            \"fetched_paper_title\": \"A Stochastic Approximation Method\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shuheng Shen, Yifei Cheng, Jingchang Liu, and Linli Xu. Stl-sgd: Speeding up local sgd with stage-wise communication period. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 35, pp. 9576\\u20139584, 2021.\",\n            \"extracted_paper_title\": \"Stl-sgd: Speeding up local sgd with stage-wise communication period.\",\n            \"fetched_paper_id\": \"b755b9788e9084a5a9e57215dbc1e4ebe1d564ce\",\n            \"fetched_paper_title\": \"STL-SGD: Speeding Up Local SGD with Stagewise Communication Period\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, and Bryan Catanzaro. Megatron-lm: Training multi-billion parameter language models using model parallelism. arXiv preprint arXiv:1909.08053, 2019.\",\n            \"extracted_paper_title\": \"Megatron-lm: Training multi-billion parameter language models using model parallelism\",\n            \"fetched_paper_id\": \"8323c591e119eb09b28b29fd6c7bc76bd889df7a\",\n            \"fetched_paper_title\": \"Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Artin Spiridonoff, Alex Olshevsky, and Ioannis Ch Paschalidis. Local sgd with a communication overhead depending only on the number of workers. arXiv preprint arXiv:2006.02582, 2020.\",\n            \"extracted_paper_title\": \"Local sgd with a communication overhead depending only on the number of workers\",\n            \"fetched_paper_id\": \"31bfcd6e51775aaf7d16387e0c54aa9e3c891784\",\n            \"fetched_paper_title\": \"Local SGD With a Communication Overhead Depending Only on the Number of Workers\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Weigao Sun, Zhen Qin, Weixuan Sun, Shidi Li, Dong Li, Xuyang Shen, Yu Qiao, and Yiran Zhong. Efficient distributed training with full communication-computation overlap. In The Twelfth International Conference on Learning Representations, 2023.\",\n            \"extracted_paper_title\": \"Efficient distributed training with full communication-computation overlap\",\n            \"fetched_paper_id\": \"cfb0a89ce5295ddc6ea568295611f8baf17d8c25\",\n            \"fetched_paper_title\": \"CO2: Efficient Distributed Training with Full Communication-Computation Overlap\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ilya Sutskever, James Martens, George Dahl, and Geoffrey Hinton. On the importance of initialization and momentum in deep learning. In International conference on machine learning, pp. 1139\\u20131147. PMLR, 2013.\",\n            \"extracted_paper_title\": \"On the importance of initialization and momentum in deep learning.\",\n            \"fetched_paper_id\": \"aa7bfd2304201afbb19971ebde87b17e40242e91\",\n            \"fetched_paper_title\": \"On the importance of initialization and momentum in deep learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Megh Thakkar, Tolga Bolukbasi, Sriram Ganapathy, Shikhar Vashishth, Sarath Chandar, and Partha Talukdar. Self-influence guided data reweighting for language model pre-training. arXiv preprint arXiv:2311.00913, 2023.\",\n            \"extracted_paper_title\": \"Self-influence guided data reweighting for language model pre-training\",\n            \"fetched_paper_id\": \"b39b47ea594fe2365a055b6f0ca0a5915e88c6de\",\n            \"fetched_paper_title\": \"Self-Influence Guided Data Reweighting for Language Model Pre-training\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, et al. Llama 2: Open foundation and fine-tuned chat models. arXiv preprint arXiv:2307.09288, 2023.\",\n            \"extracted_paper_title\": \"Llama 2: Open foundation and fine-tuned chat models.\",\n            \"fetched_paper_id\": \"104b0bb1da562d53cbda87aec79ef6a2827d191a\",\n            \"fetched_paper_title\": \"Llama 2: Open Foundation and Fine-Tuned Chat Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jianyu Wang and Gauri Joshi. Adaptive communication strategies to achieve the best error-runtime trade-off in local-update sgd. Proceedings of Machine Learning and Systems, 1:212\\u2013229, 2019.\",\n            \"extracted_paper_title\": \"Adaptive communication strategies to achieve the best error-runtime trade-off in local-update sgd\",\n            \"fetched_paper_id\": \"6445ddea3defe714a60ca2c933a1f140de4b362b\",\n            \"fetched_paper_title\": \"Adaptive Communication Strategies to Achieve the Best Error-Runtime Trade-off in Local-Update SGD\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jianyu Wang, Vinayak Tantia, Nicolas Ballas, and Michael Rabbat. Slowmo: Improving communication-efficient distributed sgd with slow momentum. In International Conference on Learning Representations, 2019.\",\n            \"extracted_paper_title\": \"Slowmo: Improving communication-efficient distributed sgd with slow momentum\",\n            \"fetched_paper_id\": \"e20848622d5145744127b82367f9b671c7ddb08e\",\n            \"fetched_paper_title\": \"SlowMo: Improving Communication-Efficient Distributed SGD with Slow Momentum\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Cong Xie, Sanmi Koyejo, and Indranil Gupta. Asynchronous federated optimization. arXiv preprint arXiv:1903.03934, 2019.\",\n            \"extracted_paper_title\": \"Asynchronous federated optimization\",\n            \"fetched_paper_id\": \"8f6602b6ebe2962dacf0b563e73852183e628ddf\",\n            \"fetched_paper_title\": \"Asynchronous Federated Optimization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ge Yang, Edward Hu, Igor Babuschkin, Szymon Sidor, Xiaodong Liu, David Farhi, Nick Ryder, Jakub Pachocki, Weizhu Chen, and Jianfeng Gao. Tuning large neural networks via zero-shot hyperparameter transfer. Advances in Neural Information Processing Systems, 34:17084\\u201317097, 2021.\",\n            \"extracted_paper_title\": \"Tuning large neural networks via zero-shot hyperparameter transfer\",\n            \"fetched_paper_id\": \"a6b6eedb0559cb44bd3fcab64151529019bae42a\",\n            \"fetched_paper_title\": \"Tuning Large Neural Networks via Zero-Shot Hyperparameter Transfer\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hao Yu, Sen Yang, and Shenghuo Zhu. Parallel restarted sgd with faster convergence and less communication: Demystifying why model averaging works for deep learning. In Proceedings of the AAAI conference on artificial intelligence, volume 33, pp. 5693\\u20135700, 2019.\",\n            \"extracted_paper_title\": \"Parallel restarted sgd with faster convergence and less communication: Demystifying why model averaging works for deep learning.\",\n            \"fetched_paper_id\": \"e0e152748ea0badfbd798dfed3ac743abb58af26\",\n            \"fetched_paper_title\": \"Parallel Restarted SGD with Faster Convergence and Less Communication: Demystifying Why Model Averaging Works for Deep Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jian Zhang, Christopher De Sa, Ioannis Mitliagkas, and Christopher R\\u00e9. Parallel sgd: When does averaging help? arXiv preprint arXiv:1606.07365, 2016.\",\n            \"extracted_paper_title\": \"Parallel sgd: When does averaging help?\",\n            \"fetched_paper_id\": \"907c94f0cd6ddd1da2ee027edba9dbe730285100\",\n            \"fetched_paper_title\": \"Parallel SGD: When does averaging help?\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Tuo Zhang, Lei Gao, Sunwoo Lee, Mi Zhang, and Salman Avestimehr. Timelyfl: Heterogeneity-aware asynchronous federated learning with adaptive partial training. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 5064\\u20135073, 2023.\",\n            \"extracted_paper_title\": \"TimelyFL: Heterogeneity-aware asynchronous federated learning with adaptive partial training\",\n            \"fetched_paper_id\": \"483ff93d750003aa006dec4ff61b15a951a02729\",\n            \"fetched_paper_title\": \"TimelyFL: Heterogeneity-aware Asynchronous Federated Learning with Adaptive Partial Training\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"a6b6eedb0559cb44bd3fcab64151529019bae42a\",\n        \"42da19a0537bcdc0d59eee3870eae7428b342b62\",\n        \"f56ad6a6a588945c4ee9ddd7b0d1efef2f2f3f31\",\n        \"cfb0a89ce5295ddc6ea568295611f8baf17d8c25\",\n        \"b83a9e35c3aeeb37708e362473c7617d59b815b5\",\n        \"702cddc8c3694d1f44b84d92a75aa0e5d4593cee\",\n        \"34ddd8865569c2c32dec9bf7ffc817ff42faaa01\",\n        \"b97d07c6dc6132dbcbddf203d4a3f2d2a803f414\",\n        \"2dad5fa0105945478132f39d9a98a91a0109cfbd\",\n        \"8d3a318b62d2e970122da35b2a2e70a5d12cc16f\",\n        \"31bfcd6e51775aaf7d16387e0c54aa9e3c891784\",\n        \"1f8786ee58b5957039cdaf0dd70df62586bbcff4\",\n        \"38fca90fef15b226dbae8db408c5efe8066dde1c\",\n        \"6fd33c0aca297b3c7d7e786d71362f93aaf8188f\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"aa7bfd2304201afbb19971ebde87b17e40242e91\",\n        \"e0e152748ea0badfbd798dfed3ac743abb58af26\",\n        \"104b0bb1da562d53cbda87aec79ef6a2827d191a\",\n        \"93ef5b740fa1b54929ead6eb177e0698d7f19719\",\n        \"0b15ec181efd73af6d73160c6ccddce306dfd7fa\",\n        \"b755b9788e9084a5a9e57215dbc1e4ebe1d564ce\",\n        \"4bdf72818dd7235637c01f0964c56776e54fd9bb\",\n        \"4f783752a59c28df08bad9b22dd9c7bafe4efb08\",\n        \"3127190433230b3dc1abd0680bb58dced4bcd90e\",\n        \"6445ddea3defe714a60ca2c933a1f140de4b362b\",\n        \"e2fdba09774fa5804ceeaccce198464415f6027d\",\n        \"15822ae7035dec57b3126dac84386a415cb4d59e\",\n        \"e20848622d5145744127b82367f9b671c7ddb08e\",\n        \"907c94f0cd6ddd1da2ee027edba9dbe730285100\",\n        \"e95bb39748a497fbeed1b221fb3d1296c2b1eec2\",\n        \"4539dcc4672a86b8f1e0bc64b92790d33518f55d\",\n        \"8f6602b6ebe2962dacf0b563e73852183e628ddf\",\n        \"00c957711b12468cb38424caccdf5291bb354033\",\n        \"cf968326de2af8eb2e088e5154f24bf6c1384ffb\",\n        \"3f1ab8b484f7881a68c8562ff908390742e4ba90\",\n        \"8323c591e119eb09b28b29fd6c7bc76bd889df7a\",\n        \"5fc1a3a49e8f1d106118b69d1d6be3b6caa23da0\",\n        \"b39b47ea594fe2365a055b6f0ca0a5915e88c6de\",\n        \"774591fdd988eaaff3917e7c5171d044b0843e63\",\n        \"483ff93d750003aa006dec4ff61b15a951a02729\"\n    ],\n    \"all_ids_count\": 40,\n    \"p0_ids\": [\n        \"f56ad6a6a588945c4ee9ddd7b0d1efef2f2f3f31\",\n        \"907c94f0cd6ddd1da2ee027edba9dbe730285100\",\n        \"cfb0a89ce5295ddc6ea568295611f8baf17d8c25\",\n        \"93ef5b740fa1b54929ead6eb177e0698d7f19719\",\n        \"00c957711b12468cb38424caccdf5291bb354033\",\n        \"104b0bb1da562d53cbda87aec79ef6a2827d191a\",\n        \"e2fdba09774fa5804ceeaccce198464415f6027d\"\n    ],\n    \"p0_ids_count\": 7,\n    \"p1_ids\": [\n        \"8323c591e119eb09b28b29fd6c7bc76bd889df7a\",\n        \"b97d07c6dc6132dbcbddf203d4a3f2d2a803f414\",\n        \"b39b47ea594fe2365a055b6f0ca0a5915e88c6de\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"e0e152748ea0badfbd798dfed3ac743abb58af26\",\n        \"e95bb39748a497fbeed1b221fb3d1296c2b1eec2\",\n        \"34ddd8865569c2c32dec9bf7ffc817ff42faaa01\",\n        \"15822ae7035dec57b3126dac84386a415cb4d59e\",\n        \"0b15ec181efd73af6d73160c6ccddce306dfd7fa\",\n        \"3127190433230b3dc1abd0680bb58dced4bcd90e\",\n        \"6fd33c0aca297b3c7d7e786d71362f93aaf8188f\",\n        \"38fca90fef15b226dbae8db408c5efe8066dde1c\",\n        \"b83a9e35c3aeeb37708e362473c7617d59b815b5\",\n        \"4f783752a59c28df08bad9b22dd9c7bafe4efb08\",\n        \"5fc1a3a49e8f1d106118b69d1d6be3b6caa23da0\",\n        \"aa7bfd2304201afbb19971ebde87b17e40242e91\",\n        \"42da19a0537bcdc0d59eee3870eae7428b342b62\",\n        \"b755b9788e9084a5a9e57215dbc1e4ebe1d564ce\",\n        \"774591fdd988eaaff3917e7c5171d044b0843e63\",\n        \"a6b6eedb0559cb44bd3fcab64151529019bae42a\",\n        \"6445ddea3defe714a60ca2c933a1f140de4b362b\",\n        \"31bfcd6e51775aaf7d16387e0c54aa9e3c891784\",\n        \"8f6602b6ebe2962dacf0b563e73852183e628ddf\",\n        \"1f8786ee58b5957039cdaf0dd70df62586bbcff4\",\n        \"483ff93d750003aa006dec4ff61b15a951a02729\",\n        \"cf968326de2af8eb2e088e5154f24bf6c1384ffb\",\n        \"4bdf72818dd7235637c01f0964c56776e54fd9bb\",\n        \"8d3a318b62d2e970122da35b2a2e70a5d12cc16f\",\n        \"2dad5fa0105945478132f39d9a98a91a0109cfbd\",\n        \"e20848622d5145744127b82367f9b671c7ddb08e\",\n        \"3f1ab8b484f7881a68c8562ff908390742e4ba90\",\n        \"702cddc8c3694d1f44b84d92a75aa0e5d4593cee\",\n        \"4539dcc4672a86b8f1e0bc64b92790d33518f55d\"\n    ],\n    \"p1_ids_count\": 33\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gemini-3.1-pro-preview.json",
+   "size": 27874,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Alon Albalak, Yanai Elazar, Sang Michael Xie, Shayne Longpre, Nathan Lambert, Xinyi Wang, Niklas Muennighoff, Bairu Hou, Liangming Pan, Haewon Jeong, Colin Raffel, Shiyu Chang, Tatsunori Hashimoto, and William Yang Wang. A survey on data selection for language models. arXiv preprint arXiv:2402.16827, 2024. https://arxiv.org/abs/2402.16827.\",\n            \"extracted_paper_title\": \"A survey on data selection for language models\",\n            \"fetched_paper_id\": \"e95bb39748a497fbeed1b221fb3d1296c2b1eec2\",\n            \"fetched_paper_title\": \"A Survey on Data Selection for Language Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jinze Bai, Shuai Bai, Yunfei Chu, Zeyu Cui, Kai Dang, Xiaodong Deng, Yang Fan, Wenbin Ge, Yu Han, Fei Huang, et al. Qwen technical report. arXiv preprint arXiv:2309.16609, 2023.\",\n            \"extracted_paper_title\": \"Qwen technical report\",\n            \"fetched_paper_id\": \"5fc1a3a49e8f1d106118b69d1d6be3b6caa23da0\",\n            \"fetched_paper_title\": \"Qwen Technical Report\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Lukas Balles, Cedric Archambeau, et al. On the choice of learning rate for local sgd. Transactions on Machine Learning Research, 2023.\",\n            \"extracted_paper_title\": \"On the choice of learning rate for local sgd\",\n            \"fetched_paper_id\": \"0b15ec181efd73af6d73160c6ccddce306dfd7fa\",\n            \"fetched_paper_title\": \"On the Choice of Learning Rate for Local SGD\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Timothy Castiglia, Anirban Das, and Stacy Patterson. Multi-level local sgd: Distributed sgd for heterogeneous hierarchical networks. In International Conference on Learning Representations, 2020.\",\n            \"extracted_paper_title\": \"Multi-level local sgd: Distributed sgd for heterogeneous hierarchical networks\",\n            \"fetched_paper_id\": \"b97d07c6dc6132dbcbddf203d4a3f2d2a803f414\",\n            \"fetched_paper_title\": \"Multi-Level Local SGD for Heterogeneous Hierarchical Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yiming Chen, Kun Yuan, Yingya Zhang, Pan Pan, Yinghui Xu, and Wotao Yin. Accelerating gossip sgd with periodic global averaging. In International Conference on Machine Learning, pp. 1791\\u2013 1802. PMLR, 2021.\",\n            \"extracted_paper_title\": \"Accelerating gossip sgd with periodic global averaging\",\n            \"fetched_paper_id\": \"42da19a0537bcdc0d59eee3870eae7428b342b62\",\n            \"fetched_paper_title\": \"Accelerating Gossip SGD with Periodic Global Averaging\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jeffrey Dean, Greg Corrado, Rajat Monga, Kai Chen, Matthieu Devin, Mark Mao, Marc\\u2019aurelio Ranzato, Andrew Senior, Paul Tucker, Ke Yang, et al. Large scale distributed deep networks. Advances in neural information processing systems, 25, 2012.\",\n            \"extracted_paper_title\": \"Large scale distributed deep networks\",\n            \"fetched_paper_id\": \"3127190433230b3dc1abd0680bb58dced4bcd90e\",\n            \"fetched_paper_title\": \"Large Scale Distributed Deep Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuyang Deng, Mohammad Mahdi Kamani, and Mehrdad Mahdavi. Local sgd optimizes overpa- rameterized neural networks in polynomial time. In International Conference on Artificial Intel- ligence and Statistics, pp. 6840\\u20136861. PMLR, 2022.\",\n            \"extracted_paper_title\": \"Local sgd optimizes overparameterized neural networks in polynomial time\",\n            \"fetched_paper_id\": \"702cddc8c3694d1f44b84d92a75aa0e5d4593cee\",\n            \"fetched_paper_title\": \"Local SGD Optimizes Overparameterized Neural Networks in Polynomial Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Arthur Douillard, Qixuan Feng, Andrei A Rusu, Rachita Chhaparia, Yani Donchev, Adhiguna Kuncoro, Marc\\u2019Aurelio Ranzato, Arthur Szlam, and Jiajun Shen. Diloco: Distributed low- communication training of language models. arXiv preprint arXiv:2311.08105, 2023.\",\n            \"extracted_paper_title\": \"Diloco: Distributed low-communication training of language models\",\n            \"fetched_paper_id\": \"f56ad6a6a588945c4ee9ddd7b0d1efef2f2f3f31\",\n            \"fetched_paper_title\": \"DiLoCo: Distributed Low-Communication Training of Language Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Cl\\u00b4ementine Fourrier, Nathan Habib, Thomas Wolf, and Lewis Tunstall. Lighteval: A lightweight framework for llm evaluation, 2023. URL https://github.com/huggingface/ lighteval.\",\n            \"extracted_paper_title\": \"Lighteval: A lightweight framework for llm evaluation\",\n            \"fetched_paper_id\": \"cf968326de2af8eb2e088e5154f24bf6c1384ffb\",\n            \"fetched_paper_title\": \"Between Generation and Judgment: A Cloud-Native Framework for Adversarial Evaluation of LLM Alignment\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Xinran Gu, Kaifeng Lyu, Longbo Huang, and Sanjeev Arora. Why (and when) does local sgd gen- eralize better than sgd? In The Eleventh International Conference on Learning Representations, 2022.\",\n            \"extracted_paper_title\": \"Why (and when) does local sgd generalize better than sgd?\",\n            \"fetched_paper_id\": \"4539dcc4672a86b8f1e0bc64b92790d33518f55d\",\n            \"fetched_paper_title\": \"Why (and When) does Local SGD Generalize Better than SGD?\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ahmed Khaled, Konstantin Mishchenko, and Peter Richt\\u00b4arik. Tighter theory for local sgd on identi- cal and heterogeneous data. In International Conference on Artificial Intelligence and Statistics, pp. 4519\\u20134529. PMLR, 2020.\",\n            \"extracted_paper_title\": \"Tighter theory for local sgd on identical and heterogeneous data\",\n            \"fetched_paper_id\": \"4f783752a59c28df08bad9b22dd9c7bafe4efb08\",\n            \"fetched_paper_title\": \"Tighter Theory for Local SGD on Identical and Heterogeneous Data\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jiamin Li, Hong Xu, Yibo Zhu, Zherui Liu, Chuanxiong Guo, and Cong Wang. Lyra: Elastic scheduling for deep learning clusters. In Proceedings of the Eighteenth European Conference on Computer Systems, pp. 835\\u2013850, 2023.\",\n            \"extracted_paper_title\": \"Lyra: Elastic scheduling for deep learning clusters\",\n            \"fetched_paper_id\": \"15822ae7035dec57b3126dac84386a415cb4d59e\",\n            \"fetched_paper_title\": \"Lyra: Elastic Scheduling for Deep Learning Clusters\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xiangru Lian, Ce Zhang, Huan Zhang, Cho-Jui Hsieh, Wei Zhang, and Ji Liu. Can decentralized algorithms outperform centralized algorithms? a case study for decentralized parallel stochastic gradient descent. Advances in neural information processing systems, 30, 2017.\",\n            \"extracted_paper_title\": \"Can decentralized algorithms outperform centralized algorithms? a case study for decentralized parallel stochastic gradient descent.\",\n            \"fetched_paper_id\": \"3f1ab8b484f7881a68c8562ff908390742e4ba90\",\n            \"fetched_paper_title\": \"Can Decentralized Algorithms Outperform Centralized Algorithms? A Case Study for Decentralized Parallel Stochastic Gradient Descent\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xiangru Lian, Wei Zhang, Ce Zhang, and Ji Liu. Asynchronous decentralized parallel stochastic gradient descent. In International Conference on Machine Learning, pp. 3043\\u20133052. PMLR, 2018.\",\n            \"extracted_paper_title\": \"Asynchronous decentralized parallel stochastic gradient descent\",\n            \"fetched_paper_id\": \"4bdf72818dd7235637c01f0964c56776e54fd9bb\",\n            \"fetched_paper_title\": \"Asynchronous Decentralized Parallel Stochastic Gradient Descent\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Tao Lin, Sebastian U Stich, Kumar Kshitij Patel, and Martin Jaggi. Don\\u2019t use large mini-batches, use local sgd. In International Conference on Learning Representations, 2019.\",\n            \"extracted_paper_title\": \"Don\\u2019t use large mini-batches, use local sgd\",\n            \"fetched_paper_id\": \"93ef5b740fa1b54929ead6eb177e0698d7f19719\",\n            \"fetched_paper_title\": \"Don't Use Large Mini-Batches, Use Local SGD\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Bo Liu, Rachita Chhaparia, Arthur Douillard, Satyen Kale, Andrei A Rusu, Jiajun Shen, Arthur Szlam, and Marc\\u2019Aurelio Ranzato. Asynchronous local-sgd training for language modeling. arXiv preprint arXiv:2401.09135, 2024.\",\n            \"extracted_paper_title\": \"Asynchronous local-sgd training for language modeling\",\n            \"fetched_paper_id\": \"1f8786ee58b5957039cdaf0dd70df62586bbcff4\",\n            \"fetched_paper_title\": \"Asynchronous Local-SGD Training for Language Modeling\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In International Confer- ence on Learning Representations, 2019. URL https://openreview.net/forum?id= Bkg6RiCqY7.\",\n            \"extracted_paper_title\": \"Decoupled weight decay regularization\",\n            \"fetched_paper_id\": \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n            \"fetched_paper_title\": \"Decoupled Weight Decay Regularization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Anton Lozhkov, Loubna Ben Allal, Leandro von Werra, and Thomas Wolf. Fineweb-edu, May 2024. URL https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu.\",\n            \"extracted_paper_title\": \"Fineweb-edu\",\n            \"fetched_paper_id\": \"e2fdba09774fa5804ceeaccce198464415f6027d\",\n            \"fetched_paper_title\": \"Fineweb-Edu-Ar: Machine-translated Corpus to Support Arabic Small Language Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Deepak Narayanan, Mohammad Shoeybi, Jared Casper, Patrick LeGresley, Mostofa Patwary, Vi- jay Korthikanti, Dmitri Vainbrand, Prethvi Kashinkunti, Julie Bernauer, Bryan Catanzaro, et al. Efficient large-scale language model training on gpu clusters using megatron-lm. In Proceed- ings of the International Conference for High Performance Computing, Networking, Storage and Analysis, pp. 1\\u201315, 2021.\",\n            \"extracted_paper_title\": \"Efficient large-scale language model training on gpu clusters using megatron-lm\",\n            \"fetched_paper_id\": \"774591fdd988eaaff3917e7c5171d044b0843e63\",\n            \"fetched_paper_title\": \"Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Y. E. Nesterov. A method for solving the convex programming problem with convergence rate O \\u0000 1 k2 \\u0001 . Proceedings of the USSR Academy of Sciences, 269:543\\u2013547, 1 1983. URL https: //ci.nii.ac.jp/naid/10029946121/.\",\n            \"extracted_paper_title\": \"A method for solving the convex programming problem with convergence rate O(1/k^2)\",\n            \"fetched_paper_id\": \"8d3a318b62d2e970122da35b2a2e70a5d12cc16f\",\n            \"fetched_paper_title\": \"A method for solving the convex programming problem with convergence rate O(1/k^2)\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"John Nguyen, Kshitiz Malik, Hongyuan Zhan, Ashkan Yousefpour, Mike Rabbat, Mani Malek, and Dzmitry Huba. Federated learning with buffered asynchronous aggregation. In International Conference on Artificial Intelligence and Statistics, pp. 3581\\u20133607. PMLR, 2022.\",\n            \"extracted_paper_title\": \"Federated learning with buffered asynchronous aggregation\",\n            \"fetched_paper_id\": \"38fca90fef15b226dbae8db408c5efe8066dde1c\",\n            \"fetched_paper_title\": \"Federated Learning with Buffered Asynchronous Aggregation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"OpenCompass Contributors. Opencompass: A universal evaluation platform for foundation models. https://github.com/open-compass/opencompass, 2023.\",\n            \"extracted_paper_title\": \"Opencompass: A universal evaluation platform for foundation models\",\n            \"fetched_paper_id\": \"195aa0064e25d82cef3dca053ef1ef687e3df8f3\",\n            \"fetched_paper_title\": \"A foundation model of transcription across human cell types\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Linxuan Pan and Shenghui Song. Local sgd accelerates convergence by exploiting second order information of the loss function. arXiv preprint arXiv:2305.15013, 2023.\",\n            \"extracted_paper_title\": \"Local sgd accelerates convergence by exploiting second order information of the loss function.\",\n            \"fetched_paper_id\": \"2dad5fa0105945478132f39d9a98a91a0109cfbd\",\n            \"fetched_paper_title\": \"Local SGD Accelerates Convergence by Exploiting Second Order Information of the Loss Function\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Guilherme Penedo, Hynek Kydl\\u00b4\\u0131\\u02c7cek, Loubna Ben allal, Anton Lozhkov, Margaret Mitchell, Colin Raffel, Leandro Von Werra, and Thomas Wolf. The fineweb datasets: Decanting the web for the finest text data at scale, 2024. URL https://arxiv.org/abs/2406.17557.\",\n            \"extracted_paper_title\": \"The fineweb datasets: Decanting the web for the finest text data at scale\",\n            \"fetched_paper_id\": \"b83a9e35c3aeeb37708e362473c7617d59b815b5\",\n            \"fetched_paper_title\": \"The FineWeb Datasets: Decanting the Web for the Finest Text Data at Scale\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He. Zero: Memory optimizations toward training trillion parameter models. In SC20: International Conference for High Perfor- mance Computing, Networking, Storage and Analysis, pp. 1\\u201316. IEEE, 2020.\",\n            \"extracted_paper_title\": \"Zero: Memory optimizations toward training trillion parameter models\",\n            \"fetched_paper_id\": \"00c957711b12468cb38424caccdf5291bb354033\",\n            \"fetched_paper_title\": \"ZeRO: Memory optimizations Toward Training Trillion Parameter Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Herbert Robbins and Sutton Monro. A stochastic approximation method. The annals of mathemati- cal statistics, pp. 400\\u2013407, 1951.\",\n            \"extracted_paper_title\": \"A stochastic approximation method\",\n            \"fetched_paper_id\": \"34ddd8865569c2c32dec9bf7ffc817ff42faaa01\",\n            \"fetched_paper_title\": \"A Stochastic Approximation Method\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shuheng Shen, Yifei Cheng, Jingchang Liu, and Linli Xu. Stl-sgd: Speeding up local sgd with stage- wise communication period. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 35, pp. 9576\\u20139584, 2021.\",\n            \"extracted_paper_title\": \"Stl-sgd: Speeding up local sgd with stage-wise communication period.\",\n            \"fetched_paper_id\": \"b755b9788e9084a5a9e57215dbc1e4ebe1d564ce\",\n            \"fetched_paper_title\": \"STL-SGD: Speeding Up Local SGD with Stagewise Communication Period\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, and Bryan Catanzaro. Megatron-lm: Training multi-billion parameter language models using model par- allelism. arXiv preprint arXiv:1909.08053, 2019.\",\n            \"extracted_paper_title\": \"Megatron-lm: Training multi-billion parameter language models using model parallelism.\",\n            \"fetched_paper_id\": \"8323c591e119eb09b28b29fd6c7bc76bd889df7a\",\n            \"fetched_paper_title\": \"Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Artin Spiridonoff, Alex Olshevsky, and Ioannis Ch Paschalidis. Local sgd with a communication overhead depending only on the number of workers. arXiv preprint arXiv:2006.02582, 2020.\",\n            \"extracted_paper_title\": \"Local sgd with a communication overhead depending only on the number of workers\",\n            \"fetched_paper_id\": \"31bfcd6e51775aaf7d16387e0c54aa9e3c891784\",\n            \"fetched_paper_title\": \"Local SGD With a Communication Overhead Depending Only on the Number of Workers\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Weigao Sun, Zhen Qin, Weixuan Sun, Shidi Li, Dong Li, Xuyang Shen, Yu Qiao, and Yiran Zhong. Efficient distributed training with full communication-computation overlap. In The Twelfth Inter- national Conference on Learning Representations, 2023.\",\n            \"extracted_paper_title\": \"Efficient distributed training with full communication-computation overlap.\",\n            \"fetched_paper_id\": \"cfb0a89ce5295ddc6ea568295611f8baf17d8c25\",\n            \"fetched_paper_title\": \"CO2: Efficient Distributed Training with Full Communication-Computation Overlap\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ilya Sutskever, James Martens, George Dahl, and Geoffrey Hinton. On the importance of initial- ization and momentum in deep learning. In International conference on machine learning, pp. 1139\\u20131147. PMLR, 2013.\",\n            \"extracted_paper_title\": \"On the importance of initialization and momentum in deep learning\",\n            \"fetched_paper_id\": \"aa7bfd2304201afbb19971ebde87b17e40242e91\",\n            \"fetched_paper_title\": \"On the importance of initialization and momentum in deep learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Megh Thakkar, Tolga Bolukbasi, Sriram Ganapathy, Shikhar Vashishth, Sarath Chandar, and Partha Talukdar. Self-influence guided data reweighting for language model pre-training. arXiv preprint arXiv:2311.00913, 2023.\",\n            \"extracted_paper_title\": \"Self-influence guided data reweighting for language model pre-training\",\n            \"fetched_paper_id\": \"b39b47ea594fe2365a055b6f0ca0a5915e88c6de\",\n            \"fetched_paper_title\": \"Self-Influence Guided Data Reweighting for Language Model Pre-training\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei, Niko- lay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, et al. Llama 2: Open founda- tion and fine-tuned chat models. arXiv preprint arXiv:2307.09288, 2023.\",\n            \"extracted_paper_title\": \"Llama 2: Open foundation and fine-tuned chat models\",\n            \"fetched_paper_id\": \"104b0bb1da562d53cbda87aec79ef6a2827d191a\",\n            \"fetched_paper_title\": \"Llama 2: Open Foundation and Fine-Tuned Chat Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jianyu Wang and Gauri Joshi. Adaptive communication strategies to achieve the best error-runtime trade-off in local-update sgd. Proceedings of Machine Learning and Systems, 1:212\\u2013229, 2019.\",\n            \"extracted_paper_title\": \"Adaptive communication strategies to achieve the best error-runtime trade-off in local-update sgd\",\n            \"fetched_paper_id\": \"6445ddea3defe714a60ca2c933a1f140de4b362b\",\n            \"fetched_paper_title\": \"Adaptive Communication Strategies to Achieve the Best Error-Runtime Trade-off in Local-Update SGD\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jianyu Wang, Vinayak Tantia, Nicolas Ballas, and Michael Rabbat. Slowmo: Improving communication-efficient distributed sgd with slow momentum. In International Conference on Learning Representations, 2019.\",\n            \"extracted_paper_title\": \"Slowmo: Improving communication-efficient distributed sgd with slow momentum\",\n            \"fetched_paper_id\": \"e20848622d5145744127b82367f9b671c7ddb08e\",\n            \"fetched_paper_title\": \"SlowMo: Improving Communication-Efficient Distributed SGD with Slow Momentum\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Cong Xie, Sanmi Koyejo, and Indranil Gupta. Asynchronous federated optimization. arXiv preprint arXiv:1903.03934, 2019.\",\n            \"extracted_paper_title\": \"Asynchronous federated optimization\",\n            \"fetched_paper_id\": \"8f6602b6ebe2962dacf0b563e73852183e628ddf\",\n            \"fetched_paper_title\": \"Asynchronous Federated Optimization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ge Yang, Edward Hu, Igor Babuschkin, Szymon Sidor, Xiaodong Liu, David Farhi, Nick Ryder, Jakub Pachocki, Weizhu Chen, and Jianfeng Gao. Tuning large neural networks via zero-shot hyperparameter transfer. Advances in Neural Information Processing Systems, 34:17084\\u201317097, 2021.\",\n            \"extracted_paper_title\": \"Tuning large neural networks via zero-shot hyperparameter transfer\",\n            \"fetched_paper_id\": \"a6b6eedb0559cb44bd3fcab64151529019bae42a\",\n            \"fetched_paper_title\": \"Tuning Large Neural Networks via Zero-Shot Hyperparameter Transfer\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hao Yu, Sen Yang, and Shenghuo Zhu. Parallel restarted sgd with faster convergence and less communication: Demystifying why model averaging works for deep learning. In Proceedings of the AAAI conference on artificial intelligence, volume 33, pp. 5693\\u20135700, 2019.\",\n            \"extracted_paper_title\": \"Parallel restarted sgd with faster convergence and less communication: Demystifying why model averaging works for deep learning\",\n            \"fetched_paper_id\": \"e0e152748ea0badfbd798dfed3ac743abb58af26\",\n            \"fetched_paper_title\": \"Parallel Restarted SGD with Faster Convergence and Less Communication: Demystifying Why Model Averaging Works for Deep Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jian Zhang, Christopher De Sa, Ioannis Mitliagkas, and Christopher R\\u00b4e. Parallel sgd: When does averaging help? arXiv preprint arXiv:1606.07365, 2016.\",\n            \"extracted_paper_title\": \"Parallel sgd: When does averaging help?\",\n            \"fetched_paper_id\": \"907c94f0cd6ddd1da2ee027edba9dbe730285100\",\n            \"fetched_paper_title\": \"Parallel SGD: When does averaging help?\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Tuo Zhang, Lei Gao, Sunwoo Lee, Mi Zhang, and Salman Avestimehr. Timelyfl: Heterogeneity- aware asynchronous federated learning with adaptive partial training. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 5064\\u20135073, 2023.\",\n            \"extracted_paper_title\": \"TimelyFL: Heterogeneity-aware asynchronous federated learning with adaptive partial training\",\n            \"fetched_paper_id\": \"483ff93d750003aa006dec4ff61b15a951a02729\",\n            \"fetched_paper_title\": \"TimelyFL: Heterogeneity-aware Asynchronous Federated Learning with Adaptive Partial Training\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"93ef5b740fa1b54929ead6eb177e0698d7f19719\",\n        \"104b0bb1da562d53cbda87aec79ef6a2827d191a\",\n        \"15822ae7035dec57b3126dac84386a415cb4d59e\",\n        \"aa7bfd2304201afbb19971ebde87b17e40242e91\",\n        \"195aa0064e25d82cef3dca053ef1ef687e3df8f3\",\n        \"b83a9e35c3aeeb37708e362473c7617d59b815b5\",\n        \"8d3a318b62d2e970122da35b2a2e70a5d12cc16f\",\n        \"2dad5fa0105945478132f39d9a98a91a0109cfbd\",\n        \"00c957711b12468cb38424caccdf5291bb354033\",\n        \"5fc1a3a49e8f1d106118b69d1d6be3b6caa23da0\",\n        \"4539dcc4672a86b8f1e0bc64b92790d33518f55d\",\n        \"31bfcd6e51775aaf7d16387e0c54aa9e3c891784\",\n        \"4bdf72818dd7235637c01f0964c56776e54fd9bb\",\n        \"42da19a0537bcdc0d59eee3870eae7428b342b62\",\n        \"e95bb39748a497fbeed1b221fb3d1296c2b1eec2\",\n        \"cf968326de2af8eb2e088e5154f24bf6c1384ffb\",\n        \"1f8786ee58b5957039cdaf0dd70df62586bbcff4\",\n        \"f56ad6a6a588945c4ee9ddd7b0d1efef2f2f3f31\",\n        \"b755b9788e9084a5a9e57215dbc1e4ebe1d564ce\",\n        \"34ddd8865569c2c32dec9bf7ffc817ff42faaa01\",\n        \"cfb0a89ce5295ddc6ea568295611f8baf17d8c25\",\n        \"8f6602b6ebe2962dacf0b563e73852183e628ddf\",\n        \"a6b6eedb0559cb44bd3fcab64151529019bae42a\",\n        \"b97d07c6dc6132dbcbddf203d4a3f2d2a803f414\",\n        \"0b15ec181efd73af6d73160c6ccddce306dfd7fa\",\n        \"3127190433230b3dc1abd0680bb58dced4bcd90e\",\n        \"e2fdba09774fa5804ceeaccce198464415f6027d\",\n        \"6445ddea3defe714a60ca2c933a1f140de4b362b\",\n        \"e0e152748ea0badfbd798dfed3ac743abb58af26\",\n        \"774591fdd988eaaff3917e7c5171d044b0843e63\",\n        \"3f1ab8b484f7881a68c8562ff908390742e4ba90\",\n        \"4f783752a59c28df08bad9b22dd9c7bafe4efb08\",\n        \"8323c591e119eb09b28b29fd6c7bc76bd889df7a\",\n        \"38fca90fef15b226dbae8db408c5efe8066dde1c\",\n        \"483ff93d750003aa006dec4ff61b15a951a02729\",\n        \"702cddc8c3694d1f44b84d92a75aa0e5d4593cee\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"b39b47ea594fe2365a055b6f0ca0a5915e88c6de\",\n        \"e20848622d5145744127b82367f9b671c7ddb08e\",\n        \"907c94f0cd6ddd1da2ee027edba9dbe730285100\"\n    ],\n    \"all_ids_count\": 40,\n    \"p0_ids\": [\n        \"93ef5b740fa1b54929ead6eb177e0698d7f19719\",\n        \"104b0bb1da562d53cbda87aec79ef6a2827d191a\",\n        \"e2fdba09774fa5804ceeaccce198464415f6027d\",\n        \"cf968326de2af8eb2e088e5154f24bf6c1384ffb\",\n        \"195aa0064e25d82cef3dca053ef1ef687e3df8f3\",\n        \"00c957711b12468cb38424caccdf5291bb354033\",\n        \"f56ad6a6a588945c4ee9ddd7b0d1efef2f2f3f31\",\n        \"cfb0a89ce5295ddc6ea568295611f8baf17d8c25\",\n        \"e20848622d5145744127b82367f9b671c7ddb08e\"\n    ],\n    \"p0_ids_count\": 9,\n    \"p1_ids\": [\n        \"15822ae7035dec57b3126dac84386a415cb4d59e\",\n        \"aa7bfd2304201afbb19971ebde87b17e40242e91\",\n        \"b83a9e35c3aeeb37708e362473c7617d59b815b5\",\n        \"8d3a318b62d2e970122da35b2a2e70a5d12cc16f\",\n        \"2dad5fa0105945478132f39d9a98a91a0109cfbd\",\n        \"5fc1a3a49e8f1d106118b69d1d6be3b6caa23da0\",\n        \"4539dcc4672a86b8f1e0bc64b92790d33518f55d\",\n        \"31bfcd6e51775aaf7d16387e0c54aa9e3c891784\",\n        \"4bdf72818dd7235637c01f0964c56776e54fd9bb\",\n        \"42da19a0537bcdc0d59eee3870eae7428b342b62\",\n        \"e95bb39748a497fbeed1b221fb3d1296c2b1eec2\",\n        \"1f8786ee58b5957039cdaf0dd70df62586bbcff4\",\n        \"b755b9788e9084a5a9e57215dbc1e4ebe1d564ce\",\n        \"34ddd8865569c2c32dec9bf7ffc817ff42faaa01\",\n        \"8f6602b6ebe2962dacf0b563e73852183e628ddf\",\n        \"a6b6eedb0559cb44bd3fcab64151529019bae42a\",\n        \"b97d07c6dc6132dbcbddf203d4a3f2d2a803f414\",\n        \"0b15ec181efd73af6d73160c6ccddce306dfd7fa\",\n        \"3127190433230b3dc1abd0680bb58dced4bcd90e\",\n        \"6445ddea3defe714a60ca2c933a1f140de4b362b\",\n        \"e0e152748ea0badfbd798dfed3ac743abb58af26\",\n        \"774591fdd988eaaff3917e7c5171d044b0843e63\",\n        \"3f1ab8b484f7881a68c8562ff908390742e4ba90\",\n        \"4f783752a59c28df08bad9b22dd9c7bafe4efb08\",\n        \"8323c591e119eb09b28b29fd6c7bc76bd889df7a\",\n        \"38fca90fef15b226dbae8db408c5efe8066dde1c\",\n        \"483ff93d750003aa006dec4ff61b15a951a02729\",\n        \"702cddc8c3694d1f44b84d92a75aa0e5d4593cee\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"b39b47ea594fe2365a055b6f0ca0a5915e88c6de\",\n        \"907c94f0cd6ddd1da2ee027edba9dbe730285100\"\n    ],\n    \"p1_ids_count\": 31\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  }
+ ],
+ "conditions": [
+  {
+   "name": "RW-opus",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-sonnet",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-mixed",
+   "system": "researchworld",
+   "agent": null,
+   "provider": null,
+   "model": null,
+   "effort": null,
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "mixed",
+     "name": "Antigravity (Gemini) + Claude Code + Codex CLI",
+     "version": "antigravity agy_acp_server 1.4.1; claude-code @anthropic-ai/claude-agent-sdk 0.3.300; codex @openai/codex 0.163.0",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container; roles use antigravity, claude-code, codex"
+    },
+    "model": {
+     "provider": "per role",
+     "model": "per role",
+     "effort": "per role"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "codex",
+      "agent_name": "Codex CLI",
+      "agent_version": "@openai/codex 0.163.0",
+      "how": "codex-acp",
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "CC-opus",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CC-sonnet",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-astra",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6-astra",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6-astra",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-sol",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6.1-sol",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-opus",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-sonnet",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-opus",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-opus-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-sonnet",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-sonnet-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-opus",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-sonnet",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  }
+ ],
+ "batches": [],
+ "runs": []
+}

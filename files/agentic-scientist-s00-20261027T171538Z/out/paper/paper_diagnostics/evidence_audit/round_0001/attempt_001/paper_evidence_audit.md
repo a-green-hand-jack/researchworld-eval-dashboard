@@ -1,0 +1,32 @@
+# Agentic evidence audit
+
+- verdict: `fail`
+- finding_count: `4`
+
+## Summary
+Nearly all numbers, CIs, roster counts and figure encodings reproduce from paper_data.json and the analysis files, and the downstream selection scope is disclosed correctly, but the SI misstates which checks produced the qualified outcome, one mechanism is stated as established fact, one headline difference is misrounded, and the unscored variant is described in more detail than the evidence supports.
+
+## Findings
+### 1. si-qualification-gates-1 — Supplementary Information / Evaluation protocol and validity diagnostics
+- claim: The checks behind this outcome are: zero isomorphic overlap ... zero walks reaching the step cap; zero failed episodes; and passing closed-form simulator checks on C12, K10 and P10.
+- issue: The paper presents a specific list of gates as the basis for outcome: qualified. The evidence only grounds the outcome values, and the evaluator's gate logic differs from the list. capped_walks is a reported diagnostic and not part of the correctness condition. The actual condition also needs a nonconstant predictor, positive predictions, a non-vacuous permutation, no baseline failure and an exhausted RPC budget, none of which are listed. How the harness maps correct or feasible to qualified is not visible, so the cause of the outcome is partly unknown.
+- evidence: paper_data.json grounding_sources final.qualification.outcome/status/correct carry only the values qualified/completed/true; final_evaluation.evaluation_evidence.candidate_diagnostics_trust=unverified; analysis/evaluator_snapshot/evaluate_final.py lines 1253-1256 (plane_valid = sim_ok and baseline_failure is None and overlap == 0 and complete and failed == 0; episode_valid includes positive, order_diff <= ORDER_TOL, not perm_vacuous, nonconstant; correct also needs rpc_count == rpc_budget) and line 1246 (capped_walks is only recorded as a metric); claims_grounding.json claim 'The sealed held-out evaluation completed with outcome qualified' cites only final.qualification.*
+- requested_fix: State only that the sealed evaluation completed with outcome qualified (correct=true). Present overlap, order-invariance, capped walks, failed episodes and simulator checks as reported diagnostics, not as the checks behind the outcome. If gates are described, cite the evaluator's correctness condition accurately, drop capped walks from it, and say the mapping to the qualified label is not reported.
+
+### 2. results-matthews-causal-2 — Results / Main result
+- claim: Global statistics plus fitted coefficients thus beat a structure-aware bound at this scale. The reason is that the fitted model is not constrained to overestimate: it learns the typical ratio between cover time and its scale ...
+- issue: This comparison has point estimates only, with no paired interval. The paper still states a definite win and gives a causal explanation as fact. No experiment isolates that cause, and the Limitations section says no component attribution was done and that significance language is avoided for point-estimate comparisons.
+- evidence: paper_data.json final_evaluation.metrics has matthews_ref_log_err=0.6053 and no delta_vs_matthews CI; claims_grounding.json Matthews claim says 'point estimates only' and makes no causal claim; paper.tex Limitations 'Per-family uncertainty and small families' and 'No component attribution' paragraphs; paper_data.json ablation_studies=[] and evidence_sources.ablations.status=missing
+- requested_fix: Change it to say the predictor has a lower point-estimate error (0.183 vs 0.605) than the Matthews-type reference, with no paired interval. Present the explanation as an untested hypothesis, e.g. 'one possible explanation is ...'.
+
+### 3. results-delta-rounding-3 — Results / Main result and SI Table tab:family
+- claim: The paired difference is -1.214 log units (also the Family-weighted mean row of Table tab:family: -1.214)
+- issue: The point difference behind this value rounds to -1.215 at the three decimals reported, not -1.214. Every other three-decimal value in the paper is rounded correctly, so this one does not match the evidence trail.
+- evidence: analysis/derived_metrics.json best_bound_minus_predictor_plane=1.2145704200093006; paper_data.json final_evaluation.metrics best_bound_log_err=1.3973218 and final_main_log_err=0.1827514 (difference 1.21457); claims_grounding.json claim 2 repeats -1.214
+- requested_fix: Change -1.214 to -1.215 in the Results paragraph and the Family-weighted mean row of Table tab:family, or report it as -1.21.
+
+### 4. si-unscored-variant-detail-4 — Supplementary Information / Selection scope
+- claim: One alternative model variant was designed before the sealed evaluation: a positive mixture of physically motivated scaling terms with a cross-validated residual.
+- issue: The only artifact record of the unscored variant is its title. There is no source evidence for it, so implementation details such as 'positive mixture' and 'cross-validated residual' are not supported. They also conflict with the same section's statement that no claims are made about the variant. The attempt counts, the retained baseline, the 0.193 development-pool score and the separate-scope caveat are correctly grounded.
+- evidence: paper_data.json idea_titles=['Physics scaling mixture with CV log-L1 correction']; downstream_study.attempt_counts {total:1, scored:0, unscored:1}; source_evidence/ contains only the downstream baseline and program, which are identical starter ridge code; paper_data.json all_programs=[]
+- requested_fix: Describe the variant only by its recorded title (e.g. 'one alternative model variant, titled a physics scaling mixture with a cross-validated log-L1 correction, produced no score'). Drop the implementation details, or say they are unverified.

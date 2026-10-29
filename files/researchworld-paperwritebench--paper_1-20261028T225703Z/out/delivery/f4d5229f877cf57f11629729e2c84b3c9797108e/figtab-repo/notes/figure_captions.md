@@ -1,0 +1,9 @@
+Suggested captions (for paper-repo; facts checked against the images and /initial-state/inputs/3 code). Files in figures/ keep the supplied names; foret_ablation is now foret_ablation.pdf.
+
+- teaser-2.jpg: Accuracy (%) of VL-Rethinker-72B and proprietary models on five multimodal reasoning benchmarks (values from the 72B results table). VL-Rethinker-72B is above Gemini-2.0-Flash, GPT-4o and Claude-3.5-Sonnet on all five and above o1 on MathVista and MathVerse; o1 is higher on MathVision, MMMU-Pro and EMMA.
+- overview-2.jpg: Method overview (describe from the image: GRPO-SSR with replay buffer + Forced Rethinking).
+- vanishing_adv.jpg: Fraction of training queries vs training steps (x16): all rollouts correct (rises ~0.19 -> ~0.47), all incorrect (~0.31-0.40), and effective queries with non-zero advantage (falls ~0.41 -> ~0.20; dashed = linear trend).
+- adv_histogram.jpg: Normalised histograms of advantages for GRPO (spike at 0), GRPO-Filter and GRPO-SSR (mass moved away from 0).
+- ssr_eval_curve.jpg: Validation reward vs training steps (x16) for GRPO, GRPO-Filter, GRPO-SSR. Curves end at different steps; no repeats/error bars are available.
+- rethinking.jpg: Top: example of Forced Rethinking (geometry question; hallucinated step, then 'Wait, there might be a mistake' self-correction). Bottom: word cloud of words in rethinking segments.
+- foret_ablation.pdf: (a) Relative improvement (%) over VL-Reasoner-7B (the SSR-only model, no Forced Rethinking; absolute score in brackets under each benchmark) for forcing rethinking at inference on VL-Reasoner-7B, VL-Rethinker-7B, and the 'bound' reference (define only after idea-repo/paper-repo confirm; code comment force_all_wait: 'upper bound'). (b) Rethinking ratio of VL-Rethinker-7B, approximate values read from the supplied plot (+-2 points); not tabulated in the supplied material.

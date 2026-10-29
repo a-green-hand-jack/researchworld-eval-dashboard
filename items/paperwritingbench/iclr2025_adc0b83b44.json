@@ -1,0 +1,1713 @@
+{
+ "key": "paperwritingbench/iclr2025_adc0b83b44",
+ "benchmark": "paperwritingbench",
+ "item": "iclr2025_adc0b83b44",
+ "prompt": [
+  {
+   "name": "TASK.md",
+   "size": 19895,
+   "text": "Your task is to generate a complete research paper using the materials below.\nYou must produce:\n1. A BibTeX bibliography file (references.bib)\n2. The full LaTeX paper (template.tex)\n\nInstructions\n• Use the research idea and experimental logs to construct a coherent, rigorous ML paper.\n• For related work and baselines:\n  – Search for and include influential papers published up until 2024-10.\n  – Incorporate relevant literature and add the corresponding BibTeX entries to references.bib.\n  – Do NOT hallucinate papers or reference keys; all citation entries must be real.\n• In the LaTeX paper, cite papers using \\cite{} with keys that match exactly with your entries in references.bib.\n• Do not fabricate experimental results or make claims unsupported by the logs.\n\nMaterials\nHere are all the raw research materials to assist with the writing process:\n\n[RESEARCH IDEA]\n## Problem Statement\nHigh-dimensional data assimilation—correcting model predictions with real-world observations—is critical for complex physical systems like weather forecasting or fluid dynamics. While recent generative approaches, specifically Ensemble Score Filters (EnSF), have shown promise in handling high-dimensional non-linear systems, they face a critical failure mode when dealing with **sparse observations**.\n\nIn scenarios where sensors are scarce (e.g., measuring ocean wave height at only a few points in a vast grid), the standard score-based update breaks down. The intuition behind this failure is the \"vanishing gradient\" problem: EnSF relies on the gradient of the log-likelihood to guide the diffusion process toward the true state. When observations are spatially sparse, this gradient is zero almost everywhere (in the unobserved regions). Consequently, the filter cannot effectively propagate information from the sparse observation points to the rest of the state, rendering the assimilation ineffective.\n\n## Core Hypothesis\nWe hypothesize that we can overcome the sparsity limitation by shifting the assimilation process from the high-dimensional physical space to a compressed **latent manifold**.\n\nOur core intuition is that while observations may be sparse in physical space, they can be mapped to a dense representation in a latent space that is consistent with the latent representation of the full physical state. By aligning the latent encodings of \"full states\" and \"sparse observations,\" we effectively convert a sparse filtering problem into a dense one. We posit that performing score-based diffusion in this shared latent space will insure non-vanishing gradients, allowing the particle filter to update the global state efficiently based on limited local data.\n\n## Proposed Methodology (High-Level Technical Approach)\nWe propose to develop a method named \"Latent-EnSF.\" The approach consists of two distinct phases: a representation learning phase (Coupled VAE) and a latent filtering phase.\n\n**1. Coupled Variational Autoencoder (VAE) Architecture**\nWe will design a specialized VAE architecture to bridge the gap between full system states and sparse sensor data.\n*   **Dual Encoders:** We will utilize two separate neural network encoders. The *State Encoder* will map the full, high-dimensional physical state into a lower-dimensional latent distribution. The *Observation Encoder* will map the sparse, incomplete observation vector into the *same* latent space.\n*   **Shared Decoder:** A single decoder will learn to reconstruct the full physical state from latent samples.\n*   **Latent Alignment Strategy:** During training, we will enforce a consistency constraint. We will optimize the networks not just for reconstruction, but to ensure that the latent representation of a sparse observation matches the latent representation of the corresponding full state. This effectively forces the network to \"fill in the blanks\" during the encoding process.\n\n**2. Latent Space Data Assimilation**\nOnce the representation is learned, the filtering process will occur entirely within the latent space:\n*   **Latent Dynamics:** We will project the physical system dynamics into the latent space (or approximate them if an explicit model is unavailable).\n*   **Dense Likelihood Update:** We will apply the Ensemble Score Filter (EnSF) to the latent variables. Because the Observation Encoder maps sparse data to a dense latent vector that is aligned with the state, the \"latent observation map\" effectively becomes an identity function.\n*   **Score-Based Diffusion:** We will solve the reverse-time stochastic differential equation (diffusion) to sample from the posterior distribution. Crucially, because the latent observation is dense, the score function (gradient of the likelihood) will be non-zero and informative, guiding the ensemble members correctly.\n*   **State Recovery:** Finally, the updated latent particles will be passed through the decoder to obtain the corrected high-dimensional physical states.\n\n## Expected Contribution\n*   **Theoretical Advancement:** This work will extend the applicability of score-based generative filtering (EnSF) to the regime of sparse data, solving the vanishing gradient problem inherent in current diffusion-based assimilation methods.\n*   **Computational Efficiency:** By performing the expensive filtering steps in a reduced-order latent space rather than the high-dimensional physical space, we expect to significantly reduce computational costs and wall-clock time.\n*   **Robustness:** The coupled encoding strategy offers a way to handle extreme sparsity (e.g., highly scattered sensors) without relying on traditional localization heuristics that often introduce bias in non-linear systems.\n\n[EXPERIMENTAL LOGS]\n## 1. Experimental Setup\n\n### Shallow Water Wave Propagation (Synthetic)\n*   **Physical Model:** Shallow-water equations (hyperbolic PDEs for free-surface fluid flow) modeling water height and two velocity components.\n*   **Domain:** Square domain $L \\times L$ ($L = 10^6$ m) with constant depth $h = 100$ m.\n*   **Discretization:** Uniform $150 \\times 150$ grid ($d = 22,500$ per variable).\n*   **Simulation Parameters:** \n    *   Time steps: 2000.\n    *   Scheme: Upwind scheme.\n    *   Time step size: $\\Delta t = 0.1 \\Delta x / \\sqrt{gh}$ where $\\Delta x = L/150$.\n*   **Initial Conditions:** \n    *   True state: Local Gaussian bump perturbation from a flat surface.\n    *   Assimilation initialization: Gaussian bump perturbation shifted away from the true initial state, with added noise to generate the ensemble.\n*   **Observation Sparsity:** \n    *   Tested reduction factors: $4\\times$ ($75 \\times 75$ grid) and $225\\times$ ($10 \\times 10$ grid).\n    *   Temporal sparsity: Observations assimilated every $k$ simulation steps (default $k=20$; tested 5, 20, 50).\n*   **Model Architecture (VAE):** \n    *   Input dimension: $3 \\times 150 \\times 150$.\n    *   Encoder: Convolutional layers.\n    *   Latent dimension: $400$ ($4 \\times 10 \\times 10$ with 4 channels).\n*   **Latent Noise Handling:** Heuristic approximation using mean standard deviation of encoded latent states; scaling parameter $\\psi_{\\text{latent}} = 20$.\n*   **Ensemble Size:** 100 samples (default). Tested 20 and 1000 for specific EnSF baselines.\n*   **Sampling:** 100 forward Euler steps for reverse-time SDE.\n\n### Medium-Range Weather Forecasting (Real-World)\n*   **Dataset:** ERA5 (European Centre for Medium-Range Weather Forecasts).\n    *   Training/Testing split: 10 years of data.\n    *   Variables: 21 variables (matching FourCastNet configuration).\n    *   Resolution: $2.5^\\circ$ ($144 \\times 72$ grid).\n*   **Dynamical Model:** FourCastNet (ML-based prediction model) trained on the coarse subset.\n*   **Model Architecture (VAE):** \n    *   ResNet-style architecture.\n    *   Encoder downsampling factor: 4.\n    *   Latent dimension: $20,736$ ($32 \\times 36 \\times 18$).\n*   **Assimilation Schedule:** Once per day.\n*   **Observation Sparsity:** $64\\times$ reduction ($18 \\times 9$ grid).\n*   **Evaluation Protocol:** Metrics averaged across nine 41-day windows.\n\n### Evaluation Metrics\n*   **Accuracy:** Relative Root Mean Square Error (RMSE).\n*   **Efficiency:** Wall-clock time (seconds per assimilation step).\n\n### Hardware\n*   **GPU:** Nvidia A6000.\n*   **CPU:** AMD 7543.\n\n### Baselines Compared\n*   **EnSF:** Ensemble Score Filter (in full state space).\n*   **Latent-EnKF:** Ensemble Kalman Filter operating in the shared VAE latent space.\n*   **Latent-LETKF:** Localized Ensemble Transform Kalman Filter operating in the shared VAE latent space (parallelized with 64 cores).\n*   **Vanilla LETKF:** Standard LETKF.\n*   **FourCastNet (No DA):** Pure ML forecasting without data assimilation.\n*   **Latent-EnSF No Model:** Latent-EnSF assuming static dynamics ($x_{t+1} = x_t$).\n\n## 2. Raw Numeric Data\n\n**Computational Efficiency (Mean and Standard Deviation of Wall-Clock Time in Seconds)**\n| Dataset | Latent Dimension | Latent-EnKF (Time in s) | Latent-LETKF (Time in s) | Latent-EnSF (Time in s) | EnSF (Time in s) |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n| SWE | 400 | 0.056 ± 0.002 | 0.103 ± 0.001 | 0.051 ± 0.001 | 0.223 ± 0.002 |\n| ERA5 | 20736 | 41.161 ± 0.640 | 7.034 ± 0.055 | 0.198 ± 0.008 | 0.501 ± 0.001 |\n\n## 3. Qualitative Observations\n\n### Shallow Water Equations (SWE) Observations\n*   **Impact of Sparsity on Standard EnSF:**\n    *   The gradient of the log-likelihood function vanished in dimensions where observations were missing.\n    *   Increasing observation sparsity (from full to $4\\times$ to $225\\times$ reduction) caused strictly increasing assimilation errors and slower convergence for EnSF (with 20 ensemble members).\n    *   At $225\\times$ reduction, standard EnSF RMSE did not decrease over time, even with dense temporal updates (every step).\n    *   Increasing the ensemble size from 20 to 1000 for standard EnSF at $225\\times$ sparsity resulted in decreasing errors, attributed to more accurate prior score estimation.\n*   **Latent-EnSF Performance:**\n    *   Latent-EnSF achieved small relative errors and fast convergence even at $225\\times$ sparsity.\n    *   Performance levels were comparable to standard EnSF operating with full-state observations.\n    *   Latent-EnSF outperformed Latent-LETKF, Latent-EnKF, and Vanilla LETKF in terms of assimilation speed and accuracy across tested noise levels (0%, 10%, 20%).\n    *   Visual reconstruction showed Latent-EnSF successfully corrected a perturbed initial state to match the ground truth, whereas EnSF failed, leaving the state near the perturbed baseline.\n*   **Temporal Sparsity Robustness:**\n    *   Latent-EnSF maintained accuracy when observation intervals increased (5, 20, and 50 time steps), showing only a slight increase in burn-in time.\n    *   Latent-LETKF was sensitive to temporal sparsity, exhibiting significantly slower convergence as sparsity increased.\n*   **Latent Space Analysis:**\n    *   The difference between encoded true states and encoded noisy observations showed a stable standard deviation across time steps with a mean near zero.\n    *   A latent scaling parameter ($\\psi_{\\text{latent}} = 20$) successfully mitigated numerical instability caused by small-scale variables in the latent space.\n\n### ERA5 Weather Forecasting Observations\n*   **Baseline Performance:**\n    *   The FourCastNet model without data assimilation showed increasing accumulated errors over time, becoming unreliable after approximately 14 days.\n    *   Standard EnSF with sparse ($64\\times$) observations failed to correct the trajectory, yielding errors that closely tracked the \"No DA\" FourCastNet baseline.\n*   **Latent-EnSF Performance:**\n    *   Latent-EnSF quickly leveled off errors within the first few days and preserved accuracy throughout the 41-day window.\n    *   Latent-LETKF resulted in increasing assimilation errors over time, significantly higher than Latent-EnSF.\n*   **Role of Dynamical Model:**\n    *   Comparison between \"Latent-EnSF\" (using FourCastNet) and \"Latent-EnSF No Model\" (assuming static state) confirmed that the ML-based forecasting model contributed to assimilation accuracy, despite its long-term drift.\n*   **Variable-Specific Performance:**\n    *   Assimilation for Z500 (geopotential height) was more accurate than for U500 (wind component).\n    *   The U500 variable exhibited higher state complexity with sharp local changes, suggesting a need for denser observations than the $18 \\times 9$ grid used.\n\n### Computational Efficiency Analysis\n*   **Scalability:**\n    *   Latent-LETKF computational cost increased approximately linearly with dimension.\n    *   Latent-EnKF computational cost exploded with dimension (taking over 700 times longer for ERA5 than SWE).\n    *   Latent-EnSF demonstrated high scalability, taking only ~4 times longer for the higher-dimensional ERA5 task compared to the SWE task, despite a ~50x increase in latent dimension.\n*   **Speed:**\n    *   Latent-EnSF was faster than standard EnSF in the full space, even accounting for the overhead of the encoder/decoder forward passes.\n    *   Latent-EnSF was the fastest method among all comparators for the high-dimensional ERA5 experiment (0.198s vs 7.034s for Latent-LETKF and 41.161s for Latent-EnKF).\n\n[AVAILABLE FIGURES]\n### AVAILABLE FIGURES LIST\nItem 1:\n  - Filename: figure_10.png\n  - Caption: Figure 10: Comparison of different methods at time step 1 (top two rows), 1000 (middle two rows), and 2000 (bottom two rows), with the ground truth, perturbed states, and assimilated states on the top and their corresponding errors from the ground truth at the bottom of each two rows.\n--------------------------------------------------\nItem 2:\n  - Filename: figure_1.png\n  - Caption: Figure 1: Flow of the Latent-EnSF. An ensemble of prior states xt|y1:t−1 is assimilated with sparse observation yt in the latent autoencoder space to obtain samples xt|y1:t from the posterior.\n--------------------------------------------------\nItem 3:\n  - Filename: figure_9.png\n  - Caption: Figure 9: Relative RMSE for the assimilation of Z500 (geopotential at 500hPA) and U500 (ucomponent of wind at 500hPA) on the ERA5 with respect to the number of days of forecasting.\n--------------------------------------------------\nItem 4:\n  - Filename: figure_4.png\n  - Caption: Figure 4: Evolution of states and sparse observations. 225x sparsity markers are enlarged for ease of view.\n--------------------------------------------------\nItem 5:\n  - Filename: figure_5.png\n  - Caption: Figure 5: Relative RMSE of EnSF and Latent-EnSF for observations with different sparsity levels and number of samples.\n--------------------------------------------------\nItem 6:\n  - Filename: figure_6.png\n  - Caption: Figure 6: Relative RMSE of Latent-EnSF compared to baselines with 10% observation noise.\n--------------------------------------------------\nItem 7:\n  - Filename: figure_7.png\n  - Caption: Figure 7: Relative RMSE of Latent-EnSF vs Latent-LETKF for varying temporal sparsity.\n--------------------------------------------------\nItem 8:\n  - Filename: figure_2.png\n  - Caption: Figure 2: The gradient of the log-likelihood function ∇x logP (yt|xt) (right) vanishes at the points where the sparse observation data yt (middle) do not have any information of the state xt (left).\n--------------------------------------------------\nItem 9:\n  - Filename: figure_15.png\n  - Caption: Figure 15: ERA5 Z500 medium-ranged weather forecasting samples after 41 days, along with the errors. Data assimilation is conducted once a day with 64x sparse observations. We compare against a baseline FourCastNet model and Latent-LETKF.\n--------------------------------------------------\nItem 10:\n  - Filename: figure_16.png\n  - Caption: Figure 16: ERA5 U500 medium-ranged weather forecasting samples after 41 days, along with the errors. Data assimilation is conducted once a day with 64x sparse observations. We compare against a baseline FourCastNet model and Latent-LETKF.\n--------------------------------------------------\nItem 11:\n  - Filename: figure_8.png\n  - Caption: Figure 8: Comparison of different methods at time step 2000, with the ground truth, perturbed states, and assimilated states on the top and their corresponding errors from the ground truth on the bottom.\n--------------------------------------------------\nItem 12:\n  - Filename: figure_3.png\n  - Caption: Figure 3: A coupled VAE for consistent latent representations of sparse observations and full states.\n--------------------------------------------------\nItem 13:\n  - Filename: figure_12.png\n  - Caption: Figure 12: Difference of latent state encoded from full state and latent observation encoded from sparse observation with 20% observation noise.\n--------------------------------------------------\nItem 14:\n  - Filename: figure_14.png\n  - Caption: Figure 14: Relative RMSE of Latent-EnSF compared to baselines with 20% observation noise.\n--------------------------------------------------\nItem 15:\n  - Filename: figure_13.png\n  - Caption: Figure 13: Relative RMSE of Latent-EnSF compared to baselines with no observation noise.\n--------------------------------------------------\nItem 16:\n  - Filename: figure_11.png\n  - Caption: Figure 11: Difference of latent state encoded from full state and latent observation encoded from sparse observation with 10% observation noise.\n--------------------------------------------------\n\nFigures are located in the figures/ directory and should be referenced appropriately in the paper using standard \\includegraphics commands.\n\n[LATEX TEMPLATE]\n\\documentclass{article} % For LaTeX2e\n\\usepackage{iclr2025_conference,times}\n\n% Optional math commands from https://github.com/goodfeli/dlbook_notation.\n\\input{math_commands.tex}\n\n\\usepackage{hyperref}\n\\usepackage{url}\n\n%%%%%%%%% TITLE - PLEASE UPDATE TITLE HERE\n\\title{My Title}\n\n\\author{Ambitious AI Researcher\\\\\nAI Research Institute\\\\\n123 AI Avenue, ML City\\\\\n\\texttt{researcher@institute.ai}\n}\n\n\\newcommand{\\fix}{\\marginpar{FIX}}\n\\newcommand{\\new}{\\marginpar{NEW}}\n\n\\begin{document}\n\n\\maketitle\n\n\\begin{abstract}\n%%%%%%%%% ABSTRACT %%%%%%%%%\nAbstract here.\n%%%%%%%%% ABSTRACT %%%%%%%%%\n\\end{abstract}\n\n\\section{Introduction}\n\\label{sec:intro}\n%%%%%%%%% INTRODUCTION %%%%%%%%%\nIntroduction here.\n%%%%%%%%% INTRODUCTION %%%%%%%%%\n\n\\section{Related Work}\n\\label{sec:related_work}\n%%%%%%%%% RELATED WORK %%%%%%%%%\nRelated work here.\n%%%%%%%%% RELATED WORK %%%%%%%%%\n\n\\section{Methodology}\n\\label{sec:method}\n%%%%%%%%% METHOD %%%%%%%%%\nMethodology here.\n%%%%%%%%% METHOD %%%%%%%%%\n\n\\section{Experiments}\n\\label{sec:experiments}\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\nExperimental setup, results, and analysis here.\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\n\n\\section{Conclusion}\n\\label{sec:conclusion}\n%%%%%%%%% CONCLUSION %%%%%%%%%\nConclusion here.\n%%%%%%%%% CONCLUSION %%%%%%%%%\n\n%%%%%%%%% REFERENCES %%%%%%%%%\n\\bibliography{references}\n\\bibliographystyle{iclr2025_conference}\n%%%%%%%%% REFERENCES %%%%%%%%%\n\n%%%%%%%%% Appendix %%%%%%%%%\n% If you want to add appendix, uncomment the following lines:\n% \\appendix\n% \\section{xxx}\n%%%%%%%%% Appendix %%%%%%%%%\n\n\\end{document}\n\n\nResponse Format\nReturn EXACTLY TWO fenced code blocks.\n1. First code block: the BibTeX file:\n```bibtex\n@article{example2023,\ntitle={Example Title},\nauthor={Author, First},\njournal={Example Journal},\nyear={2023}\n}\n```\n2. Second code block: the generated LaTeX paper:\n```latex\n% The complete LaTeX paper here\n```\nThe final paper must be coherent, highly polished, and scientifically accurate.\n\n[Delivery in this environment]\nYour working directory is /work: it holds the conference's LaTeX template files and the figures/ directory. Write the two files there as /work/references.bib and /work/template.tex (you may also return them as the two code blocks), and compile /work/template.tex with pdflatex and bibtex into /work/template.pdf. The compiled template.pdf is the paper that is evaluated.\n"
+  },
+  {
+   "name": "SYSTEM.md",
+   "size": 9869,
+   "text": "Role: Senior AI Researcher and Academic Writer.\nObjective: Complete a machine learning research paper by filling in missing sections of a provided LaTeX template and generating a corresponding bibliography file. You must produce a scientifically sound, well-structured paper suitable for submission to a top-tier ML conference.\n\nInputs\nYou will receive the following materials:\n• idea.md: Detailed description of the proposed method and technical ideas.\n• experimental_log.md: Raw experimental results and observations used to construct tables, figures, and analysis.\n• conference_guidelines.md: Formatting and stylistic requirements for the target conference.\n• figures_list: A list of figures that may be referenced in the paper.\n\nConference Guidelines\n# ICLR 2025 Paper Writing Guidelines\n\nBelow are the instructions to help you with the LaTeX paper writing process for ICLR 2025.\n\n## General Setup\n* **Document Class:** `\\documentclass{article}`\n* **Required Packages:**\n    ```latex\n    \\usepackage{iclr2025_conference,times}\n    \\usepackage{hyperref}\n    \\usepackage{url}\n    % Optional but recommended for math\n    \\input{math_commands.tex}\n    ```\n* **Style Files:** You must use `iclr2025_conference.sty` and `iclr2025_conference.bst`.\n\n## Anonymity (Crucial)\n* ICLR is double-blind. **Do not** include real author names or affiliations in the submission version, use \"Ambitious AI Researcher\" instead.\n* Use the third person when citing your own prior work (e.g., \"Earlier work by Smalle (2024)...\" instead of \"In our earlier work...\").\n* You may post your paper on arXiv, but do not explicitly refer to the arXiv version in the paper to maintain anonymity.\n\n## Paper Length\n* **Main Text:** Strict upper limit of **10 pages**.\n* **Citations:** Unlimited additional pages.\n* **Ethics & Reproducibility Statements:** Optional. Do not count toward the page limit (max 1 page each).\n* **Acknowledgments:** Do not count toward the page limit.\n\n## Abstract\nThe abstract must be limited to **one paragraph**.\n* **Margins:** Indented 1/2 inch (3 picas) on both left and right-hand margins.\n* **Font:** 10-point type, vertical spacing of 11-points.\n* **Title:** The word `\\textsc{Abstract}` must be centered, in small caps, and in point size 12.\n* **Spacing:** Two line spaces precede the abstract.\n\n## Formatting Your Paper\nThe text must be confined within a rectangle 5.5 inches (33 picas) wide and 9 inches (54 picas) long. The left margin is 1.5 inch (9 picas).\n* **Font:** Times New Roman (via `times` package) is preferred.\n* **Size:** 10-point type with 11-point vertical spacing.\n* **Paragraphs:** Separated by 1/2 line space, with **no indentation**.\n* **Paper Title:** 17-point, small caps, left-aligned.\n\n### Headings\n* **First Level:** Small caps (`\\textsc`), flush left, 12-point. One line space before, 1/2 after.\n* **Second Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n* **Third Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n\n## Citations and References\nUse the `natbib` package (loaded automatically by the style file).\n* **Narrative citation:** Use `\\citet{Gomu2024}` $\\rightarrow$ \"Gomu et al. (2024)\".\n* **Parenthetical citation:** Use `\\citep{Gomu2024}` $\\rightarrow$ \"(Gomu et al., 2024)\".\n* **Bibliography:**\n    ```latex\n    \\bibliography{references}\n    \\bibliographystyle{iclr2025_conference}\n    ```\n\n## Figures and Tables\n* All artwork must be neat, clean, and legible.\n* **Captions:** Lower case (except for first word and proper nouns).\n* **Placement:**\n    * **Figures:** Caption appears **after** (below) the figure.\n    * **Tables:** Caption appears **before** (above) the table.\n\n### Example Code for Figures\n```latex\n\\begin{figure}[h]\n\\begin{center}\n%\\framebox[4.0in]{$\\;$}\n\\fbox{\\rule[-.5cm]{0cm}{4cm} \\rule[-.5cm]{4cm}{0cm}}\n\\end{center}\n\\caption{Sample figure caption.}\n\\end{figure}\n```\n\n### Example Code for Tables\n```latex\n\\begin{table}[t]\n\\caption{Sample table title}\n\\label{sample-table}\n\\begin{center}\n\\begin{tabular}{ll}\n\\multicolumn{1}{c}{\\bf PART}  &\\multicolumn{1}{c}{\\bf DESCRIPTION}\n\\\\ \\hline \\\\\nDendrite         &Input terminal \\\\\nAxon             &Output terminal \\\\\nSoma             &Cell body (contains cell nucleus) \\\\\n\\end{tabular}\n\\end{center}\n\\end{table}\n```\n\n## Math Notation\n* ICLR encourages standardized notation using `\\input{math_commands.tex}` (based on the Deep Learning book notation).\n* Variables: Italics ($a$, $\\va$, $\\mA$).\n* Random Variables: Roman ($P(\\ra)$).\n* Sets: Blackboard bold ($\\R$, $\\sA$).\n* Functions: Standard LaTeX ($f(\\vx)$).\n\n## Optional Statements\nThese should appear at the end of the main text, before references.\n1.  **Ethics Statement:** (Optional, max 1 page) Address potential concerns (human subjects, sensitive data, bias, etc.).\n2.  **Reproducibility Statement:** (Optional, max 1 page) Reference code, proofs, or data processing steps to ensure reproducibility.\n\n## Important Rules\n* **Formatting:** Do not modify the width or length of the text rectangle or font sizes.\n* **Line Numbers:** Do not refer to line numbers in your text (the style file adds them automatically for review).\n* **Appendix:** You may include an appendix at the very end of the main PDF (after references). Use `\\appendix` to start this section.\n* **Figures Directory:** For consistent compilation, all figures will reside in the `figures` directory. Always include the `figures/` prefix in your `\\includegraphics` command (e.g., `figures/figure_1.pdf`).\n* **Author Information:** Always use the following author information placeholder in your writeup:\n    * Ambitious AI Researcher, AI Research Institute, 123 AI Avenue, ML City, researcher@institute.ai\n\nCritical Constraints\n1. Scientific Integrity\n• All reported experimental results MUST match the provided experimental logs.\n• Never fabricate results, numbers, baselines, datasets, or metrics.\n• If results are weak, negative, or inconclusive, report them honestly and discuss possible explanations.\n2. Literature Cutoff Rule\nYou must behave as if the current date is: 2024-10. Do NOT cite or discuss papers published after this date.\n3. Page Limit\nThe main paper is limited to 10 pages (including figures and tables but excluding references and appendices). Use space efficiently while remaining concise.\n4. Template Compliance\n• Do not modify the overall LaTeX style or document structure mandated by the conference template.\n• References must be handled through a references.bib file.\n• Use standard LaTeX citation commands (e.g., \\cite{}). Make sure you ONLY cite keys that exist in your generated BibTeX code block.\n\nSection Guidelines\n• Title: Concise, descriptive, and memorable. Preferably under two lines.\n• Abstract: A single, compelling paragraph summarizing the problem context, proposed approach, key results, and main takeaway.\n• Introduction: Introduce the problem and motivate its importance. Provide necessary background context. Clearly summarize the paper's core contributions.\n• Related Work: Discuss prior work addressing similar or related problems. Detail the relationship between existing literature and the current approach. Cite relevant baselines and influential papers published before 2024-10.\n• Methodology: Clearly and pedantically describe the proposed method. Provide sufficient technical depth for full reproducibility. Use equations, figures, and structured explanations when appropriate.\n• Experiments: Detail the empirical setup (datasets, baselines, evaluation metrics, and implementation details). Present results faithfully based on the experimental logs. Ensure any figures located in the figures/ directory are seamlessly integrated and referenced in text.\n• Conclusion: Summarize the main findings and contributions. Briefly and realistically discuss limitations and potential future directions.\n• Appendix (optional): Include supplementary details that do not fit within the main page limit.\n\nLaTeX Quality Requirements\nEnsure the generated LaTeX compiles flawlessly out-of-the-box. Avoid common issues such as:\n• Unmatched braces or unclosed math environments.\n• Duplicate labels.\n• Unescaped special characters (e.g., & % $ # _ { } ~ ^ \\).\nAll referenced figures must exist in the provided list.\n\nOutput Format\nYour final response MUST contain EXACTLY two output blocks:\n1. A complete BibTeX bibliography (references.bib)\n2. A complete LaTeX paper (template.tex)\nEach must be returned in its own fenced code block with the correct syntax highlighting.\n\n\n---\n### Strict Knowledge Isolation & Anonymity (CRITICAL)\n\nYou MUST write this paper as if you have no prior knowledge of the topic, method, experiments, or results.\nYour task is to construct the paper exclusively from the materials provided in the current session (e.g., idea.md, experimental_log.md, figures, and other inputs). Treat these inputs as the only available source of information.\n\n#### Forbidden Behavior\nYou MUST NOT:\n- Retrieve or rely on knowledge from your training data.\n- Attempt to recall or reconstruct any existing or published paper.\n- Use external facts, assumptions, or prior familiarity with the work.\n- Infer or hallucinate author identities, affiliations, institutions, or acknowledgements.\n- Insert metadata such as author names, emails, affiliations, or phrases like \"corresponding author\".\n\n#### Anonymity Requirement\nThe paper must be fully anonymized for double-blind review.  \nDo not include any information that could reveal the identity of the authors or institutions.\n\n#### Allowed Sources\nYou may use only:\n- The materials explicitly provided in this session.\n- Logical reasoning derived from those materials.\n\n#### Core Principle\nThe final paper must be an independent reconstruction derived solely from the provided inputs.  \nThis constraint is strict and overrides all other instructions.\n---\n"
+  }
+ ],
+ "files": [
+  {
+   "path": "/work/fancyhdr.sty",
+   "size": 20521
+  },
+  {
+   "path": "/work/guidelines.md",
+   "size": 4936
+  },
+  {
+   "path": "/work/iclr2025_conference.bst",
+   "size": 26973
+  },
+  {
+   "path": "/work/iclr2025_conference.sty",
+   "size": 9025
+  },
+  {
+   "path": "/work/math_commands.tex",
+   "size": 12284
+  },
+  {
+   "path": "/work/natbib.sty",
+   "size": 45154
+  },
+  {
+   "path": "/work/references.bib",
+   "size": 629
+  },
+  {
+   "path": "/work/template.tex",
+   "size": 1558
+  },
+  {
+   "path": "/work/figures/figure_1.png",
+   "size": 136966
+  },
+  {
+   "path": "/work/figures/figure_10.png",
+   "size": 508419
+  },
+  {
+   "path": "/work/figures/figure_11.png",
+   "size": 16827
+  },
+  {
+   "path": "/work/figures/figure_12.png",
+   "size": 15255
+  },
+  {
+   "path": "/work/figures/figure_13.png",
+   "size": 34062
+  },
+  {
+   "path": "/work/figures/figure_14.png",
+   "size": 42839
+  },
+  {
+   "path": "/work/figures/figure_15.png",
+   "size": 176742
+  },
+  {
+   "path": "/work/figures/figure_16.png",
+   "size": 225247
+  },
+  {
+   "path": "/work/figures/figure_2.png",
+   "size": 44233
+  },
+  {
+   "path": "/work/figures/figure_3.png",
+   "size": 125335
+  },
+  {
+   "path": "/work/figures/figure_4.png",
+   "size": 123293
+  },
+  {
+   "path": "/work/figures/figure_5.png",
+   "size": 28512
+  },
+  {
+   "path": "/work/figures/figure_6.png",
+   "size": 35643
+  },
+  {
+   "path": "/work/figures/figure_7.png",
+   "size": 34919
+  },
+  {
+   "path": "/work/figures/figure_8.png",
+   "size": 222332
+  },
+  {
+   "path": "/work/figures/figure_9.png",
+   "size": 44296
+  },
+  {
+   "path": "/work/figures/info.json",
+   "size": 3589
+  }
+ ],
+ "file_notes": [],
+ "settings": {
+  "limits": {
+   "time_limit_hours": 2.0
+  },
+  "offline": false,
+  "image": null,
+  "deliverables": [
+   "template.pdf",
+   "template.tex",
+   "references.bib"
+  ],
+  "work": "paper",
+  "inputs": [
+   {
+    "path": "/work/figures",
+    "from": "figures"
+   }
+  ],
+  "software": false
+ },
+ "shield": {
+  "source": {
+   "title": "Latent-EnSF: A Latent Ensemble Score Filter for High-Dimensional Data Assimilation with Sparse Observation Data",
+   "authors": [
+    "Phillip Si",
+    "Peng Chen"
+   ],
+   "time_cutoff": "2024-10-01",
+   "abs_url": "https://openreview.net/forum?id=urcEYsZOBz",
+   "pdf_url": "https://openreview.net/pdf?id=urcEYsZOBz",
+   "openreview_forum": "urcEYsZOBz",
+   "arxiv_id": "2409.00127",
+   "code_repository": [
+    "https://github.com/google-research/paper-orchestra"
+   ]
+  },
+  "extra": {
+   "urls": [
+    "https://huggingface.co/datasets/yiwen-song/PaperWritingBench",
+    "https://yiwen-song.github.io/paper_orchestra/",
+    "https://arxiv.org/abs/2409.00127"
+   ]
+  },
+  "probe_url": "https://github.com/google-research/paper-orchestra"
+ },
+ "evaluator": {
+  "repo": "https://github.com/google-research/paper-orchestra",
+  "commit": "ca1b3fa01c2970fc7cda32d16245db38d57b3f56",
+  "dataset": "yiwen-song/PaperWritingBench",
+  "revision": "fbcfcafd042184ca954954b08dfcb92bd7942b51",
+  "paper_id": "iclr2025_adc0b83b44",
+  "venue": "iclr2025",
+  "paper_dir": "iclr2025/papers/iclr2025_adc0b83b44",
+  "idea": "idea_sparse.md",
+  "research_cutoff": "2024-10",
+  "prompt": "Single Agent (arXiv 2604.05018v1 App. F.1)",
+  "paper": "template.pdf"
+ },
+ "references": [
+  {
+   "name": "raw_materials/idea_dense.md",
+   "size": 7366,
+   "text": "## Problem Statement\nAccurate modeling of complex physical systems—such as weather forecasting or fluid dynamics—requires integrating observational data into Partial Differential Equation (PDE) or Machine Learning (ML) models, a process known as data assimilation. While traditional methods like the Ensemble Kalman Filter (EnKF) suffer from the \"curse of dimensionality\" in high-dimensional state spaces ($d \\gg 1$), the recently developed Ensemble Score Filter (EnSF) offers a promising alternative by leveraging score-based diffusion models to sample from posterior distributions.\n\nHowever, a critical technical gap exists in the current EnSF formulation. In practical applications, observations are highly **sparse** ($y_t \\in \\mathbb{R}^m$ where $m \\ll d$). When the observation map restricts information to a small subset of dimensions, the gradient of the log-likelihood function, $\\nabla_x \\log P(y_t | x_t)$, vanishes in the unobserved dimensions. This vanishing gradient prevents the EnSF from effectively updating the state in unobserved regions, rendering the method ineffective for real-world sparse data scenarios. We aim to solve the joint challenge of high-dimensional state estimation and high-sparsity observations.\n\n## Core Hypothesis\nWe propose **Latent-EnSF**, a novel architecture that performs data assimilation within a compressed latent space rather than the full state space. Our core hypothesis is that by training a **coupled Variational Autoencoder (VAE)** with dual encoders, we can map both the high-dimensional full state and the sparse observations into a consistent, low-dimensional latent representation.\n\nBy aligning these representations, we transform the sparse observation problem into a full-rank problem within the latent space. This allows the latent observation map to be approximated as an identity function, thereby preventing the vanishing gradient issue. We hypothesize that performing score-based diffusion sampling in this regularized latent space will enable accurate reconstruction of the full posterior state, maintaining the benefits of EnSF while overcoming its sparsity limitations.\n\n## Proposed Methodology (Detailed Technical Approach)\n\n### 1. Coupled VAE Architecture\nWe will construct a coupled VAE framework consisting of two distinct encoders and a shared decoder.\n*   **State Encoder ($\\mathcal{E}$):** Maps the full state $\\boldsymbol{x}_t \\in \\mathbb{R}^d$ to a latent distribution parameters $\\xi_t = (\\mu_t, \\sigma_t^2) \\in \\mathbb{R}^{2r}$.\n*   **Observation Encoder ($\\mathcal{E}_{\\mathrm{obs}}$):** Maps the sparse observation $\\boldsymbol{y}_t \\in \\mathbb{R}^m$ to latent distribution parameters $\\zeta_t = (\\mu_t^{\\mathrm{obs}}, (\\sigma_t^{\\mathrm{obs}})^2) \\in \\mathbb{R}^{2r}$.\n*   **Shared Decoder ($\\mathcal{D}$):** Reconstructs the full state from the latent variable $z \\in \\mathbb{R}^r$ back to $\\mathbb{R}^d$.\n\nThe latent variables are parameterized via the reparameterization trick:\n$$ z_t = \\mu_t + \\sigma_t \\cdot \\epsilon_t, \\quad z_t^{\\mathrm{obs}} = \\mu_t^{\\mathrm{obs}} + \\sigma_t^{\\mathrm{obs}} \\cdot \\epsilon_t $$\nwhere $\\epsilon_t \\sim N(0, I)$.\n\n### 2. Consistency Optimization\nTo ensure the latent representations of the full state and the sparse observations are consistent, we will minimize a compound loss function $\\ell_t(\\theta)$. This loss will enforce reconstruction accuracy, alignment between the two encoders, and KL-divergence regularization against a standard normal prior $\\nu = N(0, I_r)$.\n\nWe define the loss as:\n$$\n\\begin{aligned}\n\\ell_t(\\theta) = & \\lVert x_t - \\mathcal{D}(z_t) \\rVert_2^2 + \\lVert x_t - \\mathcal{D}(z_t^{\\mathrm{obs}}) \\rVert_2^2 \\\\\n& + \\lVert \\mathcal{E}(x_t) - \\mathcal{E}_{\\mathrm{obs}}(y_t) \\rVert_2^2 \\\\\n& + \\lambda D_{\\mathrm{KL}}(\\nu_t \\lVert \\nu) + \\lambda D_{\\mathrm{KL}}(\\nu_t^{\\mathrm{obs}} \\lVert \\nu)\n\\end{aligned}\n$$\nwhere $\\theta$ represents the network parameters, $\\nu_t$ and $\\nu_t^{\\mathrm{obs}}$ are the distributions defined by the encoders, and $\\lambda$ is a weighting parameter (set to $10^{-5}$).\n\n### 3. Latent Dynamics and Observation Maps\nWe will perform the Bayesian filtering update steps entirely within the latent space.\n*   **Latent Dynamics:** The evolution of the latent state $\\xi_t$ is approximated by encoding the evolution of the full dynamics:\n    $$ \\xi_t \\approx \\mathcal{E}(M(\\mathcal{D}(z_{t-1}(\\xi_{t-1})), \\varepsilon_t)) $$\n*   **Latent Observation:** Because the encoders are trained to align $\\mathcal{E}(x_t)$ and $\\mathcal{E}_{\\mathrm{obs}}(y_t)$, we approximate the latent observation map as an identity function with additive noise $\\hat{\\gamma}_t$:\n    $$ \\zeta_t \\approx \\xi_t + \\hat{\\gamma}_t $$\n    This approximation allows us to compute the likelihood gradient without automatic differentiation through the decoder, significantly accelerating the process.\n\n### 4. Latent Diffusion Sampling (The Update Step)\nWe will implement the update step using a score-based diffusion model on the latent variable $\\xi$. The diffusion process is defined by a reverse-time Stochastic Differential Equation (SDE):\n\n$$ d\\xi = [f(\\xi, \\tau) - g^2(\\tau) \\nabla_\\xi \\log P_\\tau(\\xi)] d\\tau + g(\\tau) d\\bar{w} $$\n\nwhere $\\tau \\in [0, T]$ is the diffusion time, $f$ is the drift term, and $g$ is the diffusion coefficient. We will define the posterior score $\\nabla_\\xi \\log P(\\xi_{t,\\tau} | \\zeta_{1:t})$ as:\n\n$$ \\nabla_\\xi \\log P(\\xi_{t,\\tau} | \\zeta_{1:t}) = \\nabla_\\xi \\log P(\\xi_{t,\\tau} | \\zeta_{1:t-1}) + h(\\tau) \\nabla_\\xi \\log P(\\zeta_t | \\xi_{t,\\tau}) $$\n\nHere, $h(\\tau)$ is a damping function (e.g., $1-\\tau$). The first term (prior score) is estimated via Monte Carlo sampling from the ensemble. The second term (likelihood score) utilizes the identity approximation derived in Section 3, ensuring non-vanishing gradients.\n\nTo handle numerical instability in the compact latent space, we will introduce a scaling factor $\\psi_{\\mathrm{latent}}$ (e.g., $\\psi_{\\mathrm{latent}}=20$) to rescale latent representations before applying the diffusion process.\n\n### 5. Algorithm Execution\nThe proposed execution flow for one time step $t$ is:\n1.  **Encode:** Convert prior ensemble $\\{x_{t-1}\\}$ to latent priors $\\{\\xi_{t-1}\\}$ and observation $y_t$ to latent observation $\\zeta_t$.\n2.  **Propagate:** Evolve latent priors via the approximate latent dynamics to obtain predicted latent ensemble $\\{\\xi_t\\}$.\n3.  **Diffuse:** Solve the reverse-time SDE from $\\tau=T$ to $0$ to generate posterior latent samples, utilizing the gradient of the latent likelihood.\n4.  **Decode:** Map the posterior latent samples back to the full state space: $x_t = \\mathcal{D}(z_t)$.\n\n## Expected Contribution\n1.  **Solution to Sparse Observation Failure:** By mapping sparse observations to a full-rank latent vector, we theoretically eliminate the vanishing gradient problem inherent in standard EnSF, enabling its use in real-world sparse data scenarios.\n2.  **Computational Efficiency:** The assimilation process (solving the SDE) occurs in a reduced dimension $2r \\ll d$. We expect this to significantly reduce computational cost compared to high-dimensional particle filters or standard EnSF.\n3.  **Unified Representation:** The coupled VAE provides a mathematically consistent framework for handling heterogeneous data sources (full state models vs. sparse sensors) within a single probabilistic manifold.",
+   "note": "the dense idea (the method that produced the experimental log)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gpt-5-2025-08-07.json",
+   "size": 22666,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Mark Asch, Marc Bocquet, and Ma\\u00a8elle Nodet. Data Assimilation. Society for Industrial and Ap- plied Mathematics, Philadelphia, PA, 2016. doi: 10.1137/1.9781611974546. URL https://epubs.siam.org/doi/abs/10.1137/1.9781611974546.\",\n            \"extracted_paper_title\": \"Data Assimilation\",\n            \"fetched_paper_id\": \"201b76815c9efc63b534b3c20c23423b72b6ec4f\",\n            \"fetched_paper_title\": \"The ERA\\u2010Interim reanalysis: configuration and performance of the data assimilation system\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Feng Bao, Hristo G. Chipilski, Siming Liang, Guannan Zhang, and Jeffrey S. Whitaker. Nonlinear ensemble filtering with diffusion models: Application to the surface quasi-geostrophic dynamics, 2024a. URL https://arxiv.org/abs/2404.00844.\",\n            \"extracted_paper_title\": \"Nonlinear ensemble filtering with diffusion models: Application to the surface quasi-geostrophic dynamics\",\n            \"fetched_paper_id\": \"55f4b9138b3b5ccddebc896d745d1fbef3eeb083\",\n            \"fetched_paper_title\": \"Nonlinear ensemble filtering with diffusion models: Application to the surface quasi-geostrophic dynamics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Feng Bao, Zezhong Zhang, and Guannan Zhang. An ensemble score filter for tracking high- dimensional nonlinear dynamical systems, 2024b. URL https://arxiv.org/abs/2309.00983.\",\n            \"extracted_paper_title\": \"An ensemble score filter for tracking high-dimensional nonlinear dynamical systems\",\n            \"fetched_paper_id\": \"116ca2fd9c6d899dcaf346524ab46f3b24ad8059\",\n            \"fetched_paper_title\": \"An Ensemble Score Filter for Tracking High-Dimensional Nonlinear Dynamical Systems\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Kaifeng Bi, Lingxi Xie, Hengheng Zhang, Xin Chen, Xiaotao Gu, and Qi Tian. Accurate medium- range global weather forecasting with 3d neural networks. Nature, 619(7970):533\\u2013538, 2023.\",\n            \"extracted_paper_title\": \"Accurate medium-range global weather forecasting with 3d neural networks\",\n            \"fetched_paper_id\": \"6a78c73c92d5e5d9759b46eff892baf1d6e83754\",\n            \"fetched_paper_title\": \"Accurate medium-range global weather forecasting with 3D neural networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Craig H. Bishop, Brian J. Etherton, and Sharanya J. Majumdar. Adaptive sampling with the ensemble transform kalman filter. part i: Theoretical aspects. Monthly Weather Re- view, 129(3):420 \\u2013 436, 2001. doi: 10.1175/1520-0493(2001)129\\u27e80420:ASWTET\\u27e92.0.CO;2. URL https://journals.ametsoc.org/view/journals/mwre/129/3/1520-0493_2001_129_0420_aswtet_2.0.co_2.xml.\",\n            \"extracted_paper_title\": \"Adaptive sampling with the ensemble transform kalman filter. part i: Theoretical aspects.\",\n            \"fetched_paper_id\": \"970f3696fedf3ac942a02e99402f4b7e6b38abb8\",\n            \"fetched_paper_title\": \"Multiscale verification calculations for regional ensemble forecasts\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Andreas Blattmann, Robin Rombach, Huan Ling, Tim Dockhorn, Seung Wook Kim, Sanja Fidler, and Karsten Kreis. Align your latents: High-resolution video synthesis with latent diffusion mod- els. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pp. 22563\\u201322575, June 2023.\",\n            \"extracted_paper_title\": \"Align your latents: High-resolution video synthesis with latent diffusion models.\",\n            \"fetched_paper_id\": \"f5a0c57f90c6abe31482e9f320ccac5ee789b135\",\n            \"fetched_paper_title\": \"Align Your Latents: High-Resolution Video Synthesis with Latent Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuming Chen, Daniel Sanz-Alonso, and Rebecca Willett. Reduced-order autodifferentiable ensem- ble kalman filters. Inverse Problems, 39(12):124001, 2023.\",\n            \"extracted_paper_title\": \"Reduced-order autodifferentiable ensemble kalman filters\",\n            \"fetched_paper_id\": \"0e4dca5d9349a2ea93b56bb22f509d9bf423601e\",\n            \"fetched_paper_title\": \"Reduced-order autodifferentiable ensemble Kalman filters\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Sibo Cheng, Jianhua Chen, Charitos Anastasiou, Panagiota Angeli, Omar K Matar, Yi-Ke Guo, Christopher C Pain, and Rossella Arcucci. Generalised latent assimilation in heterogeneous re- duced spaces with machine learning surrogate models. Journal of Scientific Computing, 94(1):11, 2023.\",\n            \"extracted_paper_title\": \"Generalised latent assimilation in heterogeneous reduced spaces with machine learning surrogate models\",\n            \"fetched_paper_id\": \"5d70299eb4057122866bb762820c86fb3255c80d\",\n            \"fetched_paper_title\": \"Generalised Latent Assimilation in Heterogeneous Reduced Spaces with Machine Learning Surrogate Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"R. Courant, K. Friedrichs, and H. Lewy. On the partial difference equations of mathematical physics. IBM J. Res. Dev., 11(2):215\\u2013234, mar 1967. ISSN 0018-8646. doi: 10.1147/rd.112.0215. URL https://doi.org/10.1147/rd.112.0215.\",\n            \"extracted_paper_title\": \"On the partial difference equations of mathematical physics\",\n            \"fetched_paper_id\": \"f623f28e57448218a44e2f16e2a5e5161b008ec0\",\n            \"fetched_paper_title\": \"On the Partial Difference Equations, of Mathematical Physics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Alessio Dore, Matteo Pinasco, and Carlo S. Regazzoni. Chapter 9 - multi-modal data fusion tech- niques and applications. In Hamid Aghajan and Andrea Cavallaro (eds.), Multi-Camera Net- works, pp. 213\\u2013237. Academic Press, Oxford, 2009. ISBN 978-0-12-374633-7. doi: https://doi.org/10.1016/B978-0-12-374633-7.00011-2. URL https://www.sciencedirect.com/science/article/pii/B9780123746337000112.\",\n            \"extracted_paper_title\": \"multi-modal data fusion techniques and applications\",\n            \"fetched_paper_id\": \"baad77d14e9bbdfc155ae2e229a7717b7b77784b\",\n            \"fetched_paper_title\": \"Multi-Modal Data Fusion Techniques and Applications\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Geir Evensen. Sequential data assimilation with a nonlinear quasi-geostrophic model using monte carlo methods to forecast error statistics. Journal of Geophysical Research: Oceans, 99(C5):10143\\u201310162, 1994.\",\n            \"extracted_paper_title\": \"Sequential data assimilation with a nonlinear quasi-geostrophic model using monte carlo methods to forecast error statistics.\",\n            \"fetched_paper_id\": \"a11cb7ada24599b2d4e200ac39fcaf72f77761a3\",\n            \"fetched_paper_title\": \"Sequential data assimilation with a nonlinear quasi\\u2010geostrophic model using Monte Carlo methods to forecast error statistics\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Hans Hersbach, Bill Bell, Paul Berrisford, Shoji Hirahara, Andr\\u00b4as Hor\\u00b4anyi, Joaqu\\u00b4\\u0131n Mu\\u02dcnoz- Sabater, Julien Nicolas, Carole Peubey, Raluca Radu, Dinand Schepers, Adrian Simmons, Cor- nel Soci, Saleh Abdalla, Xavier Abellan, Gianpaolo Balsamo, Peter Bechtold, Gionata Biavati, Jean Bidlot, Massimo Bonavita, Giovanna De Chiara, Per Dahlgren, Dick Dee, Michail Dia- mantakis, Rossana Dragani, Johannes Flemming, Richard Forbes, Manuel Fuentes, Alan Geer, Leo Haimberger, Sean Healy, Robin J. Hogan, El\\u00b4\\u0131as H\\u00b4olm, Marta Janiskov\\u00b4a, Sarah Keeley, Patrick Laloyaux, Philippe Lopez, Cristina Lupu, Gabor Radnoti, Patricia de Rosnay, Iryna Rozum, Freja Vamborg, Sebastien Villaume, and Jean-No\\u00a8el Th\\u00b4epaut. The era5 global reanal- ysis. Quarterly Journal of the Royal Meteorological Society, 146(730):1999\\u20132049, 2020. doi: https://doi.org/10.1002/qj.3803. URL https://rmets.onlinelibrary.wiley.com/doi/abs/10.1002/qj.3803.\",\n            \"extracted_paper_title\": \"The ERA5 global reanalysis\",\n            \"fetched_paper_id\": \"c83c465a770e5072445afee85b12ce82f0c36891\",\n            \"fetched_paper_title\": \"The ERA5 global reanalysis\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. Advances in Neural Information Processing Systems, 33:6840\\u20136851, 2020.\",\n            \"extracted_paper_title\": \"Denoising diffusion probabilistic models\",\n            \"fetched_paper_id\": \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n            \"fetched_paper_title\": \"Denoising Diffusion Probabilistic Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Langwen Huang, Lukas Gianinazzi, Yuejiang Yu, Peter D. Dueben, and Torsten Hoefler. Diffda: a diffusion model for weather-scale data assimilation, 2024. URL https://arxiv.org/abs/2401.05932.\",\n            \"extracted_paper_title\": \"Diffda: a diffusion model for weather-scale data assimilation\",\n            \"fetched_paper_id\": \"244d8dc93c0af56a4f9db9b474d5b3ed1793a995\",\n            \"fetched_paper_title\": \"DiffDA: a diffusion model for weather-scale data assimilation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Brian R. Hunt, Eric J. Kostelich, and Istvan Szunyogh. Efficient data assimilation for spatiotemporal chaos: A local ensemble transform kalman filter. Physica D: Nonlinear Phenomena, 230(1):112\\u2013126, 2007. ISSN 0167-2789. doi: https://doi.org/10.1016/j.physd.2006.11.008. URL https://www.sciencedirect.com/science/article/pii/S0167278906004647.\",\n            \"extracted_paper_title\": \"Efficient data assimilation for spatiotemporal chaos: A local ensemble transform kalman filter\",\n            \"fetched_paper_id\": \"f465f81c6547c8688b414fbb7786eaba52527567\",\n            \"fetched_paper_title\": \"Efficient data assimilation for spatiotemporal chaos: A local ensemble transform Kalman filter\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Data Assimilation. jostbr. shallow-water. https://github.com/jostbr/shallow-water, 2019.\",\n            \"extracted_paper_title\": \"Data Assimilation\",\n            \"fetched_paper_id\": \"201b76815c9efc63b534b3c20c23423b72b6ec4f\",\n            \"fetched_paper_title\": \"The ERA\\u2010Interim reanalysis: configuration and performance of the data assimilation system\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"R. E. Kalman. A New Approach to Linear Filtering and Prediction Problems. Journal of Basic Engineering, 82(1):35\\u201345, 03 1960. ISSN 0021-9223. doi: 10.1115/1.3662552. URL https://doi.org/10.1115/1.3662552.\",\n            \"extracted_paper_title\": \"A New Approach to Linear Filtering and Prediction Problems\",\n            \"fetched_paper_id\": \"255a77422b1da74da05d1714b7875356187385bd\",\n            \"fetched_paper_title\": \"A New Approach to Linear Filtering and Prediction Problems\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Diederik P Kingma and Max Welling. Auto-encoding variational bayes. International Conference on Learning Representations, 2014.\",\n            \"extracted_paper_title\": \"Auto-encoding variational bayes\",\n            \"fetched_paper_id\": \"ef4f5a50837a7c1b3e87b9300ffc7ba00d461a0f\",\n            \"fetched_paper_title\": \"AUTO-ENCODING VARIATIONAL BAYES\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Hans R. K\\u00a8unsch. Particle filters. Bernoulli, 19(4), September 2013. ISSN 1350-7265. doi: 10.3150/12-bejsp07. URL http://dx.doi.org/10.3150/12-BEJSP07.\",\n            \"extracted_paper_title\": \"Particle filters\",\n            \"fetched_paper_id\": \"7f0bbe9dd4aa3bfb8a355a2444f81848b020b7a4\",\n            \"fetched_paper_title\": \"A tutorial on particle filters for online nonlinear/non-Gaussian Bayesian tracking\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Remi Lam, Alvaro Sanchez-Gonzalez, Matthew Willson, Peter Wirnsberger, Meire Fortunato, Fer- ran Alet, Suman Ravuri, Timo Ewalds, Zach Eaton-Rosen, Weihua Hu, et al. Learning skillful medium-range global weather forecasting. Science, 382(6677):1416\\u20131421, 2023.\",\n            \"extracted_paper_title\": \"Learning skillful medium-range global weather forecasting\",\n            \"fetched_paper_id\": \"33ed3d9a505131daf631ca5fa1307e3aafdd3343\",\n            \"fetched_paper_title\": \"Learning skillful medium-range global weather forecasting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jaideep Pathak, Shashank Subramanian, Peter Harrington, Sanjeev Raja, Ashesh Chattopadhyay, Morteza Mardani, Thorsten Kurth, David Hall, Zongyi Li, Kamyar Azizzadenesheli, Pedram Hassanzadeh, Karthik Kashinath, and Animashree Anandkumar. Fourcastnet: A global data- driven high-resolution weather model using adaptive fourier neural operators, 2022. URL https://arxiv.org/abs/2202.11214.\",\n            \"extracted_paper_title\": \"Fourcastnet: A global data-driven high-resolution weather model using adaptive fourier neural operators\",\n            \"fetched_paper_id\": \"10194e9d1d6b8ca8870445c990d4933c1dac1125\",\n            \"fetched_paper_title\": \"FourCastNet: A Global Data-driven High-resolution Weather Model using Adaptive Fourier Neural Operators\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Florence Rabier and Zhiquan Liu. Variational data assimilation: theory and overview. In Proc. ECMWF Seminar on Recent Developments in Data Assimilation for Atmosphere and Ocean, Reading, UK, September 8\\u201312, pp. 29\\u201343, 2003.\",\n            \"extracted_paper_title\": \"Variational data assimilation: theory and overview\",\n            \"fetched_paper_id\": \"ada765500ebab7f8e8e7a11614d081fb7c493a5d\",\n            \"fetched_paper_title\": \"Variational Data Assimilation : Theory and Overview\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Bj\\u00a8orn Ommer. High- resolution image synthesis with latent diffusion models. In Proceedings of the IEEE/CVF Con- ference on Computer Vision and Pattern Recognition (CVPR), pp. 10684\\u201310695, June 2022.\",\n            \"extracted_paper_title\": \"High-resolution image synthesis with latent diffusion models\",\n            \"fetched_paper_id\": \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n            \"fetched_paper_title\": \"High-Resolution Image Synthesis with Latent Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Franc\\u00b8ois Rozet and Gilles Louppe. Score-based data assimilation. In Proceedings of the 37th International Conference on Neural Information Processing Systems, NIPS \\u201923, Red Hook, NY, USA, 2024. Curran Associates Inc.\",\n            \"extracted_paper_title\": \"Score-based data assimilation\",\n            \"fetched_paper_id\": \"4ee8c12311f05e5b4ae82c6f83cf067677d69e5c\",\n            \"fetched_paper_title\": \"Score-based Data Assimilation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Daniel Sanz-Alonso, Andrew Stuart, and Armeen Taeb. Inverse problems and data assimilation, volume 107. Cambridge University Press, 2023.\",\n            \"extracted_paper_title\": \"Inverse problems and data assimilation\",\n            \"fetched_paper_id\": \"824e5d6aaf35ee70361faa36b8b7047481182449\",\n            \"fetched_paper_title\": \"Inverse Problems and Data Assimilation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole. Score-based generative modeling through stochastic differential equations, 2021. URL https://arxiv.org/abs/2011.13456.\",\n            \"extracted_paper_title\": \"Score-based generative modeling through stochastic differential equations\",\n            \"fetched_paper_id\": \"633e2fbfc0b21e959a244100937c5853afca4853\",\n            \"fetched_paper_title\": \"Score-Based Generative Modeling through Stochastic Differential Equations\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Arash Vahdat, Karsten Kreis, and Jan Kautz. Score-based generative modeling in latent space. In M. Ranzato, A. Beygelzimer, Y. Dauphin, P.S. Liang, and J. Wortman Vaughan (eds.), Advances in Neural Information Processing Systems, volume 34, pp. 11287\\u201311302. Curran Associates, Inc., 2021. URL https://proceedings.neurips.cc/paper_files/paper/2021/file/5dca4c6b9e244d24a30b4c45601d9720-Paper.pdf.\",\n            \"extracted_paper_title\": \"Score-based generative modeling in latent space\",\n            \"fetched_paper_id\": \"ad14e11bc97cc2fed0fd344e7cb7d7ce4205bfc6\",\n            \"fetched_paper_title\": \"Score-based Generative Modeling in Latent Space\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Aaron Van Den Oord, Oriol Vinyals, et al. Neural discrete representation learning. Advances in neural information processing systems, 30, 2017.\",\n            \"extracted_paper_title\": \"Neural discrete representation learning\",\n            \"fetched_paper_id\": \"f466157848d1a7772fb6d02cdac9a7a5e7ef982e\",\n            \"fetched_paper_title\": \"Neural Discrete Representation Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"C.B. Vreugdenhil. Numerical Methods for Shallow-Water Flow. Water Science and Technology Li- brary. Springer Netherlands, 1994. ISBN 9780792331643. URL https://books.google.com/books?id=8uohwO1mgaEC.\",\n            \"extracted_paper_title\": \"Numerical Methods for Shallow-Water Flow\",\n            \"fetched_paper_id\": \"30c5cc51a7257d02b3e0acc7db0763658d2751e9\",\n            \"fetched_paper_title\": \"Numerical methods for shallow-water flow\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Pengpeng Xiao, Phillip Si, and Peng Chen. LD-EnSF: Synergizing latent dynamics with ensemble score filters for fast data assimilation with sparse observations. arXiv preprint arXiv:2411.19305, 2024.\",\n            \"extracted_paper_title\": \"LD-EnSF: Synergizing latent dynamics with ensemble score filters for fast data assimilation with sparse observations.\",\n            \"fetched_paper_id\": \"d2c5e6901454d9cedf813757489e0662263f7dd5\",\n            \"fetched_paper_title\": \"LD-EnSF: Synergizing Latent Dynamics with Ensemble Score Filters for Fast Data Assimilation with Sparse Observations\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shengjia Zhao, Jiaming Song, and Stefano Ermon. Infovae: Balancing learning and inference in variational autoencoders. In Proceedings of the aaai conference on artificial intelligence, vol- ume 33, pp. 5885\\u20135892, 2019.\",\n            \"extracted_paper_title\": \"Infovae: Balancing learning and inference in variational autoencoders\",\n            \"fetched_paper_id\": \"fc9d85cdbe303a41a6224f63527af47cda9d4bb0\",\n            \"fetched_paper_title\": \"InfoVAE: Balancing Learning and Inference in Variational Autoencoders\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"ad14e11bc97cc2fed0fd344e7cb7d7ce4205bfc6\",\n        \"f5a0c57f90c6abe31482e9f320ccac5ee789b135\",\n        \"f466157848d1a7772fb6d02cdac9a7a5e7ef982e\",\n        \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n        \"d2c5e6901454d9cedf813757489e0662263f7dd5\",\n        \"255a77422b1da74da05d1714b7875356187385bd\",\n        \"ef4f5a50837a7c1b3e87b9300ffc7ba00d461a0f\",\n        \"824e5d6aaf35ee70361faa36b8b7047481182449\",\n        \"33ed3d9a505131daf631ca5fa1307e3aafdd3343\",\n        \"baad77d14e9bbdfc155ae2e229a7717b7b77784b\",\n        \"4ee8c12311f05e5b4ae82c6f83cf067677d69e5c\",\n        \"6a78c73c92d5e5d9759b46eff892baf1d6e83754\",\n        \"244d8dc93c0af56a4f9db9b474d5b3ed1793a995\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"116ca2fd9c6d899dcaf346524ab46f3b24ad8059\",\n        \"10194e9d1d6b8ca8870445c990d4933c1dac1125\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"5d70299eb4057122866bb762820c86fb3255c80d\",\n        \"0e4dca5d9349a2ea93b56bb22f509d9bf423601e\",\n        \"fc9d85cdbe303a41a6224f63527af47cda9d4bb0\",\n        \"a11cb7ada24599b2d4e200ac39fcaf72f77761a3\",\n        \"f623f28e57448218a44e2f16e2a5e5161b008ec0\",\n        \"30c5cc51a7257d02b3e0acc7db0763658d2751e9\",\n        \"ada765500ebab7f8e8e7a11614d081fb7c493a5d\",\n        \"201b76815c9efc63b534b3c20c23423b72b6ec4f\",\n        \"55f4b9138b3b5ccddebc896d745d1fbef3eeb083\",\n        \"c83c465a770e5072445afee85b12ce82f0c36891\",\n        \"7f0bbe9dd4aa3bfb8a355a2444f81848b020b7a4\",\n        \"f465f81c6547c8688b414fbb7786eaba52527567\",\n        \"970f3696fedf3ac942a02e99402f4b7e6b38abb8\"\n    ],\n    \"all_ids_count\": 30,\n    \"p0_ids\": [\n        \"a11cb7ada24599b2d4e200ac39fcaf72f77761a3\",\n        \"116ca2fd9c6d899dcaf346524ab46f3b24ad8059\",\n        \"10194e9d1d6b8ca8870445c990d4933c1dac1125\",\n        \"ef4f5a50837a7c1b3e87b9300ffc7ba00d461a0f\",\n        \"c83c465a770e5072445afee85b12ce82f0c36891\",\n        \"f465f81c6547c8688b414fbb7786eaba52527567\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\"\n    ],\n    \"p0_ids_count\": 7,\n    \"p1_ids\": [\n        \"30c5cc51a7257d02b3e0acc7db0763658d2751e9\",\n        \"f623f28e57448218a44e2f16e2a5e5161b008ec0\",\n        \"201b76815c9efc63b534b3c20c23423b72b6ec4f\",\n        \"0e4dca5d9349a2ea93b56bb22f509d9bf423601e\",\n        \"55f4b9138b3b5ccddebc896d745d1fbef3eeb083\",\n        \"244d8dc93c0af56a4f9db9b474d5b3ed1793a995\",\n        \"d2c5e6901454d9cedf813757489e0662263f7dd5\",\n        \"ada765500ebab7f8e8e7a11614d081fb7c493a5d\",\n        \"255a77422b1da74da05d1714b7875356187385bd\",\n        \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"6a78c73c92d5e5d9759b46eff892baf1d6e83754\",\n        \"ad14e11bc97cc2fed0fd344e7cb7d7ce4205bfc6\",\n        \"824e5d6aaf35ee70361faa36b8b7047481182449\",\n        \"7f0bbe9dd4aa3bfb8a355a2444f81848b020b7a4\",\n        \"970f3696fedf3ac942a02e99402f4b7e6b38abb8\",\n        \"4ee8c12311f05e5b4ae82c6f83cf067677d69e5c\",\n        \"33ed3d9a505131daf631ca5fa1307e3aafdd3343\",\n        \"f466157848d1a7772fb6d02cdac9a7a5e7ef982e\",\n        \"baad77d14e9bbdfc155ae2e229a7717b7b77784b\",\n        \"fc9d85cdbe303a41a6224f63527af47cda9d4bb0\",\n        \"5d70299eb4057122866bb762820c86fb3255c80d\",\n        \"f5a0c57f90c6abe31482e9f320ccac5ee789b135\"\n    ],\n    \"p1_ids_count\": 23\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gemini-3.1-pro-preview.json",
+   "size": 22634,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Mark Asch, Marc Bocquet, and Ma\\u00a8elle Nodet. Data Assimilation. Society for Industrial and Applied Mathematics, Philadelphia, PA, 2016. doi: 10.1137/1.9781611974546. URL https://epubs.siam.org/doi/abs/10.1137/1.9781611974546.\",\n            \"extracted_paper_title\": \"Data Assimilation\",\n            \"fetched_paper_id\": \"201b76815c9efc63b534b3c20c23423b72b6ec4f\",\n            \"fetched_paper_title\": \"The ERA\\u2010Interim reanalysis: configuration and performance of the data assimilation system\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Feng Bao, Hristo G. Chipilski, Siming Liang, Guannan Zhang, and Jeffrey S. Whitaker. Nonlinear ensemble filtering with diffusion models: Application to the surface quasi-geostrophic dynamics, 2024a. URL https://arxiv.org/abs/2404.00844.\",\n            \"extracted_paper_title\": \"Nonlinear ensemble filtering with diffusion models: Application to the surface quasi-geostrophic dynamics\",\n            \"fetched_paper_id\": \"55f4b9138b3b5ccddebc896d745d1fbef3eeb083\",\n            \"fetched_paper_title\": \"Nonlinear ensemble filtering with diffusion models: Application to the surface quasi-geostrophic dynamics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Feng Bao, Zezhong Zhang, and Guannan Zhang. An ensemble score filter for tracking high-dimensional nonlinear dynamical systems, 2024b. URL https://arxiv.org/abs/2309.00983.\",\n            \"extracted_paper_title\": \"An ensemble score filter for tracking high-dimensional nonlinear dynamical systems\",\n            \"fetched_paper_id\": \"116ca2fd9c6d899dcaf346524ab46f3b24ad8059\",\n            \"fetched_paper_title\": \"An Ensemble Score Filter for Tracking High-Dimensional Nonlinear Dynamical Systems\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Kaifeng Bi, Lingxi Xie, Hengheng Zhang, Xin Chen, Xiaotao Gu, and Qi Tian. Accurate medium-range global weather forecasting with 3d neural networks. Nature, 619(7970):533\\u2013538, 2023.\",\n            \"extracted_paper_title\": \"Accurate medium-range global weather forecasting with 3d neural networks\",\n            \"fetched_paper_id\": \"6a78c73c92d5e5d9759b46eff892baf1d6e83754\",\n            \"fetched_paper_title\": \"Accurate medium-range global weather forecasting with 3D neural networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Craig H. Bishop, Brian J. Etherton, and Sharanya J. Majumdar. Adaptive sampling with the ensemble transform kalman filter. part i: Theoretical aspects. Monthly Weather Review, 129(3):420 \\u2013 436, 2001. doi: 10.1175/1520-0493(2001)129\\u27e80420:ASWTET\\u27e92.0.CO;2. URL https://journals.ametsoc.org/view/journals/mwre/129/3/1520-0493_2001_129_0420_aswtet_2.0.co_2.xml.\",\n            \"extracted_paper_title\": \"Adaptive sampling with the ensemble transform kalman filter. part i: Theoretical aspects.\",\n            \"fetched_paper_id\": \"970f3696fedf3ac942a02e99402f4b7e6b38abb8\",\n            \"fetched_paper_title\": \"Multiscale verification calculations for regional ensemble forecasts\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Andreas Blattmann, Robin Rombach, Huan Ling, Tim Dockhorn, Seung Wook Kim, Sanja Fidler, and Karsten Kreis. Align your latents: High-resolution video synthesis with latent diffusion models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pp. 22563\\u201322575, June 2023.\",\n            \"extracted_paper_title\": \"Align your latents: High-resolution video synthesis with latent diffusion models\",\n            \"fetched_paper_id\": \"f5a0c57f90c6abe31482e9f320ccac5ee789b135\",\n            \"fetched_paper_title\": \"Align Your Latents: High-Resolution Video Synthesis with Latent Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yuming Chen, Daniel Sanz-Alonso, and Rebecca Willett. Reduced-order autodifferentiable ensemble kalman filters. Inverse Problems, 39(12):124001, 2023.\",\n            \"extracted_paper_title\": \"Reduced-order autodifferentiable ensemble kalman filters\",\n            \"fetched_paper_id\": \"0e4dca5d9349a2ea93b56bb22f509d9bf423601e\",\n            \"fetched_paper_title\": \"Reduced-order autodifferentiable ensemble Kalman filters\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Sibo Cheng, Jianhua Chen, Charitos Anastasiou, Panagiota Angeli, Omar K Matar, Yi-Ke Guo, Christopher C Pain, and Rossella Arcucci. Generalised latent assimilation in heterogeneous reduced spaces with machine learning surrogate models. Journal of Scientific Computing, 94(1):11, 2023.\",\n            \"extracted_paper_title\": \"Generalised latent assimilation in heterogeneous reduced spaces with machine learning surrogate models.\",\n            \"fetched_paper_id\": \"5d70299eb4057122866bb762820c86fb3255c80d\",\n            \"fetched_paper_title\": \"Generalised Latent Assimilation in Heterogeneous Reduced Spaces with Machine Learning Surrogate Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"R. Courant, K. Friedrichs, and H. Lewy. On the partial difference equations of mathematical physics. IBM J. Res. Dev., 11(2):215\\u2013234, mar 1967. ISSN 0018-8646. doi: 10.1147/rd.112.0215. URL https://doi.org/10.1147/rd.112.0215.\",\n            \"extracted_paper_title\": \"On the partial difference equations of mathematical physics\",\n            \"fetched_paper_id\": \"f623f28e57448218a44e2f16e2a5e5161b008ec0\",\n            \"fetched_paper_title\": \"On the Partial Difference Equations, of Mathematical Physics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Alessio Dore, Matteo Pinasco, and Carlo S. Regazzoni. Chapter 9 - multi-modal data fusion techniques and applications. In Hamid Aghajan and Andrea Cavallaro (eds.), Multi-Camera Networks, pp. 213\\u2013237. Academic Press, Oxford, 2009. ISBN 978-0-12-374633-7. doi: https://doi.org/10.1016/B978-0-12-374633-7.00011-2. URL https://www.sciencedirect.com/science/article/pii/B9780123746337000112.\",\n            \"extracted_paper_title\": \"Multi-modal data fusion techniques and applications\",\n            \"fetched_paper_id\": \"baad77d14e9bbdfc155ae2e229a7717b7b77784b\",\n            \"fetched_paper_title\": \"Multi-Modal Data Fusion Techniques and Applications\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Geir Evensen. Sequential data assimilation with a nonlinear quasi-geostrophic model using monte carlo methods to forecast error statistics. Journal of Geophysical Research: Oceans, 99(C5): 10143\\u201310162, 1994.\",\n            \"extracted_paper_title\": \"Sequential data assimilation with a nonlinear quasi-geostrophic model using monte carlo methods to forecast error statistics\",\n            \"fetched_paper_id\": \"a11cb7ada24599b2d4e200ac39fcaf72f77761a3\",\n            \"fetched_paper_title\": \"Sequential data assimilation with a nonlinear quasi\\u2010geostrophic model using Monte Carlo methods to forecast error statistics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hans Hersbach, Bill Bell, Paul Berrisford, Shoji Hirahara, Andr\\u00b4as Hor\\u00b4anyi, Joaqu\\u00b4\\u0131n Mu\\u02dcnoz-Sabater, Julien Nicolas, Carole Peubey, Raluca Radu, Dinand Schepers, Adrian Simmons, Cornel Soci, Saleh Abdalla, Xavier Abellan, Gianpaolo Balsamo, Peter Bechtold, Gionata Biavati, Jean Bidlot, Massimo Bonavita, Giovanna De Chiara, Per Dahlgren, Dick Dee, Michail Diamantakis, Rossana Dragani, Johannes Flemming, Richard Forbes, Manuel Fuentes, Alan Geer, Leo Haimberger, Sean Healy, Robin J. Hogan, El\\u00b4\\u0131as H\\u00b4olm, Marta Janiskov\\u00b4a, Sarah Keeley, Patrick Laloyaux, Philippe Lopez, Cristina Lupu, Gabor Radnoti, Patricia de Rosnay, Iryna Rozum, Freja Vamborg, Sebastien Villaume, and Jean-No\\u00a8el Th\\u00b4epaut. The era5 global reanalysis. Quarterly Journal of the Royal Meteorological Society, 146(730):1999\\u20132049, 2020. doi: https://doi.org/10.1002/qj.3803. URL https://rmets.onlinelibrary.wiley.com/doi/abs/10.1002/qj.3803.\",\n            \"extracted_paper_title\": \"The era5 global reanalysis\",\n            \"fetched_paper_id\": \"c83c465a770e5072445afee85b12ce82f0c36891\",\n            \"fetched_paper_title\": \"The ERA5 global reanalysis\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. Advances in Neural Information Processing Systems, 33:6840\\u20136851, 2020.\",\n            \"extracted_paper_title\": \"Denoising diffusion probabilistic models\",\n            \"fetched_paper_id\": \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n            \"fetched_paper_title\": \"Denoising Diffusion Probabilistic Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Langwen Huang, Lukas Gianinazzi, Yuejiang Yu, Peter D. Dueben, and Torsten Hoefler. Diffda: a diffusion model for weather-scale data assimilation, 2024. URL https://arxiv.org/abs/2401.05932.\",\n            \"extracted_paper_title\": \"Diffda: a diffusion model for weather-scale data assimilation\",\n            \"fetched_paper_id\": \"244d8dc93c0af56a4f9db9b474d5b3ed1793a995\",\n            \"fetched_paper_title\": \"DiffDA: a diffusion model for weather-scale data assimilation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Brian R. Hunt, Eric J. Kostelich, and Istvan Szunyogh. Efficient data assimilation for spatiotemporal chaos: A local ensemble transform kalman filter. Physica D: Nonlinear Phenomena, 230(1):112\\u2013126, 2007. ISSN 0167-2789. doi: https://doi.org/10.1016/j.physd.2006.11.008. URL https://www.sciencedirect.com/science/article/pii/S0167278906004647.\",\n            \"extracted_paper_title\": \"Efficient data assimilation for spatiotemporal chaos: A local ensemble transform kalman filter\",\n            \"fetched_paper_id\": \"f465f81c6547c8688b414fbb7786eaba52527567\",\n            \"fetched_paper_title\": \"Efficient data assimilation for spatiotemporal chaos: A local ensemble transform Kalman filter\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Data Assimilation. jostbr. shallow-water. https://github.com/jostbr/shallow-water, 2019.\",\n            \"extracted_paper_title\": \"Data Assimilation\",\n            \"fetched_paper_id\": \"201b76815c9efc63b534b3c20c23423b72b6ec4f\",\n            \"fetched_paper_title\": \"The ERA\\u2010Interim reanalysis: configuration and performance of the data assimilation system\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"R. E. Kalman. A New Approach to Linear Filtering and Prediction Problems. Journal of Basic Engineering, 82(1):35\\u201345, 03 1960. ISSN 0021-9223. doi: 10.1115/1.3662552. URL https://doi.org/10.1115/1.3662552.\",\n            \"extracted_paper_title\": \"A New Approach to Linear Filtering and Prediction Problems\",\n            \"fetched_paper_id\": \"255a77422b1da74da05d1714b7875356187385bd\",\n            \"fetched_paper_title\": \"A New Approach to Linear Filtering and Prediction Problems\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Diederik P Kingma and Max Welling. Auto-encoding variational bayes. International Conference on Learning Representations, 2014.\",\n            \"extracted_paper_title\": \"Auto-encoding variational bayes\",\n            \"fetched_paper_id\": \"ef4f5a50837a7c1b3e87b9300ffc7ba00d461a0f\",\n            \"fetched_paper_title\": \"AUTO-ENCODING VARIATIONAL BAYES\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Hans R. K\\u00a8unsch. Particle filters. Bernoulli, 19(4), September 2013. ISSN 1350-7265. doi: 10.3150/12-bejsp07. URL http://dx.doi.org/10.3150/12-BEJSP07.\",\n            \"extracted_paper_title\": \"Particle filters\",\n            \"fetched_paper_id\": \"7f0bbe9dd4aa3bfb8a355a2444f81848b020b7a4\",\n            \"fetched_paper_title\": \"A tutorial on particle filters for online nonlinear/non-Gaussian Bayesian tracking\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Remi Lam, Alvaro Sanchez-Gonzalez, Matthew Willson, Peter Wirnsberger, Meire Fortunato, Ferran Alet, Suman Ravuri, Timo Ewalds, Zach Eaton-Rosen, Weihua Hu, et al. Learning skillful medium-range global weather forecasting. Science, 382(6677):1416\\u20131421, 2023.\",\n            \"extracted_paper_title\": \"Learning skillful medium-range global weather forecasting\",\n            \"fetched_paper_id\": \"33ed3d9a505131daf631ca5fa1307e3aafdd3343\",\n            \"fetched_paper_title\": \"Learning skillful medium-range global weather forecasting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jaideep Pathak, Shashank Subramanian, Peter Harrington, Sanjeev Raja, Ashesh Chattopadhyay, Morteza Mardani, Thorsten Kurth, David Hall, Zongyi Li, Kamyar Azizzadenesheli, Pedram Hassanzadeh, Karthik Kashinath, and Animashree Anandkumar. Fourcastnet: A global data-driven high-resolution weather model using adaptive fourier neural operators, 2022. URL https://arxiv.org/abs/2202.11214.\",\n            \"extracted_paper_title\": \"Fourcastnet: A global data-driven high-resolution weather model using adaptive fourier neural operators\",\n            \"fetched_paper_id\": \"10194e9d1d6b8ca8870445c990d4933c1dac1125\",\n            \"fetched_paper_title\": \"FourCastNet: A Global Data-driven High-resolution Weather Model using Adaptive Fourier Neural Operators\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Florence Rabier and Zhiquan Liu. Variational data assimilation: theory and overview. In Proc. ECMWF Seminar on Recent Developments in Data Assimilation for Atmosphere and Ocean, Reading, UK, September 8\\u201312, pp. 29\\u201343, 2003.\",\n            \"extracted_paper_title\": \"Variational data assimilation: theory and overview.\",\n            \"fetched_paper_id\": \"ada765500ebab7f8e8e7a11614d081fb7c493a5d\",\n            \"fetched_paper_title\": \"Variational Data Assimilation : Theory and Overview\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Bj\\u00a8orn Ommer. High-resolution image synthesis with latent diffusion models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pp. 10684\\u201310695, June 2022.\",\n            \"extracted_paper_title\": \"High-resolution image synthesis with latent diffusion models\",\n            \"fetched_paper_id\": \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n            \"fetched_paper_title\": \"High-Resolution Image Synthesis with Latent Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Franc\\u00b8ois Rozet and Gilles Louppe. Score-based data assimilation. In Proceedings of the 37th International Conference on Neural Information Processing Systems, NIPS \\u201923, Red Hook, NY, USA, 2024. Curran Associates Inc.\",\n            \"extracted_paper_title\": \"Score-based data assimilation\",\n            \"fetched_paper_id\": \"4ee8c12311f05e5b4ae82c6f83cf067677d69e5c\",\n            \"fetched_paper_title\": \"Score-based Data Assimilation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Daniel Sanz-Alonso, Andrew Stuart, and Armeen Taeb. Inverse problems and data assimilation, volume 107. Cambridge University Press, 2023.\",\n            \"extracted_paper_title\": \"Inverse problems and data assimilation\",\n            \"fetched_paper_id\": \"824e5d6aaf35ee70361faa36b8b7047481182449\",\n            \"fetched_paper_title\": \"Inverse Problems and Data Assimilation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole. Score-based generative modeling through stochastic differential equations, 2021. URL https://arxiv.org/abs/2011.13456.\",\n            \"extracted_paper_title\": \"Score-based generative modeling through stochastic differential equations\",\n            \"fetched_paper_id\": \"633e2fbfc0b21e959a244100937c5853afca4853\",\n            \"fetched_paper_title\": \"Score-Based Generative Modeling through Stochastic Differential Equations\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Arash Vahdat, Karsten Kreis, and Jan Kautz. Score-based generative modeling in latent space. In M. Ranzato, A. Beygelzimer, Y. Dauphin, P.S. Liang, and J. Wortman Vaughan (eds.), Advances in Neural Information Processing Systems, volume 34, pp. 11287\\u201311302. Curran Associates, Inc., 2021. URL https://proceedings.neurips.cc/paper_files/paper/2021/file/5dca4c6b9e244d24a30b4c45601d9720-Paper.pdf.\",\n            \"extracted_paper_title\": \"Score-based generative modeling in latent space\",\n            \"fetched_paper_id\": \"ad14e11bc97cc2fed0fd344e7cb7d7ce4205bfc6\",\n            \"fetched_paper_title\": \"Score-based Generative Modeling in Latent Space\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Aaron Van Den Oord, Oriol Vinyals, et al. Neural discrete representation learning. Advances in neural information processing systems, 30, 2017.\",\n            \"extracted_paper_title\": \"Neural discrete representation learning\",\n            \"fetched_paper_id\": \"f466157848d1a7772fb6d02cdac9a7a5e7ef982e\",\n            \"fetched_paper_title\": \"Neural Discrete Representation Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"C.B. Vreugdenhil. Numerical Methods for Shallow-Water Flow. Water Science and Technology Library. Springer Netherlands, 1994. ISBN 9780792331643. URL https://books.google.com/books?id=8uohwO1mgaEC.\",\n            \"extracted_paper_title\": \"Numerical Methods for Shallow-Water Flow\",\n            \"fetched_paper_id\": \"30c5cc51a7257d02b3e0acc7db0763658d2751e9\",\n            \"fetched_paper_title\": \"Numerical methods for shallow-water flow\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Pengpeng Xiao, Phillip Si, and Peng Chen. LD-EnSF: Synergizing latent dynamics with ensemble score filters for fast data assimilation with sparse observations. arXiv preprint arXiv:2411.19305, 2024.\",\n            \"extracted_paper_title\": \"LD-EnSF: Synergizing latent dynamics with ensemble score filters for fast data assimilation with sparse observations.\",\n            \"fetched_paper_id\": \"d2c5e6901454d9cedf813757489e0662263f7dd5\",\n            \"fetched_paper_title\": \"LD-EnSF: Synergizing Latent Dynamics with Ensemble Score Filters for Fast Data Assimilation with Sparse Observations\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shengjia Zhao, Jiaming Song, and Stefano Ermon. Infovae: Balancing learning and inference in variational autoencoders. In Proceedings of the aaai conference on artificial intelligence, volume 33, pp. 5885\\u20135892, 2019.\",\n            \"extracted_paper_title\": \"Infovae: Balancing learning and inference in variational autoencoders\",\n            \"fetched_paper_id\": \"fc9d85cdbe303a41a6224f63527af47cda9d4bb0\",\n            \"fetched_paper_title\": \"InfoVAE: Balancing Learning and Inference in Variational Autoencoders\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"f623f28e57448218a44e2f16e2a5e5161b008ec0\",\n        \"4ee8c12311f05e5b4ae82c6f83cf067677d69e5c\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"970f3696fedf3ac942a02e99402f4b7e6b38abb8\",\n        \"ad14e11bc97cc2fed0fd344e7cb7d7ce4205bfc6\",\n        \"5d70299eb4057122866bb762820c86fb3255c80d\",\n        \"824e5d6aaf35ee70361faa36b8b7047481182449\",\n        \"ada765500ebab7f8e8e7a11614d081fb7c493a5d\",\n        \"d2c5e6901454d9cedf813757489e0662263f7dd5\",\n        \"10194e9d1d6b8ca8870445c990d4933c1dac1125\",\n        \"f5a0c57f90c6abe31482e9f320ccac5ee789b135\",\n        \"116ca2fd9c6d899dcaf346524ab46f3b24ad8059\",\n        \"a11cb7ada24599b2d4e200ac39fcaf72f77761a3\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"fc9d85cdbe303a41a6224f63527af47cda9d4bb0\",\n        \"33ed3d9a505131daf631ca5fa1307e3aafdd3343\",\n        \"f465f81c6547c8688b414fbb7786eaba52527567\",\n        \"6a78c73c92d5e5d9759b46eff892baf1d6e83754\",\n        \"c83c465a770e5072445afee85b12ce82f0c36891\",\n        \"244d8dc93c0af56a4f9db9b474d5b3ed1793a995\",\n        \"f466157848d1a7772fb6d02cdac9a7a5e7ef982e\",\n        \"baad77d14e9bbdfc155ae2e229a7717b7b77784b\",\n        \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n        \"55f4b9138b3b5ccddebc896d745d1fbef3eeb083\",\n        \"7f0bbe9dd4aa3bfb8a355a2444f81848b020b7a4\",\n        \"30c5cc51a7257d02b3e0acc7db0763658d2751e9\",\n        \"ef4f5a50837a7c1b3e87b9300ffc7ba00d461a0f\",\n        \"255a77422b1da74da05d1714b7875356187385bd\",\n        \"0e4dca5d9349a2ea93b56bb22f509d9bf423601e\",\n        \"201b76815c9efc63b534b3c20c23423b72b6ec4f\"\n    ],\n    \"all_ids_count\": 30,\n    \"p0_ids\": [\n        \"30c5cc51a7257d02b3e0acc7db0763658d2751e9\",\n        \"ef4f5a50837a7c1b3e87b9300ffc7ba00d461a0f\",\n        \"10194e9d1d6b8ca8870445c990d4933c1dac1125\",\n        \"f465f81c6547c8688b414fbb7786eaba52527567\",\n        \"c83c465a770e5072445afee85b12ce82f0c36891\",\n        \"201b76815c9efc63b534b3c20c23423b72b6ec4f\",\n        \"116ca2fd9c6d899dcaf346524ab46f3b24ad8059\"\n    ],\n    \"p0_ids_count\": 7,\n    \"p1_ids\": [\n        \"f623f28e57448218a44e2f16e2a5e5161b008ec0\",\n        \"4ee8c12311f05e5b4ae82c6f83cf067677d69e5c\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"970f3696fedf3ac942a02e99402f4b7e6b38abb8\",\n        \"ad14e11bc97cc2fed0fd344e7cb7d7ce4205bfc6\",\n        \"5d70299eb4057122866bb762820c86fb3255c80d\",\n        \"824e5d6aaf35ee70361faa36b8b7047481182449\",\n        \"ada765500ebab7f8e8e7a11614d081fb7c493a5d\",\n        \"d2c5e6901454d9cedf813757489e0662263f7dd5\",\n        \"f5a0c57f90c6abe31482e9f320ccac5ee789b135\",\n        \"a11cb7ada24599b2d4e200ac39fcaf72f77761a3\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"fc9d85cdbe303a41a6224f63527af47cda9d4bb0\",\n        \"33ed3d9a505131daf631ca5fa1307e3aafdd3343\",\n        \"6a78c73c92d5e5d9759b46eff892baf1d6e83754\",\n        \"244d8dc93c0af56a4f9db9b474d5b3ed1793a995\",\n        \"f466157848d1a7772fb6d02cdac9a7a5e7ef982e\",\n        \"baad77d14e9bbdfc155ae2e229a7717b7b77784b\",\n        \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n        \"55f4b9138b3b5ccddebc896d745d1fbef3eeb083\",\n        \"7f0bbe9dd4aa3bfb8a355a2444f81848b020b7a4\",\n        \"255a77422b1da74da05d1714b7875356187385bd\",\n        \"0e4dca5d9349a2ea93b56bb22f509d9bf423601e\"\n    ],\n    \"p1_ids_count\": 23\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  },
+  {
+   "name": "iclr2025_adc0b83b44.pdf",
+   "size": 3322066,
+   "text": null,
+   "note": "the original paper",
+   "file_reason": "not-in-batch"
+  }
+ ],
+ "conditions": [
+  {
+   "name": "RW-opus",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-sonnet",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-mixed",
+   "system": "researchworld",
+   "agent": null,
+   "provider": null,
+   "model": null,
+   "effort": null,
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "mixed",
+     "name": "Antigravity (Gemini) + Claude Code + Codex CLI",
+     "version": "antigravity agy_acp_server 1.4.1; claude-code @anthropic-ai/claude-agent-sdk 0.3.300; codex @openai/codex 0.163.0",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container; roles use antigravity, claude-code, codex"
+    },
+    "model": {
+     "provider": "per role",
+     "model": "per role",
+     "effort": "per role"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "codex",
+      "agent_name": "Codex CLI",
+      "agent_version": "@openai/codex 0.163.0",
+      "how": "codex-acp",
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "CC-opus",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CC-sonnet",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-astra",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6-astra",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6-astra",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-sol",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6.1-sol",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-opus",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-sonnet",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-opus",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-opus-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-sonnet",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-sonnet-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-opus",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-sonnet",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  }
+ ],
+ "batches": [],
+ "runs": []
+}

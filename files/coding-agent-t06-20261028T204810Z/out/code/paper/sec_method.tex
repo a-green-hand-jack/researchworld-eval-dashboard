@@ -1,0 +1,52 @@
+\section{Problem setup and method}
+\label{sec:method}
+
+\paragraph{Leaderboard model.}
+A dataset is a multiset of $N$ comparisons $(a_n,b_n,y_n)$ between entities $a_n\neq b_n\in\{1,\dots,m\}$ with outcome $y_n\in\{0,\tfrac12,1\}$ for $a_n$ (ties count as half a win for each side, the convention of the public Arena notebooks).
+We fit the Bradley--Terry (BT) model~\citep{bradley1952rank} $\Pr(a\succ b)=\sigma(\theta_a-\theta_b+\eta h)$, where $h=1$ marks a home game (sports only; $\eta$ is a home-advantage parameter, otherwise absent), by maximising the log-likelihood with a negligible ridge $\tfrac{\lambda}{2}\|\theta\|^2$, $\lambda=10^{-2}$, which only pins down the translation ($\sum_a\theta_a=0$).
+Comparisons with identical $(a,b,h,y)$ are exchangeable, so we store \emph{cell counts}; a Newton solver with line search fits any of our datasets in milliseconds.
+The leaderboard is the order of $\hat\theta$.
+For LLM datasets we drop (iteratively) entities with fewer than 100 comparisons, as public leaderboards do not rank models with very few votes (ablated in \S\ref{sec:ablations}).
+
+\paragraph{Conclusions and perturbations.}
+The atomic conclusion is a \emph{pairwise order}: entity $i$ is ranked above $j$, i.e.\ $\hat\Delta_{ij}=\hat\theta_i-\hat\theta_j>0$.
+Leaderboard-level conclusions are minima over pairs: the \emph{top-1} conclusion is overturned as soon as any challenger overtakes the leader, and the \emph{top-5 set} changes as soon as some $j$ outside the top~5 overtakes some $i$ inside.
+We consider three perturbation families, all counted in individual comparisons:
+\textbf{drop} (delete $k$ existing comparisons; data cleaning, filtering, or the worst case of sampling variation),
+\textbf{flip} (change the recorded outcome of $k$ existing comparisons; mislabelling or a compromised annotator),
+and \textbf{inject} (add $k$ new comparisons with adversarially chosen pair and outcome; vote rigging~\citep{min2025improving}).
+The \emph{budget} $k^\star_{\text{type}}(i,j)$ is the smallest $k$ for which the refitted model has $\hat\theta_j>\hat\theta_i$.
+
+\paragraph{First-order structure.}
+Let $H$ be the negative Hessian of the penalised log-likelihood at $\hat\theta$, $u=H^{-1}(e_i-e_j)$, $x_n=e_{a_n}-e_{b_n}(+h_n e_\eta)$, $s_n=u^\top x_n$, $p_n=\sigma(x_n^\top\hat\theta)$ and residual $r_n=y_n-p_n$.
+A one-step Newton (influence-function~\citep{hampel1974influence,cook1977detection,koh2017understanding}) expansion gives the change of $\hat\Delta_{ij}$ caused by one unit of each action:
+\begin{equation}
+\delta^{\text{drop}}_n=-s_n r_n,\qquad
+\delta^{\text{flip}}_{n\to y'}=s_n(y'-y_n),\qquad
+\delta^{\text{inject}}_{(x,y)}=u^\top x\,(y-p_x).
+\label{eq:influence}
+\end{equation}
+Under this linearisation the optimal $k$ is obtained by sorting actions by $\delta$ and taking the most negative ones until their sum exceeds $\hat\Delta_{ij}$; for deletions this is the approximate maximum influence perturbation of \citet{broderick2020automatic}.
+The same quantities give the sandwich (bootstrap-consistent) standard error $\widehat{\mathrm{SE}}^2_{ij}=\sum_n s_n^2r_n^2$ and the standardised gap $z_{ij}=\hat\Delta_{ij}/\widehat{\mathrm{SE}}_{ij}$.
+(The model-based SE $\sqrt{(e_i-e_j)^\top H^{-1}(e_i-e_j)}$ overstates uncertainty when ties are frequent, because a tie has residual $\approx 0$; we use the sandwich SE throughout and check it against the bootstrap.)
+
+\paragraph{Greedy search with exact refits.}
+The linearisation degrades as $k$ grows (removing influential comparisons removes information, which makes the remaining ones more influential), so we never report linear predictions.
+Instead we iterate: compute~\eqref{eq:influence} at the current fit, compute the linear prediction $q$ of the units still needed, apply the best $\lceil q/2\rceil$ units, refit exactly, and repeat; when $q\le 3$ we switch to an exact one-step lookahead over the 25 best candidate units; once $\hat\theta_j>\hat\theta_i$ we try to undo single units while keeping the reversal (pruning).
+Every reported budget is thus a \emph{verified} perturbation, i.e.\ an upper bound on the true minimum $k^\star$.
+On 144 random small instances where exhaustive search is possible, greedy matched the exact minimum in 108/110 decided drop cases and 125/125 flip cases (App.~\ref{app:validation}); the median relative error of~\eqref{eq:influence} for single deletions is below $0.2\%$ on Arena and MT-Bench and $3\%$ on NBA.
+
+\paragraph{A fragility law.}
+Write $\ell_n=s_nr_n$ for the deletion leverage. Since $\widehat{\mathrm{SE}}^2=\sum_n\ell_n^2$, the linearised deletion budget satisfies the identity
+$k_{\mathrm{lin}}=z\sqrt{N_{\mathrm{eff}}}$ with $N_{\mathrm{eff}}=\sum_n\ell_n^2/\bar\ell_k^{\,2}$, where $\bar\ell_k$ is the mean leverage of the deleted set.
+$N_{\mathrm{eff}}$ is interpretable under a ``diagonal-information'' approximation $H\approx\mathrm{diag}(n_a\bar v)$, where $n_a$ is the number of comparisons of entity $a$ and $\bar v$ the average Bernoulli variance: a comparison of $i$ then has leverage $r/(n_i\bar v)$, so $\widehat{\mathrm{SE}}^2\approx\sigma_r^2/(\bar v^2 n_h)$ with $n_h=n_in_j/(n_i+n_j)$ (half the harmonic mean of the two entities' comparison counts) and $\sigma_r^2$ the mean squared residual. An adversary deleting comparisons with residual $\rho$ from the less-sampled side then needs
+\begin{equation}
+k^\star\;\approx\;\underbrace{\frac{\sigma_r}{\rho}}_{C}\;z_{ij}\,\frac{n_{\min}}{\sqrt{n_h}}\;\in\;C\,z_{ij}\sqrt{n_h}\,[1,\sqrt2],
+\qquad\text{equivalently}\qquad
+\frac{k^\star}{N}\approx\frac{\bar v}{\rho}\,\hat\Delta_{ij}\,\frac{n_{\min}}{N}.
+\label{eq:law}
+\end{equation}
+For balanced decisive outcomes ($p\approx\tfrac12$, no ties) $C\approx1$; ties lower $\sigma_r$ (a tie at $p=\tfrac12$ has zero residual, $C\approx\sqrt{1-\tau}$ for tie rate $\tau$), and lopsided pairs let the adversary target upsets with $\rho\to1$, also lowering $C$.
+A flip moves $y$ by a full unit instead of $|r|\approx\tfrac12$, so $k^\star_{\text{flip}}\approx k^\star_{\text{drop}}/2$; an injected win of $j$ over a strong opponent has residual $1-p$, so $k^\star_{\text{inject}}\lesssim k^\star_{\text{drop}}$.
+Eq.~\eqref{eq:law} makes two predictions that we test: (i) budgets are governed by $z$ and $n_h$, and evaluation design matters only through these and through $C$; (ii) the \emph{fraction} of data that must be perturbed depends on the logit gap and on the share of the data that involves the target entities, but \emph{not} on $N$ --- collecting more comparisons raises significance ($z\propto\sqrt N$) without making the conclusion robust in relative terms.
+These derivations are heuristic (they ignore the off-diagonal coupling in $H$ and the depletion of influential comparisons); the empirical tests below do not rely on them.

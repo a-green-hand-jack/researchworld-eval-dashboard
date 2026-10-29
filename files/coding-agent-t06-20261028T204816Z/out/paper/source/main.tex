@@ -1,0 +1,266 @@
+\documentclass{article}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{icml2026}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{longtable}
+\newtheorem{proposition}{Proposition}
+\newcommand{\sigmoid}{\sigma}
+\newcommand{\NF}{\textsc{nf}}
+\input{generated/numbers}
+\icmltitlerunning{Exposure, Uncertainty, and Matched Judges in Pairwise Leaderboard Audits}
+\begin{document}
+\twocolumn[
+\icmltitle{How Small Is a Small Edit? Exposure, Uncertainty, and\\Matched Judges in Pairwise Leaderboard Audits}
+\begin{icmlauthorlist}
+\icmlauthor{Anonymous Authors}{anon}
+\end{icmlauthorlist}
+\icmlaffiliation{anon}{Anonymous Institution}
+\icmlcorrespondingauthor{Anonymous Author}{anon.email@domain.com}
+\icmlkeywords{pairwise comparisons, ranking, robustness, Bradley--Terry, evaluation}
+\vskip 0.3in
+]
+\printAffiliationsAndNotice{}
+
+\begin{abstract}
+A small fraction of a leaderboard's records can be a substantial fraction of the evidence about a particular rank boundary. We audit Bradley--Terry rankings across crowdsourced preferences, expert judgments, a model judge, and scheduled basketball games, using refitted deletion and outcome-reversal witnesses. The Arena leader changes after two deletions, compared with 92 for MT-Bench human judgments and four to nine for three NBA seasons, but exposure normalization makes the sports and expert leader comparisons much closer. Most adjacent boundaries are not separated by bootstrap uncertainty; nevertheless, an Arena boundary with a positive simultaneous lower bound reverses after deleting \ArenaSeparatedAlpha{}\% of all records. On identical MT-Bench comparison units, GPT-4 judgments need more edits than human judgments to reverse the leading pair, with positive paired bootstrap intervals for the difference. These are feasible attacks rather than minimum-edit certificates: the evidence supports reporting exposure, uncertainty, and the edit mechanism together, and does not identify a causal ranking of evaluation designs.
+\end{abstract}
+
+\section{Introduction}
+Pairwise leaderboards turn many local observations into a single ordered list. A Bradley--Terry (BT) model pools these outcomes through a comparison graph. Users then act on ranks, even when neighboring scores are close or based on very different numbers of observations. The practical question is not just whether scores have small standard errors, but whether a small, plausibly nonrandom change to the underlying records can reverse a reported comparison.
+
+Existing research already establishes the existence of fragile LLM rankings. Influence approximations efficiently identify damaging deletions \citep{broderick2020,huang2025}, and new votes can manipulate rankings \citep{min2025}. Repeating the claim that a handful of preferences changes a leaderboard would therefore add little. We instead ask how to interpret and compare such a finding across evaluation designs. Specifically: does ``small'' mean small relative to the entire archive or to the records involving the affected contestants? Is a reversed boundary initially distinguished from a tie? Does a human--model-judge comparison persist when both judges evaluate exactly the same items?
+
+Archive size can dilute a global percentage without strengthening a particular decision. A balanced sports schedule, conversely, gives each team few observations, so several edits substantially change its evidence. Natural uncertainty and targeted vulnerability also differ: an uncertain winner can change under random edits, while a well-separated comparison can depend on concentrated evidence.
+
+We make three contributions. First, we specify a boundary-level audit that reports both archive and exposure budgets, distinguishes deletion from decisive-outcome reversal, and retains failed searches as failures rather than declaring robustness. A simple likelihood factorization explains why an archive percentage alone can be misleading. Second, we run this audit on public frozen data from four evaluation designs, using every initial adjacent boundary, random-edit controls, grouped resampling, and explicit refitting of all successful witnesses. Third, we match human and GPT-4 judgments on the same MT-Bench question, turn, and model pair, and quantify uncertainty in their difference. Our contribution is a controlled comparative analysis and interpretation protocol, not a new influence-function attack or a claim that one judging system is more accurate.
+
+\section{Related Work}
+\paragraph{Pairwise evaluation.}
+Chatbot Arena collects anonymous user preferences and estimates model scores with pairwise statistical models \citep{chiang2024}. MT-Bench supplies fixed multi-turn questions and both expert and GPT-4 judgments \citep{zheng2023}. The latter study also documents position, verbosity, and self-enhancement biases. We use the released judgments directly, without querying a new judge or equating a sharper ordering with greater accuracy. Sports supplies a distinct observational design: outcomes follow an organized schedule rather than an annotation process. We fit each season separately; the published Elo scores are not used as observations or targets.
+
+\paragraph{Influence and small-subset robustness.}
+Influence functions differentiate an estimator with respect to sample weights \citep{koh2017}. Approximate maximum influence perturbation extends this idea to adversarial removal of a small data fraction and emphasizes verification by refitting \citep{broderick2020}. Most directly, \citet{huang2025} study BT ranking changes under deletions in Arena and MT-Bench, including model-judged comparisons. They already connect fragility to small score differences and examine the contestants involved in influential records. We use the same general deletion strategy, independently implement the derivative and solver, and explicitly distinguish a successful witness from an optimality or robustness certificate. Our additions are exposure-based interpretation, systematic adjacent-boundary coverage with uncertainty, sports data, and a same-item human--GPT-4 contrast. Tie-free and fractional-tie fits answer different questions; we evaluate both rather than compare their raw edit counts as if they were identical estimands.
+
+\paragraph{Manipulation.}
+\citet{min2025} study inserting rigged votes, including votes not involving the targeted model. We instead edit existing observations in an offline archive. Outcome reversal measures hypothetical label corruption; deletion measures selective omission. Neither simulation establishes the cost of identifying models, controlling users, or changing a real competition. Random edits supply a noise baseline, not a realistic model of every source of annotation error. We independently implement the audit and consult only the task-allowlisted literature.
+
+\section{Audit Definition and Method}
+\subsection{Estimator and Evaluation Unit}
+A dataset contains $N$ records $(a_i,b_i,y_i)$ over $M$ contestants, where $y_i\in\{0,\frac12,1\}$ is the outcome for $a_i$. A record is one published judgment or one deduplicated game, even when its likelihood can be represented by multiple fractional rows. Let $x_i=e_{a_i}-e_{b_i}$ and $p_i=\sigmoid(x_i^\top\theta)$. We estimate
+\begin{equation}
+\widehat\theta=\arg\min_{\mathbf1^\top\theta=0}
+\sum_{i=1}^{N}\left[\log(1+e^{x_i^\top\theta})-y_ix_i^\top\theta\right]
++\frac\lambda2\|\theta\|_2^2.
+\label{eq:bt}
+\end{equation}
+We use the summed loss and $\lambda=10^{-6}$, with symmetric regularization to guarantee numerical existence under perturbed schedules. A tie contributes half a win and half a loss of total weight one. This is a fractional-outcome BT fit, not a generative model for tie probabilities. We canonicalize contestant order and reverse $y_i$ when necessary. Duplicate judgments by different experts remain distinct records.
+
+The baseline score order fixes $M-1$ adjacent pairs $(a,b)$ with gap $\delta_{ab}=\widehat\theta_a-\widehat\theta_b>0$. We audit all these boundaries, not just the easiest one. Reversing the initial leading pair is a sufficient witness that the original leader loses first place. It is not a search over every possible challenger or over all top-$k$ sets.
+
+\subsection{Edit Budgets and Their Interpretation}
+For a set $S$ of $k$ record indices, deletion sets their weights to zero. Outcome reversal changes $y_i$ to $1-y_i$ for decisive records; ties are ineligible. Both mechanisms cost one edit per original record. Reversal retains the schedule, whereas deletion changes both outcomes and information. In sports, these are counterfactual database errors, not claims that a game outcome can actually be manipulated.
+
+We report two denominators:
+\begin{equation}
+\begin{gathered}
+\alpha=\frac{k}{N},\qquad \beta_{ab}=\frac{k}{E_{ab}},\\
+E_{ab}=\sum_i\mathbf1\{\{a_i,b_i\}\cap\{a,b\}\ne\varnothing\}.
+\end{gathered}
+\label{eq:budgets}
+\end{equation}
+The union exposure counts a direct $a$--$b$ comparison once. It measures the scale of edits relative to evidence involving the two affected contestants. We also record the fraction of selected records incident to either contestant. Exposure is a descriptive denominator, not a sufficient statistic for information, a restriction on the attack, or a universal guarantee of comparability. Opponent strength, graph connectivity, residuals, ties, and indirect paths still matter; $\beta$ can in principle exceed one.
+
+A structural example explains the need for both scales.
+\begin{proposition}[Archive dilution]
+Consider an unpenalized BT dataset with a finite maximum-likelihood fit unique up to a shift, and a target pair $a,b$. Attach additional comparisons on new contestants to the old comparison graph through a single shared contestant $r\notin\{a,b\}$, with a finite fit for the attached data. Every original score difference is unchanged. Any fixed original-data deletion witness that retains a finite fit remains a witness, while $k/N$ decreases and $k/E_{ab}$ stays unchanged.
+\label{prop:padding}
+\end{proposition}
+\noindent The attached component's scores can be parameterized relative to $\theta_r$; its likelihood then has independent parameters. Optimizing it cannot alter the old likelihood's maximizer. The same factorization applies after deleting original records. Appendix~\ref{app:proof} gives details. This is an invariance observation for $\lambda=0$, not an exact invariance claim for our ridge fits or an assertion that arbitrary extra comparisons are irrelevant.
+
+\subsection{Candidate Selection and Verification}
+Let $H=\sum_i p_i(1-p_i)x_ix_i^\top+\lambda I$, restricted to the centered subspace, and $c=e_a-e_b$. Differentiating the score equations gives the first-order decreases in the gap caused by one edit:
+\begin{align}
+h_i^{\rm del}&=(y_i-p_i)c^\top H^{-1}x_i,\label{eq:del}\\
+h_i^{\rm flip}&=(2y_i-1)c^\top H^{-1}x_i.\label{eq:flip}
+\end{align}
+The inverse denotes the constrained solve. Our implementation adds the gauge projector $\mathbf1\mathbf1^\top/M$ to $H$; $c$ has zero sum. For deletion the parameter change is $H^{-1}(p_i-y_i)x_i$; for reversal it is $-H^{-1}(2y_i-1)x_i$, yielding the signs above.
+
+For each fixed pair and edit mechanism, we sort positive $h_i$ in decreasing order, with input order breaking exact ties. The cumulative influence predicts a crossing size. Starting there, or at the search cap if the prediction exceeds it, we expand the tested prefix geometrically until a refit crosses the boundary or exhausts the cap. We then bisect the bracket using full refits. The primary cap is $\lfloor0.05N\rfloor$ records. If a refitted gap is below $-10^{-8}$, we retain that prefix as a witness and save its row indices, residual gap, and optimization gradient. We repeat with eligible records restricted to direct $a$--$b$ comparisons as a baseline.
+
+This search does not assume or prove monotonicity of the refitted prefix gaps. A found size $\widehat k$ is an upper bound on the true minimum edit count. Bisection may miss a smaller successful prefix; influence ordering may miss a better set altogether. A search without success is denoted \NF\ (no witness found), not a lower bound on the true minimum and not a robustness certificate. In particular, direct-only search can occasionally outperform the unrestricted ordering. These distinctions apply to every table and curve.
+
+For budget $q$, our profile is the fraction of initial adjacent boundaries for which a found witness satisfies $\widehat k/N\le q$, or $\widehat k/E_{ab}\le q$. Each boundary has its own edited dataset. The profile does not claim that a single edit set reverses that many boundaries simultaneously. All boundaries remain in its denominator, including failed searches.
+
+\subsection{Random Baselines and Uncertainty}
+For each primary dataset and mechanism we draw 200 uniform random permutations of eligible records. Nested prefixes use nominal budgets $0.1,0.5,1,2,5\%$, rounded down with at least one edit. Reversal samples only decisive records while retaining $N$ as the denominator. We refit and measure original-leader loss, initial adjacent-boundary reversals, and Kendall discordance over all pairs. Wilson intervals summarize Monte Carlo uncertainty for leader loss; mean boundary fractions use normal Monte Carlo intervals. These intervals concern edit randomization conditional on the observed archive, not sampling uncertainty about performance.
+
+Separately, 400 nonparametric bootstrap fits estimate baseline gap uncertainty. MT-Bench resamples its 80 questions, keeping all associated turns, pairs, and judgments; NBA resamples game dates; Arena resamples individual records because user identities are unavailable. The initial pair identities stay fixed. We report pointwise 95\% percentile intervals and, as a more conservative exploratory control, simultaneous bands over \emph{all} contestant pairs using the bootstrap 95th percentile of the maximum absolute standardized score-difference error. This accounts approximately for inspecting the initial ranking; it is not a finite-sample coverage theorem. Positive lower bounds are descriptive evidence under the stated resampling assumptions, not evidence of immunity to edits. The two uncertainties must not be conflated.
+
+\section{Data and Experimental Design}
+\begin{table*}[t]
+\caption{Primary data after deterministic preprocessing. Exposure counts each contestant's incident records. All Arena rows and all released MT judgments are retained in the primary fits. Clusters are records for Arena, questions for MT, and game dates for NBA.}
+\label{tab:data}
+\centering\small\input{generated/data}
+\end{table*}
+
+\paragraph{Frozen real datasets.}
+Table~\ref{tab:data} summarizes the data. We use the frozen Arena 55k snapshot supplied in the task, which actually has 57,477 comparisons and 64 models. MT-Bench contains 3,355 human judgments and 2,400 GPT-4 judgments on six models. We encode both ordinary ties and GPT-4's released ``tie (inconsistent)'' judgments as $1/2$. The latter are order-inconsistent judgments collapsed by the source, so we separately remove them as a sensitivity analysis. NBA records come from FiveThirtyEight's historical archive; we keep only \texttt{\_iscopy=0}, regular-season NBA games in seasons ending 2013, 2014, and 2015, and fit each season independently. The 2013 extract contains 1,229 games; we do not invent a missing game to balance the schedule. Model names and team identifiers are kept exactly as released. All primary comparison graphs are connected. Appendix~\ref{app:repro} and the machine-readable manifest give source commits, hashes, licenses, and precise preprocessing.
+
+These are four evaluation designs, not four randomized treatment groups. Dataset size, contestant quality range, schedule, era, and outcome distribution differ together. Cross-source summaries are descriptive; they cannot identify a causal effect of crowdsourcing, expertise, or model judging.
+
+\paragraph{Same-item judge comparison.}
+To separate judge labels from schedule and sample-size differences within MT-Bench, we canonicalize each question--turn--unordered-model-pair key. We retain the \MatchedN{} keys observed under both judges and choose one existing human annotation per key uniformly using seed 20261028, without inspecting labels. The GPT-4 counterpart supplies exactly one outcome for the same key. Both archives thus have identical record count, model pairs, question clusters, and exposures. We study the fixed GPT-4-versus-Claude leading pair, which is the initial top pair in both matched fits. A paired question bootstrap with 300 replicates resamples the same questions for both judges and recomputes attacks. Here we extend the search cap to 20\% after the primary 5\% cap fails to find the GPT-4 deletion witness; this exploratory extension is labeled separately. A bootstrap sample whose baseline gap is already negative receives zero required edits. Fifty further uniform human-annotation selections assess dependence on the initial annotation choice.
+
+\paragraph{Controls and execution.}
+We vary ridge strength, omit all ties, omit only inconsistent GPT-4 ties, and include a home-advantage covariate in NBA. An exploratory equal-size control subsamples 1,200 rows from each archive 50 times; because this changes model coverage, it is not treated as a matched-design experiment. Finally, for 100 randomly selected boundaries per source and edit mechanism, we compare influence-predicted and fully refitted score changes at the five budgets. Boundary draws are with replacement and reuse the same five nested budgets. All code runs on CPU with one numerical thread and fixed seeds. Full details, actual timings, and unsuccessful exploratory choices appear in the appendix.
+
+\section{Results}
+\subsection{A Global Percentage Conceals Different Exposure Burdens}
+\begin{table*}[t]
+\caption{Found witnesses for the initial leading pair, with baseline gap uncertainty. Percentages use \emph{original} archive and union exposure. \NF{} means the prefix search found no witness within its 5\% cap; it does not certify robustness. All displayed successful witnesses were refitted.}
+\label{tab:leaders}
+\centering\small\input{generated/leaders}
+\end{table*}
+
+Table~\ref{tab:leaders} shows that the initial Arena leader, \texttt{gpt-4-1106-preview}, leads \texttt{gpt-4-0125-preview} by only \ArenaLeaderGap{} log-odds units. Deleting two records or reversing one decisive outcome changes their order. MT human judgments require a found deletion set of 92 records and a reversal set of 46. The primary GPT-4 deletion search fails at 5\%, while 61 reversals suffice. These are conditional properties of the released archives and our fractional-tie fits, not statements about present-day leaderboards.
+
+NBA leader witnesses need four to nine deletions, only 0.325--0.732\% of the full season. Viewed globally, those values seem substantially smaller than the MT human value of 2.742\%. Relative to the initial leading pair's exposure, however, NBA's deletion burdens are 2.50--5.56\%, compared with 5.04\% for MT human judgments. The change in denominator substantially narrows that comparison. Arena remains unusually close at the top under either scale: its two-record deletion uses 0.024\% of the leading pair's exposure. Thus normalization does not explain away every fragile boundary; it changes what can be inferred from the magnitude.
+
+Across all adjacent boundaries, Arena's median found deletion fraction is \ArenaMedianGlobal{}\% globally and \ArenaMedianLocal{}\% by pair exposure. NBA has coarser one-game increments and much more balanced exposures. Figure~\ref{fig:profiles} reports entire profiles, preventing a single near-tied leader or an archive's size from being the only summary. The visible plateaus in MT reflect unsuccessful searches at the cap, not proven stable boundaries. Fractional record increments are never allowed.
+
+\begin{figure*}[t]
+\centering\includegraphics[width=\textwidth]{../figures/profiles.png}
+\caption{Deletion witness profiles for every initial adjacent boundary. The two panels change only the denominator of the \emph{same} found edit sets. Each point describes target-specific attacks, not one simultaneous attack on the whole order. Search failures stay in the denominator. The search cap is 5\% of the archive, so the local-budget curves have different feasible endpoints.}
+\label{fig:profiles}
+\end{figure*}
+
+\subsection{Uncertainty Explains Many Reversals, but Not All}
+\begin{table*}[t]
+\caption{Coverage and initial separation for deletion audits. ``Direct only'' restricts edits to matches between the two target contestants. Pointwise and simultaneous columns count adjacent gaps with positive 95\% lower bounds. The simultaneous calculation considers all contestant pairs, including nonadjacent ones. Last column: boundaries with a found unrestricted witness by 1\% of all records.}
+\label{tab:boundaries}
+\centering\small\input{generated/boundaries}
+\end{table*}
+
+Table~\ref{tab:boundaries} shows that 60 of Arena's 63 adjacent boundaries and every NBA adjacent boundary have pointwise intervals containing zero. The Arena leading pair's interval is particularly wide relative to its tiny observed gap. Its fragility therefore should not be presented as overturning a precisely established performance advantage. MT has many more separated adjacent gaps despite fewer total records, consistent with its smaller contestant population and larger observed skill gaps. The simultaneous control is more conservative: the MT human leading-pair band also includes zero, even though its pointwise interval excludes it.
+
+Fragility is nevertheless not confined to bootstrap ties. Arena's second boundary, between \texttt{gpt-4-0125-preview} and \texttt{gpt-4-0314}, has a simultaneous 95\% band of [\ArenaSeparatedLo{}, \ArenaSeparatedHi{}]. A verified \ArenaSeparatedK{}-record deletion reverses it, using \ArenaSeparatedAlpha{}\% of the archive and \ArenaSeparatedLocal{}\% of pair exposure. This is a concrete counterexample to treating a positive uncertainty band as a small-subset robustness guarantee. It is also a much larger local intervention than the two-record top-pair witness. We report both rather than describe all reversals as equally consequential.
+
+\subsection{Targeted Edits Differ from Random Noise}
+\begin{figure*}[t]
+\centering\includegraphics[width=\textwidth]{../figures/random.png}
+\caption{Uniform random edits at a nominal 1\% archive budget (200 repetitions). Error bars are 95\% Monte Carlo intervals: Wilson for leader loss, normal intervals for mean adjacent-boundary fractions. They quantify random-edit variation conditional on these archives. Zero observed leader losses still have positive Wilson upper bounds.}
+\label{fig:random}
+\end{figure*}
+
+At the nominal 1\% budget, random deletions replace Arena's initial leader in \ArenaRandomDeleteLeader{}\% of trials and random reversals in \ArenaRandomFlipLeader{}\%. No original-leader losses occur in the 200 trials for any of the MT or NBA datasets at this budget. Yet targeted deletions below 1\% reverse the NBA leading pairs in every season. This contrast distinguishes concentration of harmful edits from a generic claim that any small amount of data noise destabilizes the winner. The adjacent-boundary averages also show that stable first place does not imply an entirely stable ordering.
+
+Direct head-to-head comparisons are an incomplete attack baseline. Under the primary deletion cap, unrestricted influence prefixes reverse all Arena and NBA adjacent boundaries, whereas direct-only prefixes find witnesses for only 26 of 63 Arena boundaries and 13--18 of 29 NBA boundaries (Table~\ref{tab:boundaries}). No direct-only leader witness is found for any NBA season. Opponent comparisons thus contribute to every audited sports leader reversal. All found unrestricted deletion witnesses happen to use only records incident to at least one target contestant; this empirical observation supports reporting exposure but is not a theorem that remote records cannot matter. Moreover, the direct-only MT human leader witness uses 91 records, one fewer than unrestricted influence search. The unrestricted procedure is a heuristic, not an optimizer that must dominate every restricted ordering.
+
+\subsection{A Matched Judge Contrast Survives Schedule Matching}
+\begin{table*}[t]
+\caption{Fixed GPT-4--Claude leading-pair comparison on \MatchedN{} identical MT-Bench units. The exploratory cap is 20\%. Intervals are paired question-bootstrap percentiles for differences in \emph{found} budget fractions, not for the unknown optimal attacks. ``pp'' denotes percentage points.}
+\label{tab:matched}
+\centering\small\input{generated/matched}
+\end{table*}
+
+Under the same schedule and row count, the human top-pair gap is 0.248, versus 0.774 for GPT-4 judgments. The paired bootstrap 95\% interval for GPT-4 minus human gap is [\MatchedGapDiffLo{}, \MatchedGapDiffHi{}]. Table~\ref{tab:matched} shows a corresponding difference in found attacks: 35 versus 95 deletions, and 18 versus 42 decisive reversals. The paired uncertainty intervals for the global fraction differences are positive for both mechanisms. Figure~\ref{fig:matched} shows the underlying bootstrap distributions. Across 50 alternative human-annotation selections, human deletion witnesses range from 1.49\% to 3.03\% of the matched archive; the fixed GPT-4 witness is 5.24\%. Thus this contrast is not driven by selecting one unusual human label per unit.
+
+This is a property of released judgments on the same units, not evidence that GPT-4 is a better judge or that model judges are generally more robust. Greater separation can reflect preference bias; GPT-4 is itself a contestant. The single judge and historical model set limit extrapolation. Unmatched Arena--MT contrasts cannot isolate a judge-design effect.
+
+\begin{figure*}[t]
+\centering\includegraphics[width=\textwidth]{../figures/matched.png}
+\caption{Paired question bootstrap of the matched leading-pair audit (300 replicates, 20\% exploratory cap). The horizontal variable is GPT-4 minus human found budget fraction. Shading spans the percentile 95\% interval; the dashed line marks zero. These are uncertainty distributions for an audit procedure conditional on a fixed human-annotation selection.}
+\label{fig:matched}
+\end{figure*}
+
+\subsection{Tie Rules and Refits Materially Affect the Audit}
+Omitting ties changes both the fitted ordering and the edit denominator. On Arena, decisive-only fitting puts \texttt{gpt-4-0125-preview} first and finds a nine-deletion leader witness, versus two deletions and the opposite initial leader in the primary fractional-tie fit. This accords with the tie-free setting of \citet{huang2025} and demonstrates why reproducing a headline edit count requires reproducing the likelihood convention. In MT GPT-4, removing only inconsistent judgments yields a 94-deletion leader witness within the resulting 5\% cap; removing all ties yields 75. Those are different subsets, not alternative ways to count the same intervention.
+
+Increasing the summed-loss ridge from $10^{-6}$ to $10^{-4}$ or $10^{-2}$ leaves all six primary leader deletion counts unchanged. A ridge of one changes Arena's count from two to three but leaves the reported primary MT and NBA counts unchanged. Estimating a shared NBA home effect changes the 2015 deletion witness from nine to ten records and leaves the other two leader counts unchanged. Appendix~\ref{app:controls} supplies the full ablations.
+
+Influence accuracy worsens as concentrated edits become a large local intervention. At a 0.1\% global budget, Arena's median relative error in the predicted score change is \ArenaApproxDelete{}\% for deletion and \ArenaApproxFlip{}\% for reversal. By a 5\% global budget some sports deletion prefixes remove much of a target's evidence, and first-order errors are large. Approximation quality therefore cannot be inferred from the global budget alone. We never substitute a predicted sign change for a refitted result. An independent row-level replay confirms all \WitnessCount{} saved successful primary and auxiliary witnesses, including direct-only searches.
+
+\section{Discussion and Limitations}
+The central practical lesson is to publish a \emph{conditional robustness statement}: identify the exact initial pair, tie convention, uncertainty estimate, edit mechanism, and both budget scales, then provide a refitted witness. A statement such as ``two deletions reverse an almost tied Arena leader'' is supported here. A claim that all crowdsourced evaluations are less reliable than experts, or that four hypothetical game edits imply a deficient sports schedule, is not.
+
+There are several limits. First, all found attack sizes are feasible upper bounds. The fixed influence ordering, prefix search, cap, and direct-only baseline can miss better attacks. Search failure cannot establish stability; we provide neither a combinatorial minimum nor a lower certificate. Second, our statistical intervals rely on imperfect dependence assumptions. Arena lacks user identifiers; repeated users or prompts can make its row bootstrap optimistic. Question resampling captures MT task dependence but does not model new annotator populations. Date resampling captures same-day sports outcomes but not every season-long team or schedule dependence. Simultaneous bands are bootstrap approximations, not exact post-selection inference.
+
+Third, exposure normalizes quantity of evidence, not its informativeness. We do not equalize model populations, latent score distributions, task difficulty, or comparison graphs across sources. The equal-size subsampling control sometimes omits Arena models entirely and cannot repair these confounders. Fourth, the audits use static BT scores. Home effects, nontransitivity, temporal strength changes, and preference heterogeneity can violate this model. None of our intervals or edit sets validates the BT likelihood as a generative account of human preferences or sports. Fifth, tie handling is consequential, and ordinary and inconsistent GPT-4 ties have distinct meanings. Finally, only one crowdsourcing snapshot, one expert benchmark, one fixed judge, and three NBA seasons are examined. The matched contrast is substantially better controlled than the across-source comparison, but remains an observational contrast of two label sources.
+
+A useful reporting practice is therefore to show profiles and saved witnesses alongside uncertainty, rather than replace uncertainty with an adversarial number. This study provides reproducible examples of both near-tie fragility and the reversal of a simultaneously separated boundary. It leaves open the design of certified minimum-edit algorithms and evaluations that compare judging systems under randomized, equal-information conditions.
+
+\clearpage
+\section*{Impact Statement}
+Offline sensitivity audits can reveal overconfident rank-based claims and help benchmark maintainers detect concentrated evidence. The same methods can also guide selective omission or corruption of votes. We analyze only public frozen archives, never submit votes or contact a live service, and do not infer personal attributes of annotators. Saved witnesses contain row indices and model or team identifiers, not conversation text. Sports reversals are hypothetical database perturbations. Findings should not be used to accuse any user, model provider, or team of misconduct, and a sharper ranking should not be mistaken for a more accurate judge.
+
+\section*{Research Process and AI Assistance}
+This study, its implementation, analysis, and manuscript were produced by an autonomous Codex language-model agent. No new LLM judgments, paid APIs, or GPU computations were used. All empirical statements derive from executed CPU code and saved outputs. The agent consulted only the explicitly allowed starter papers and official ICML formatting material; it performed no open-ended literature search. This limits literature completeness. The accompanying access log describes what was read, and the run log records failed checks and exploratory protocol extensions.
+
+\bibliography{references}
+\bibliographystyle{icml2026}
+
+\newpage
+\appendix
+\onecolumn
+\section{Likelihood Factorization and Derivatives}\label{app:proof}
+\paragraph{Proof of Proposition~\ref{prop:padding}.}
+Let $V$ be the original contestants and $W$ the new ones, with attachment vertex $r\in V\setminus\{a,b\}$. All new comparisons are within $W\cup\{r\}$ and no new record involves another old vertex. Write $\gamma_j=\theta_j-\theta_r$ for $j\in W$ and $\gamma_r=0$. Every new log-odds difference is $\gamma_j-\gamma_k$, so the unpenalized objective is $L_D(\theta_V)+L_U(\gamma_W)$. The centered gauge can be imposed after independently minimizing these two terms, since it only adds a common constant. Under the stated finite-fit assumptions, all differences among old vertices are therefore those of $\arg\min L_D$. For a deletion set $S\subset D$, replace $L_D$ by $L_{D\setminus S}$; the same argument preserves its post-deletion pair difference and hence the witness. The new records do not involve $a$ or $b$, so $E_{ab}$ is unchanged; the full archive size increases by $|U|$. Regularization couples the two factors, so this exact argument is deliberately restricted to the unpenalized model. No synthetic measurements are used to illustrate the proposition.
+
+\paragraph{Derivative check.}
+The score equation is $G(\theta,w)=\sum_iw_i(p_i-y_i)x_i+\lambda\theta=0$ on the centered subspace. Hence $\partial\widehat\theta/\partial w_i=-H^{-1}(p_i-y_i)x_i$. Deleting a small weight $\epsilon$ changes the gap by $\epsilon(p_i-y_i)c^\top H^{-1}x_i$, whose negative is Equation~\eqref{eq:del}. Replacing $y_i$ by $y_i+\epsilon(1-2y_i)$ changes the score by $-\epsilon(1-2y_i)x_i$ and the optimum by $\epsilon(1-2y_i)H^{-1}x_i$, giving Equation~\eqref{eq:flip}. A fractional tie has zero reversal effect. The scientific-core checks compare these formulas against small fractional perturbations, test centered identifiability, verify a known two-contestant MLE, and exhaustively enumerate small two-contestant edit sets. They are numerical sanity checks, not a proof of global attack optimality for arbitrary graphs.
+
+\section{Additional Controls and Complete Random Results}\label{app:controls}
+\subsection{Modeling Controls}
+\begin{table}[ht]
+\caption{Initial leading-pair deletion witnesses under alternative modeling choices. \NF{} retains the primary meaning: no witness found within 5\% of that specification's archive.}
+\label{tab:ablations}
+\centering\small\input{generated/ablations}
+\end{table}
+The table reports initial leading-pair deletion witnesses after refitting each alternative specification. Initial pair identities may change with the specification: decisive-only Arena starts with GPT-4-0125 rather than GPT-4-1106. For decisive-only settings, both $N$ and exposure are recomputed on that subset. The home-advantage model uses log odds $\theta_a-\theta_b+\eta z_i$ with $z_i\in\{-1,0,1\}$ indicating whether the canonical first contestant is away, neutral, or home, and includes $\eta$ in the same ridge objective and constrained Newton solve. All six tables and four figures in this report are generated by \texttt{src/report.py}; the experimental scripts and intermediate CSVs are mapped in the README.
+
+\subsection{Approximation Error}
+\begin{figure}[h]
+\centering\includegraphics[width=.88\textwidth]{../figures/approximation.png}
+\caption{Median $|\Delta_{\rm refit}-\Delta_{\rm influence}|/|\Delta_{\rm refit}|$ for 100 random adjacent-boundary draws per dataset and mechanism (with replacement). The same five budgets are evaluated per draw; draws are not independent new datasets. The CSV also records the 90th percentile. A 5\% global budget can be a large local change, especially in a 30-team schedule. No accuracy guarantee is inferred from the median.}
+\label{fig:approx}
+\end{figure}
+
+\subsection{Exploratory Size Matching and Unsuccessful Choices}
+We subsampled 1,200 records without replacement 50 times per source, retaining the original contestant list. Nine of the 50 Arena subsamples contained at least one contestant with no comparison. Although the ridge still returns a finite score vector, disconnected or weakly covered contestants and separation can dominate the apparent leader. We therefore do not interpret this as an equal-information comparison of designs. The raw results, minimum exposures, seed, and all successful fits are retained in \texttt{results/size\_control.csv}. The median deletion witnesses for MT human and MT GPT-4 under this size control are 2.875\% and 5.750\% globally; these descriptive numbers do not remove contestant-set confounding.
+
+The initial 5\% matched GPT-4 deletion search found no witness. We expanded only the fixed matched leading-pair analysis to 20\% and disclosed this exploratory change; its point witness uses 95 of 1,814 records, just beyond the primary cap. All 300 paired bootstrap runs found a witness or began with the fixed pair already reversed. The 50 human-annotation resamplings quantify sensitivity to selecting one actual judgment per unit, separately from question resampling. They do not include a new expert-label collection.
+
+The first scientific-core finite-difference test failed because its synthetic test fixture stored outcomes as integers, truncating a fractional label perturbation. Changing the fixture to floating-point outcomes fixed this check; real-data outcomes were already floating point. The first report-generation run also failed when floating-point rounding made a nominally zero error-bar length slightly negative. Error-bar lengths are clipped at zero; saved interval endpoints and experimental results are unchanged. An attempted direct DOI access for Bradley and Terry's original paper returned a verification page rather than article content; that paper is not included in the bibliography as a consulted source. Initial attempts to use a \texttt{python} executable and \texttt{pdftotext} failed because they are unavailable; the project uses \texttt{python3} and PyMuPDF. These implementation failures produced no scientific results and required no omitted experiments.
+
+\input{generated/random_full}
+
+\section{Reproducibility and Data Provenance}\label{app:repro}
+\paragraph{Sources and licenses.}
+Arena uses \texttt{lmarena-ai/arena-human-preference-55k}, commit \texttt{18c298340948c0e7f7727399fd459cca6ce0ca6f}, licensed Apache-2.0. MT uses \texttt{lmsys/mt\_bench\_human\_judgments}, commit \texttt{f7d2896d2cc5d80f8b55c2bbc722613555233c25}, licensed CC-BY-4.0. NBA uses \texttt{fivethirtyeight/data}, commit \texttt{4c1ff5e3aef1816ae04af63218015066e186c147}, licensed CC-BY-4.0. The raw archive contains two rows per game; the \texttt{\_iscopy} filter removes the second copy. Download URLs, exact byte sizes, and SHA-256 hashes for every used file are in \texttt{data/manifest.json}. The three hashes supplied by the task were checked successfully; the GPT-4 file's hash is also recorded. Raw data are kept under \texttt{data/raw/} and are excluded from the distributable source archive. No conversation content is printed in the report or used as an analysis feature.
+
+\paragraph{Software and commands.}
+Python 3.11.2, NumPy, SciPy, pandas, Matplotlib, and PyArrow implement the analysis; the environment's exact installed versions are pinned in \texttt{requirements.txt}. The reproduction entry point is \texttt{bash reproduce.sh}. It downloads and verifies data, prepares canonical arrays, runs scientific checks, primary audits, controls, uncertainty bands, figure/table generation, and compiles the paper. Random streams derive from the master seed 20261028 using explicit deterministic offsets documented in the scripts. Numerical threads are limited to one. Dense Newton solves aggregate identical comparison cells for speed while retaining original row-level edit units. Primary fits meet a maximum absolute gradient criterion; all successful saved witnesses are independently re-evaluated from edited rows. The machine-readable validation file records residuals and gaps.
+
+The recorded primary experiment took \PrimarySeconds{} seconds and the additional control script took \ControlSeconds{} seconds on the available CPU host with one numerical thread. These are actual program timings, excluding installation, downloads, plotting, and writing; they are not a hardware-normalized benchmark. Downloading the large text-containing Arena file and installing dependencies can dominate end-to-end reproduction. The README supplies a conservative expected range for other CPU machines and a separate paper-only compilation command. The implementation is far below the one-week ceiling, so no experiment described as complete was left running or replaced by an estimated result.
+
+\paragraph{Official format.}
+This manuscript uses the unmodified ICML 2026 official style and bibliography files downloaded from the conference's styles archive. The official call permits eight pages of main text, with impact statement, references, and appendices excluded. The main text precedes the Impact Statement. ICML 2026's inspected call and template do not prescribe a NeurIPS-style paper checklist within the manuscript; the required impact statement is included, and the completed audit checklist below makes the reproduction obligations explicit. This document is a research artifact and does not claim conference acceptance or submission.
+
+\section{Completed Research and Reproducibility Checklist}
+\begin{enumerate}
+\item \textbf{Claims match evidence: Yes.} Every quantitative empirical claim is derived from executed code, recorded CSV or NPZ output, or its deterministic summary. We distinguish finite archived observations from generalizations about design quality.
+\item \textbf{Related work and novelty: Yes, within the access restriction.} Section 2 explicitly credits prior deletion and vote-insertion audits; no new influence attack is claimed. Only six explicitly allowed starter papers are cited and consulted. No unrestricted search or citation chasing was performed.
+\item \textbf{Assumptions and theory: Yes.} The likelihood, ridge, edit units, search cap, and resampling units are stated. Proposition~\ref{prop:padding} includes finite-MLE, attachment, and no-ridge assumptions, with a proof.
+\item \textbf{Uncertainty: Yes.} We report grouped baseline bootstrap uncertainty, simultaneous contrast controls, paired matched-judge bootstrap intervals, random-edit Monte Carlo intervals, and alternate human-label selections. Their dependence and coverage limits are stated.
+\item \textbf{Search limitations: Yes.} A witness is an upper bound on the minimum required edits. No-witness entries are not lower bounds or robustness certificates. Different boundaries use different attacks.
+\item \textbf{Reproducible code and environment: Yes.} All analysis, validation, plotting, table generation, fixed seeds, exact Python dependencies, commands, and timings are included. No paid API or GPU is required.
+\item \textbf{Data provenance and permissions: Yes.} Public fixed commits and hashes are recorded; source licenses and attribution are given. Raw data are excluded from the distributable code archive, with an automated download path.
+\item \textbf{Human subjects and new data: Not applicable.} No new participants were recruited and no new judgments were elicited. Existing public annotations are used under their declared dataset licenses; we make no claim about access to original consent records.
+\item \textbf{Negative and failed work: Yes.} The 5\% search failures, coverage problem in size matching, occasional stronger direct-only baseline, exploratory cap extension, and corrected implementation checks are disclosed.
+\item \textbf{Broader impacts and AI disclosure: Yes.} The Impact Statement discusses defensive use and potential misuse. The research-process statement discloses autonomous language-model assistance in code, analysis, and writing.
+\item \textbf{Forbidden material: No deliberate access.} Only task-allowlisted papers and the official conference format were accessed for literature. No known accidental encounter with prohibited material occurred; the access log records exactly which sources were opened and the reading scope. We did not attempt to identify the prohibited work.
+\end{enumerate}
+\end{document}

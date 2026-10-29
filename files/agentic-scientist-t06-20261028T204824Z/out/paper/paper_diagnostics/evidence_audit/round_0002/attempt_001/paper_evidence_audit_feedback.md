@@ -1,0 +1,22 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-10-28T21:52:31.847687+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `2`
+- audit_json_path: `work/results/t06/claude/20261028_204856/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/t06/claude/20261028_204856/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/t06/claude/20261028_204856/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+The numeric results, qualification statements and selection and unscored-attempt disclosures match the evidence trail. Two implementation-specific claims about the evaluator overstate what the readable source in source_evidence/task/evaluate_final.py shows.
+
+## Findings
+- `lbfgs-crosscheck-overclaim` (Method (Scoring and verification) and Supplementary Information A (Evaluator Specification)): The evaluator source runs the L-BFGS reference fit once, in crosscheck_fit(). That function takes only the smallest case (by K, then n) and only its first min(n,600) rows. verify_edit() uses fit_bt alone, with no L-BFGS comparison on any edited refit or on each unedited case. Neither the per-budget-level cross-check nor the per-case cross-check is supported.
+  - claim: For each budget level, the evaluator refits the edited data with its own fitter, cross-checked against an independent L-BFGS fit. Appendix A: with an independent L-BFGS cross-check on each unedited case.
+  - evidence: source_evidence/task/evaluate_final.py: reference_fit (line 375) is called only from crosscheck_fit (lines 580-590). crosscheck_fit is invoked once (line 985). verify_edit (around line 405) calls only fit_bt. paper.tex Section 3.3 and Appendix A.
+  - requested_fix: Replace both statements with: the evaluator's Newton fitter was cross-checked once against an independent L-BFGS fit on a slice of at most 600 rows of the smallest case. Remove the wording that implies a cross-check on every edited refit or every unedited case.
+- `influence-baseline-same-computation` (Introduction (What this paper is and is not), Method (Reference policies) and Results (Reference policies set the scale)): The evidence supports only that the two family-averaged scores are equal (0.6056607653 each) and that the margin is therefore 0.0. It does not support that the computations are identical. The candidate discards rows with first-order effect >= 0 and non-finite effects. baseline_influence in the evaluator does not discard rows with effect >= 0, and it uses the evaluator's damped-Newton fit. Row-level identity of the edit sets is not shown.
+  - claim: the evaluator's own influence baseline is numerically identical to the studied search; the evaluator computes its own first-order influence baseline with the same formulas; the margin is zero because the evaluator's influence baseline is the same computation as the studied search
+  - evidence: source_evidence/downstream/program/src/program.py _propose (the filter effect[i] < 0). source_evidence/task/evaluate_final.py baseline_influence (lines 456-468, only an np.isfinite filter). paper_data.json final_evaluation.metrics: score_influence = combined_score = 0.6056607653243968 and margin_vs_best_baseline = 0.0.
+  - requested_fix: Say that the evaluator's influence baseline uses the same first-order formulas, and that its family-averaged score equals the studied search's (0.606), which gives a margin of exactly zero. Drop the claims that the two are the same computation or numerically identical as procedures, or note that the baseline omits the non-negative-effect filter.

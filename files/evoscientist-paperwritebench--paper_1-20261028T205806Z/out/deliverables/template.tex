@@ -1,0 +1,303 @@
+\documentclass{article}
+
+
+\usepackage{draftwatermark}
+\SetWatermarkText{AI-Generated}
+\SetWatermarkScale{0.5}
+\SetWatermarkColor[gray]{0.6}
+\usepackage[preprint]{neurips_2025}
+
+
+
+
+
+\usepackage[utf8]{inputenc} \usepackage[T1]{fontenc}    \usepackage{hyperref}       \usepackage{url}            \usepackage{booktabs}       \usepackage{amsfonts}       \usepackage{nicefrac}       \usepackage{microtype}      \usepackage{inconsolata}
+\usepackage{caption}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{makecell} 
+\usepackage[usestackEOL]{stackengine}
+\usepackage{graphicx}
+\usepackage{capt-of}\usepackage{booktabs}
+\usepackage{varwidth}
+\usepackage[table]{xcolor}
+
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xspace}
+
+\usepackage{import}
+\usepackage{animate}
+\usepackage{arydshln}
+\usepackage{multirow}
+\usepackage[normalem]{ulem}
+\usepackage[most]{tcolorbox}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{tcolorbox}
+\usepackage{pifont}
+\usepackage{alltt}
+\definecolor{titlegray}{rgb}{0.4, 0.4, 0.4} \definecolor{contentgray}{rgb}{0.95, 0.95, 0.95} 
+
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\newcommand{\base}{\texttt{\textsc{MM-thinker}}\xspace}
+\newcommand{\model}{\texttt{\textsc{VL-Rethinker}}\xspace}
+
+\newcommand{\imagesize}{0.48\paperwidth}
+\newcommand{\rowsize}{0.18\paperwidth}
+
+
+\title{VL-Rethinker: Incentivizing Self-Reflection of Vision-Language Models with Reinforcement Learning}
+
+
+
+\newtcolorbox{questionbanner}{
+  colback=blue!10!white,    colframe=blue!80!black,   width=\textwidth,
+  arc=4mm,                  boxrule=1pt,              fonttitle=\bfseries,
+  title=Question,
+}
+\newtcolorbox{promptbox}[1]{
+colback=contentgray,      colframe=titlegray,       colbacktitle=titlegray,   coltitle=white,           title={#1}, arc=4mm,                  rounded corners=northwest, rounded corners=northeast, sharp corners=south,      boxrule=1pt,              fonttitle=\bfseries,      }
+
+\author{Anonymous Author}
+
+
+
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Slow-thinking systems such as GPT-o1 and DeepSeek-R1 show that explicit, reflective reasoning yields large gains in mathematics and science, but comparable progress on vision-language reasoning has been limited. We study how to elicit such reasoning in vision-language models (VLMs) directly with reinforcement learning (RL), without distilling from a stronger teacher. We first identify a concrete optimization obstacle: under Group Relative Policy Optimization (GRPO), queries whose sampled responses are all correct or all incorrect receive exactly zero advantage, and as training progresses these \emph{vanishing advantages} cover a growing share of each batch, thinning the gradient signal. We address this with \textbf{Selective Sample Replay (SSR)}, which keeps only non-zero-advantage samples in a replay buffer and re-samples them in proportion to their advantage magnitude. To go beyond the shallow reasoning that RL alone tends to produce, we add \textbf{Forced Rethinking}: a textual trigger (e.g., ``Wait, does it seem right?'') is appended to a fraction of the model's own rollouts, successful rethinking trajectories are retained, and a small auxiliary likelihood loss reinforces them. The resulting model, \model, is trained with near on-policy RL and rule-based rewards on a curated set of 38.9K verifiable multimodal queries. At the 72B scale, \model reaches 80.4 on MathVista, 63.5 on MathVerse, 44.9 on MathVision, 55.9 on MMMU-Pro, and 38.5 on EMMA, the best open-source result on each of these benchmarks in our comparison, while trailing the best open-source model on MMMU-val by about 1.5 points. At 7B it improves over the strongest compared 7B model by 2.4 to 6.3 points on the three math-related benchmarks. Removing either SSR or Forced Rethinking lowers performance on every benchmark in our ablation.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Test-time ``slow thinking'' has become a central ingredient of strong reasoning models. OpenAI-o1~\citep{openai-o1}, DeepSeek-R1~\citep{deepseek-r1}, and Kimi k1.5~\citep{kimi-1_5} are trained, largely with reinforcement learning on verifiable rewards, to produce long chains of thought that include checking, backtracking, and revising. This has produced large gains in text-only mathematics and science. For vision-language models the picture is less clear: open-source VLMs still lag on challenging multimodal benchmarks such as MathVision~\citep{mathvision}, MMMU-Pro~\citep{mmmupro}, and EMMA~\citep{emma}.
+
+Two routes have been explored to close this gap in open models. \emph{Distillation} fine-tunes the VLM on long reasoning traces from a stronger teacher or tree search~\citep{llavacot,Mulberry,R1OneVision,vision-r1,virgo}; it is expensive and bounded by the teacher. \emph{Direct RL} with rule-based rewards is effective for language models~\citep{deepseek-r1,simplerl,open-reasoner-zero,deepscaler2025} and is now applied to VLMs~\citep{mmeureka,lmm-r1,r1vl,OpenVLThinker}. However, GRPO-style RL on VLMs does not by itself produce reliable self-reflection: accuracy improves, but the model rarely re-examines its answers, and training can plateau or degrade.
+
+We make two observations about why, and propose a remedy for each. \textbf{(1) Vanishing advantages.} GRPO scores each response relative to other responses sampled for the same query. If all responses to a query are correct, or all incorrect, every advantage is zero and the query contributes no policy gradient. This fraction grows during training on a multimodal RL corpus (Figure~\ref{fig:vanishing}): in the run we show, the fraction of ``effective'' queries falls from roughly 41\% to roughly 20\%. Since the loss is averaged over all tokens in a batch, zero-advantage samples also dilute the gradient of the remaining samples, so the learning signal thins exactly when the model saturates the easy part of the data. \textbf{(2) No incentive to reflect.} An objective that only rewards final-answer correctness gives no explicit reason to produce, and no on-policy examples of, self-verification or self-correction.
+
+\paragraph{Our approach.} \model combines two components in one near on-policy RL recipe (Figure~\ref{fig:overview}):
+\begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item \textbf{Selective Sample Replay (SSR)} discards zero-advantage samples, stores informative ones in a small replay buffer, and draws training batches with probability proportional to the advantage magnitude. This removes the zero spike in the advantage distribution (Figure~\ref{fig:vanishing}) and yields a more stable validation reward than GRPO or a filter-only variant (Figure~\ref{fig:ssr_curve}).
+\item \textbf{Forced Rethinking} appends a rethinking trigger such as ``Wait, does it seem right?'' to the model's own response and lets it continue. Successful rethinking trajectories are retained, and a small likelihood loss on positively-advantaged ones reinforces the behavior. No external teacher is involved.
+\end{itemize}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.55\linewidth]{figures/teaser-2.jpg}
+\caption{\model-72B versus proprietary models on five multimodal reasoning benchmarks (numbers from Table~\ref{table:main_results}). It scores above GPT-4o, Claude-3.5-Sonnet, and Gemini-2.0-Flash on all five and above OpenAI-o1 on MathVista and MathVerse; OpenAI-o1 remains ahead on MathVision, MMMU-Pro, and EMMA.}
+\label{fig:teaser}
+\end{figure}
+
+\paragraph{Results.} \model-72B has the highest score among open-source models in our comparison on MathVista (80.4), MathVerse (63.5), MathVision (44.9), MMMU-Pro (55.9), EMMA (38.5), and MEGA-Bench core (51.3), improving over the best open-source baseline by 5.6, 6.3, 6.5, 3.7, 4.4, and 2.3 points (Table~\ref{table:main_results}). On MMMU-val it scores 68.8, about 1.5 points below the best open-source model. The 7B model is best among compared 7B models on all seven benchmarks (Table~\ref{table:7b_results}). Ablations (Table~\ref{table:ablation_results}) show that SSR, Forced Rethinking, and the data mix each contribute.
+
+\paragraph{Contributions.} (i) We identify and quantify the vanishing-advantages problem of GRPO for multimodal RL. (ii) We propose Selective Sample Replay, which prioritizes high-$|$advantage$|$ samples. (iii) We propose Forced Rethinking, which trains self-verification and self-correction without distillation. (iv) We report the best open-source results among compared models on six of seven benchmarks at 72B and on all seven at 7B, and document where the approach does not help.
+
+\section{Preliminaries}
+\label{sec:prelim}
+
+\paragraph{GRPO.} Given a multimodal query $q$, a VLM policy $\pi_\theta$ produces a response $o$, and a rule-based verifier assigns a reward $r(q,o)$ by comparing the boxed final answer with the ground truth. GRPO samples $G$ responses per query from $\pi_{\theta_{\text{old}}}$ and computes a critic-free group-relative advantage
+\begin{equation}
+\hat A_i \;=\; r_i - \tfrac{1}{G}\textstyle\sum_{j=1}^{G} r_j .
+\label{eq:adv}
+\end{equation}
+The original formulation also divides by the group standard deviation; we use the mean-centered variant, which avoids a difficulty bias~\citep{drgrpo}. With binary rewards, $\hat A_i\in[-1,1]$. Let $\rho_{i,t}=\pi_\theta(o_{i,t}\mid q,o_{i,<t})/\pi_{\theta_{\text{old}}}(o_{i,t}\mid q,o_{i,<t})$. With a PPO-style clipped surrogate~\citep{ppo} and the asymmetric clipping of DAPO~\citep{dapo}, the loss over a batch $\mathcal{B}$ is
+\begin{equation}
+\mathcal{L}_{\text{PG}}(\theta) \;=\; -\frac{1}{\sum_{i\in\mathcal B}|o_i|}\sum_{i\in\mathcal B}\sum_{t=1}^{|o_i|}\min\!\Big(\rho_{i,t}\hat A_i,\;\operatorname{clip}\big(\rho_{i,t},\,1-\epsilon_{\text{low}},\,1+\epsilon_{\text{high}}\big)\hat A_i\Big),
+\label{eq:grpo}
+\end{equation}
+with $\epsilon_{\text{low}}=0.2$, $\epsilon_{\text{high}}=0.35$. The KL coefficient is zero and no reference model is kept.
+
+\paragraph{Vanishing advantages.} Equation~\eqref{eq:adv} gives $\hat A_i=0$ for all $i$ whenever the $G$ rewards of a query are identical. Such a \emph{degenerate} query contributes nothing to the numerator of Eq.~\eqref{eq:grpo}, yet its tokens still enter the denominator. If a fraction $z$ of the tokens in a batch belong to degenerate queries, the gradient magnitude is scaled down by roughly $(1-z)$ and is estimated from only a $(1-z)$ fraction of the samples, which raises its variance. If a query is solved with per-sample probability $p$, its group is degenerate with probability $p^{G}+(1-p)^{G}$; for $G=8$ this is about $0.17$ at $p=0.8$, $0.43$ at $p=0.9$, and $0.66$ at $p=0.95$. RL on verifiable rewards pushes per-query accuracy toward the extremes, so degenerate groups become more common over time even on fixed data. Figure~\ref{fig:vanishing} (left) shows this empirically: the effective fraction falls almost monotonically while the fully-solved fraction grows from about 0.19 to about 0.47, and the fully-failed fraction stays near one third. In the advantage histogram of GRPO (Figure~\ref{fig:vanishing}, right), about 37\% of the mass lies in the zero bin.
+
+A natural response is to discard zero-advantage groups, as in the dynamic sampling of DAPO~\citep{dapo} (\emph{GRPO-Filter}). The filtered distribution has no zero spike but stays skewed, with a pronounced mode of slightly negative advantages (Figure~\ref{fig:vanishing}, right), which motivates a more selective use of informative samples.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.28\linewidth]{figures/vanishing_adv.jpg}\hfill
+\includegraphics[width=0.69\linewidth]{figures/adv_histogram.jpg}
+\caption{\textbf{Vanishing advantages.} \emph{Left:} fraction of queries per training batch (x16 steps) whose responses are all correct, all incorrect, or mixed (``effective'', purple, with dashed linear trend) under standard GRPO. \emph{Right:} normalized histogram of advantages for GRPO, GRPO-Filter, and GRPO-SSR: GRPO has a spike at zero (about 37\% of mass), GRPO-Filter is skewed toward small negative advantages, and SSR is nearly symmetric and bimodal. Values quoted in the text are read from the plots.}
+\label{fig:vanishing}
+\label{fig:adv_hist}
+\end{figure}
+
+\section{Our Method}
+\label{sec:method}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/overview-2.jpg}
+\caption{\textbf{Method overview.} Rollouts for each training query are filtered, and non-zero-advantage samples are stored in a replay buffer (Selective Sample Replay, left). Sampling with probability proportional to the advantage magnitude re-distributes the advantage histogram away from zero (insets). The resulting VL-Reasoner is further trained with Forced Rethinking (right), where a trigger such as ``Wait, does it seem right?'' is appended to a rollout and the model continues generating. The result is \model.}
+\label{fig:overview}
+\end{figure*}
+
+\model starts from an instruction-tuned VLM (Qwen2.5-VL~\citep{qwen2_5_vl}) and optimizes Eq.~\eqref{eq:grpo} with two modifications to how training samples are chosen and constructed. Conceptually there are two phases (Figure~\ref{fig:overview}): SSR turns the instruct model into a stable RL learner (``VL-Reasoner''), and Forced Rethinking additionally trains reflection (``VL-Rethinker''). In the released implementation both are switches of a single trainer: each iteration performs rollouts, applies Forced Rethinking to eligible rollouts, pushes informative samples into the buffer, builds a prioritized batch, and updates with $\mathcal L_{\text{PG}}+\lambda\mathcal L_{\text{SFT}}$.
+
+\subsection{Selective Sample Replay}
+\label{sec:ssr}
+
+SSR maintains a first-in-first-out replay buffer $\mathcal{R}$ holding only samples with non-zero advantage. At each iteration the policy generates $G$ responses for each of several queries (a total of $N$ samples), advantages are computed with Eq.~\eqref{eq:adv}, and $\mathcal{E}=\{j: \hat A_j\neq 0\}$ is identified. The training batch is built as follows.
+\begin{enumerate}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item \textbf{Filter and store.} Samples in $\mathcal{E}$ are appended to $\mathcal{R}$; zero-advantage samples are never stored.
+\item \textbf{Prioritized selection.} The batch has a fixed size $N_b$, half of the rollout size in our implementation. It is filled first with samples of $\mathcal{E}$ drawn with replacement with probability
+\begin{equation}
+P(j)\;=\;|\hat A_j|^{\alpha}\Big/\textstyle\sum_{k}|\hat A_k|^{\alpha},\qquad \alpha=1,
+\label{eq:ssr}
+\end{equation}
+and any remaining slots are filled from $\mathcal{R}$ (informative samples from earlier iterations) with the same prioritization, using $|\hat A|+\varepsilon$ so that no stored sample has zero probability.
+\item \textbf{Update.} The policy is updated on the batch with Eq.~\eqref{eq:grpo}, using stored behavior log-probabilities for replayed samples.
+\end{enumerate}
+The idea is inspired by prioritized experience replay~\citep{per}, with priority given by advantage magnitude. Since $|\hat A|=1-\hat p$ for correct and $\hat p$ for incorrect responses ($\hat p$ is the group accuracy), Eq.~\eqref{eq:ssr} up-weights rare successes on hard queries and rare errors on easy ones, the samples closest to the decision boundary; the effect resembles a self-paced curriculum~\citep{curriculum}. The buffer holds half a rollout batch, so replayed samples are a few iterations old and the procedure stays near on-policy; ratio clipping absorbs the residual mismatch. Relative to GRPO-Filter, SSR re-weights by magnitude and keeps the batch size constant by drawing on the buffer (Figure~\ref{fig:vanishing}, right).
+
+\subsection{Forced Rethinking}
+\label{sec:fr}
+
+SSR repairs the gradient signal but does not encourage the model to check its work. Forced Rethinking creates on-policy examples of such behavior. For a selected rollout that terminated normally within the length budget, we concatenate the query, the (possibly truncated) response $o_{\text{prefix}}$, and a \emph{rethinking trigger} $\tau$, and sample a continuation $o'\sim\pi_\theta(\cdot\mid q,\,o_{\text{prefix}}\oplus\tau)$.
+\begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item \textbf{Triggers.} A small hand-written set: ``\textit{Wait}'', ``\textit{Wait, does it seem right?}'', ``\textit{Wait, let's double check}'', and ``\textit{Wait, there might be a mistake}''. With probability $0.5$ one of the first two is drawn (the first with probability $0.4$); otherwise the third is used if the original response was correct (self-verification) and the fourth if it was incorrect (self-correction).
+\item \textbf{Prefix truncation.} With probability $0.5$ the final-answer segment of the original response (last paragraph, boxed answer, or trailing ``answer'' statement) is removed before appending the trigger, so the model must re-derive the conclusion rather than copy it.
+\item \textbf{Selection and retention.} Each eligible rollout is skipped with probability $0.35$, so rethinking applies to a fraction $q\approx0.65$ of eligible samples, and incorrect rollouts from groups with accuracy above 0.7 are skipped. A rethinking trajectory is retained only if it is \emph{correct}, has 30 to 1024 tokens, and contains at most four hesitation markers (to avoid loops); at most two are kept per query per iteration. The retained trajectory replaces the original response in its slot, and its reward is that of the rethinking outcome.
+\end{itemize}
+Retaining only successful trajectories means the model is trained on cases where reflection either confirms a correct answer or turns an incorrect one into a correct one. No trigger is used at test time.
+
+\paragraph{Auxiliary SFT loss.} Because rewards are binary and positive rethinking samples are rare, we add a token-level negative log-likelihood on positively-advantaged samples containing a rethinking marker (a forced trigger or a spontaneous ``Wait''),
+\begin{equation}
+\mathcal{L}_{\text{SFT}}\;=\;-\frac{1}{\sum_{i\in\mathcal{S}}|o_i|}\sum_{i\in\mathcal{S}}\sum_{t}\log\pi_\theta(o_{i,t}\mid q,o_{i,<t}),
+\end{equation}
+where $\mathcal{S}$ is that set, and optimize $\mathcal{L}=\mathcal{L}_{\text{PG}}+\lambda\,\mathcal{L}_{\text{SFT}}$ with $\lambda=0.05$. The samples come from the policy itself, so this is self-imitation (rejection sampling) on reflective behavior, not distillation.
+
+\paragraph{Rewards.} The reward is rule-based and essentially binary: $1$ for a well-formed response with a correct final answer, $0$ for a well-formed wrong one. The released implementation adds two small modifications that we did not ablate: ill-formed responses receive $-0.1$, and a correct non-forced response that spontaneously contains one or two hesitation markers receives $1.1$, while a correct response with three or more is penalized by $0.2$ per marker (floored at $-0.1$).
+
+
+
+\section{Experiments}
+\label{sec:exp}
+
+\paragraph{Data.} We train on a curated collection of 38.9K multimodal queries with verifiable answers (ViRL39K), covering mathematics from grade-school to competition level, broader STEM and social-science topics, and reasoning over charts, diagrams, tables, documents, and spatial layouts. Queries were filtered to remove problematic items and items whose answers cannot be checked by rule, and are annotated with model-capability information for selecting queries suited to a model scale. The 7B model in Tables~\ref{table:ablation_results} and~\ref{table:7b_results} is trained on a 16K-query subset; we do not have the subset sizes for the 72B and 32B models.
+
+\paragraph{Models and training.} \model-7B and \model-72B are initialized from Qwen2.5-VL-7B/72B-Instruct~\citep{qwen2_5_vl}; a 32B variant is also reported. Training builds on OpenRLHF with vLLM rollouts. With the defaults of the released script, we sample $G=8$ responses per query (temperature 1.0, top-$p$ 0.95), use learning rate $10^{-6}$, three passes over the data, $\lambda=0.05$, no KL term, and no entropy bonus. These values are taken from the training scripts; we did not sweep hyper-parameters and cannot verify that every 72B run used exactly them.
+
+\paragraph{Evaluation.} Math-related: MathVista testmini~\citep{mathvista}, MathVerse testmini~\citep{mathverse}, MathVision test~\citep{mathvision}. Multi-discipline: MMMU-Pro overall~\citep{mmmupro}, MMMU validation~\citep{yue2024mmmu}, EMMA full~\citep{emma}. Real-world: MEGA-Bench core~\citep{chen2024mega}. Evaluation uses vLLM batched inference at temperature 0.6 and a rule-based judge that reuses the training verifier, not an LLM judge. Entries marked $^\dagger$ were reproduced under this protocol; the tables do not otherwise distinguish numbers taken from prior reports from our own evaluation, so protocol differences across rows may exist.
+
+\paragraph{Baselines.} At 7B we compare against general VLMs (InternVL2/2.5~\citep{internvl_2_5}, Qwen2-VL~\citep{qwen2vl}, Qwen2.5-VL~\citep{qwen2_5_vl}, LLaVA-OneVision~\citep{llavaov}, Kimi-VL) and reasoning VLMs (MM-Eureka~\citep{mmeureka}, R1-VL~\citep{r1vl}, R1-Onevision~\citep{R1OneVision}, OpenVLThinker~\citep{OpenVLThinker}); at 72B against proprietary models (OpenAI-o1~\citep{openai-o1}, GPT-4o~\citep{gpt4o}, Claude-3.5-Sonnet~\citep{claude35}, Gemini-2.0-Flash) and open-source models (Llama-4-Scout, InternVL-2.5-78B, QvQ-72B, LLaVA-OV-72B, Qwen2.5-VL-32B/72B).
+
+\begin{table*}[tb]
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Model}&\multicolumn{3}{c}{\textbf{Math-Related}}&\multicolumn{3}{c}{\textbf{Multi-Discipline}}&\multicolumn{1}{c}{\textbf{Real-World}}\\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-8}
+&MathVista&MathVerse&MathVision&MMMU-Pro&MMMU&EMMA&MEGA\\
+&testmini&testmini&test&overall&val&full&core\\
+\midrule
+\multicolumn{8}{c}{Proprietary Model}\\
+\midrule
+OpenAI-o1&73.9&57.0&60.3&62.4&78.2&45.7&56.2\\
+OpenAI-GPT-4o&60.0&41.2&30.6&51.9&69.1&32.7&52.7\\
+Claude-3.5-Sonnet&67.7&47.8&33.5&51.5&68.3&35.1&52.3\\
+Gemini-2.0-Flash&73.4&54.6&41.3&51.7&70.7&33.6&54.1\\
+\midrule
+\multicolumn{8}{c}{Open-Source Models}\\
+\midrule
+Llama4-Scout-109B & 70.7 & - &  - & \underline{52.2}&  69.4& 24.6 & 31.8 \\
+InternVL-2.5-78B&72.3&51.7&34.9&48.6&61.8&27.1&44.1\\
+QvQ-72B&71.4&48.6&35.9&51.5&70.3&32.0&8.8\\
+LLava-OV-72B&67.5&39.1&30.1&31.0&56.8& 23.8&29.7\\
+Qwen-2.5-VL-32B&74.7&48.5&\underline{38.4}&49.5&$^\dagger$59.4 &31.1&13.3\\
+Qwen-2.5-VL-72B&\underline{74.8}&\underline{57.2}&38.1&51.6& $^\dagger$67.0&\underline{34.1}&\underline{49.0}\\
+\midrule
+\model-32B &{78.8}&{56.9}&{40.5}&{50.6}&{65.6}&{37.9}&19.9\\
+\model-72B &\textbf{80.4}&\textbf{63.5}&\textbf{44.9}&\textbf{55.9}&\textbf{68.8}&\textbf{38.5}&\textbf{51.3}\\
+\rowcolor{cyan!20}
+$\Delta$ (Ours - Open SoTA)&+5.6&+6.3&+6.5&+3.7&-1.5&+4.4&+2.3\\
+\bottomrule
+\end{tabular}
+}
+\caption{\small Comparison between our 72B model and other state-of-the-art models. The notation of $^\dagger$ indicates reproduced results using our evaluation protocols. $\Delta$ is recomputed from the rounded scores shown against the best open-source entry in each column; for MathVision and MMMU this gives $+6.5$ and $-1.5$, whereas an earlier version of the table listed $+6.8$ and $-1.4$.}
+\label{table:main_results}
+\end{table*}
+
+\subsection{Main results}
+
+\paragraph{72B.} Table~\ref{table:main_results} compares \model-72B with proprietary and open-source models. Among open-source models it has the highest score on six of seven benchmarks. The improvements over the best open-source baseline in each column are $+5.6$ on MathVista (80.4 vs.\ 74.8, Qwen2.5-VL-72B), $+6.3$ on MathVerse (63.5 vs.\ 57.2), $+6.5$ on MathVision (44.9 vs.\ 38.4, Qwen2.5-VL-32B), $+3.7$ on MMMU-Pro (55.9 vs.\ 52.2, Llama-4-Scout), $+4.4$ on EMMA (38.5 vs.\ 34.1), and $+2.3$ on MEGA-Bench core (51.3 vs.\ 49.0). The exception is MMMU-val, where \model-72B (68.8) is 1.5 points behind QvQ-72B (70.3) and 0.6 behind Llama-4-Scout (69.4), although 1.8 above the reproduced Qwen2.5-VL-72B (67.0).
+
+Against proprietary models, \model-72B exceeds OpenAI-o1 on MathVista (80.4 vs.\ 73.9) and MathVerse (63.5 vs.\ 57.0), and exceeds GPT-4o, Claude-3.5-Sonnet, and Gemini-2.0-Flash on MathVista, MathVerse, MathVision, MMMU-Pro, and EMMA. It does not reach OpenAI-o1 on MathVision (44.9 vs.\ 60.3), MMMU-Pro (55.9 vs.\ 62.4), MMMU-val (68.8 vs.\ 78.2), EMMA (38.5 vs.\ 45.7), or MEGA-Bench core (51.3 vs.\ 56.2), and trails the other proprietary models on MEGA-Bench core and GPT-4o and Gemini-2.0-Flash on MMMU-val. The gap to the best proprietary slow-thinking system on harder multi-discipline benchmarks is narrowed, not closed.
+
+The 32B variant (78.8 / 56.9 / 40.5 on the math benchmarks) is competitive with larger open models on those benchmarks, but is weak on MEGA-Bench core (19.9) and below Qwen2.5-VL-72B on MMMU-Pro and MMMU-val. Low MEGA-Bench scores also appear for QvQ-72B (8.8) and Qwen2.5-VL-32B (13.3); we have not analyzed the cause.
+
+\input{tables/table_le}
+
+\paragraph{7B.} Table~\ref{table:7b_results} shows \model-7B is best in every column among the 7B models (74.9 MathVista, 54.2 MathVerse, 32.3 MathVision, 41.7 MMMU-Pro, 56.7 MMMU-val, 29.7 EMMA, 37.2 MEGA-Bench core), i.e., $+4.7$, $+6.3$, $+2.4$, $+4.4$, $+0.7$, $+3.1$, and $+2.2$ over the strongest previous 7B model in each column. Relative to the RL-trained MM-Eureka-7B (Qwen) and OpenVLThinker-7B, the gains on the three math benchmarks are $+1.9$/$+4.7$ (MathVista), $+3.9$/$+6.3$ (MathVerse), and $+5.4$/$+7.0$ (MathVision); relative to the distillation-based R1-Onevision-7B they are $+10.8$, $+7.8$, and $+2.4$. The $+0.7$ margin on MMMU-val is small and two other entries in that column are reproduced by us, so it is the least conclusive comparison.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.45\linewidth]{figures/ssr_eval_curve.jpg}
+\caption{\textbf{Training dynamics.} Validation reward of GRPO, GRPO-Filter, and GRPO-SSR versus training steps (x16). Curves end at different steps; values in the text are read from the plot.}
+\label{fig:ssr_curve}
+\end{figure}
+
+\subsection{Ablation study}
+\label{sec:ablation}
+
+Table~\ref{table:ablation_results} ablates the algorithm and the data on the 7B model (16K queries). The ``w/o Forced Rethinking'' row is the SSR-only model (VL-Reasoner). The ``no SSR'' rows replace SSR by GRPO-Filter and by plain GRPO. These rows are listed beneath the SSR-only row with a ``-'' prefix and the table does not state whether Forced Rethinking is kept in them, so we compare \emph{recipes} and do not claim a clean one-factor ablation for those two rows.
+
+\input{tables/table_im}
+
+\paragraph{Forced Rethinking.} Removing it lowers all five scores: $-2.5$ on MathVision (32.3 to 29.8), $-2.5$ on MathVista, $-1.0$ on MathVerse, $-0.8$ on MMMU-Pro, and $-0.2$ on EMMA.
+
+\paragraph{Selective Sample Replay.} Replacing SSR with GRPO-Filter lowers every score relative to the full model, by $-3.8$, $-2.9$, $-4.2$, $-1.7$, and $-2.8$ on MathVision, MathVista, MathVerse, MMMU-Pro, and EMMA. Plain GRPO is lower still on MathVision (26.0, $-6.3$), MathVista (70.9, $-4.0$), MMMU-Pro (38.8, $-2.9$), and EMMA (26.2, $-3.5$); on MathVerse it is slightly above GRPO-Filter (51.4 vs.\ 50.0) but $-2.8$ below the full model. GRPO is thus below GRPO-Filter on four of five benchmarks, and the SSR-only model is above GRPO-Filter on all five, consistent with filtering helping and magnitude-based prioritization helping further. Each configuration was trained once and no variance is reported, so differences near one point (such as the MathVerse ordering of GRPO and GRPO-Filter) should not be interpreted.
+
+\paragraph{Training dynamics.} In Figure~\ref{fig:ssr_curve}, GRPO's validation reward rises from about 0.385 to about 0.43 within roughly 11 logged intervals, then declines to about 0.40. GRPO-Filter rises more steadily to about 0.435 over a shorter run. SSR rises fastest, peaks near 0.455, and ends near 0.449. The absolute gaps are small (about 0.02 over GRPO-Filter at the end of its run, about 0.05 over the final GRPO value) and come from single runs.
+
+\paragraph{Data.} Removing 3K text-category queries (16K to 13K) lowers the scores by 0.6 to 3.2 points, and also removing the science category (11K) by 1.7 to 4.3 points. These changes also shrink the training set, so data \emph{type} and \emph{quantity} are not separated; we conclude only that the full mix is better than the reduced ones.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.88\linewidth]{figures/foret_ablation.jpg}
+\caption{\textbf{Rethinking strategies.} Relative improvement over VL-Reasoner-7B (SSR only; absolute scores inside the gray bars, scores of each variant in parentheses). ``Forced'' applies a trigger to all test responses; ``bound'' is an upper bound that credits a query when the original or the rethought answer is correct (our reading of the evaluation code); \model-7B rethinks selectively. The black line (right axis) is \model-7B's rethinking ratio, read from the plot.}
+\label{fig:foret}
+\end{figure}
+
+\subsection{Analysis of rethinking}
+\label{sec:rethink-analysis}
+
+Figure~\ref{fig:foret} compares three ways of using rethinking relative to the SSR-only VL-Reasoner-7B. (i) Forcing a trigger on every test response of VL-Reasoner (as we interpret the ``forced'' legend entry) gives small relative gains of $+2.49\%$, $+0.76\%$, $+0.80\%$, and $+0.53\%$ on MathVision, MathVista, MathVerse, and MMMU-Pro, i.e., $+0.7$, $+0.5$, $+0.4$, and $+0.2$ points. (ii) \model-7B, trained with Forced Rethinking and deciding itself whether to rethink, obtains $+8.46\%$, $+3.52\%$, $+1.98\%$, and $+1.84\%$ ($+2.5$, $+2.5$, $+1.1$, $+0.8$ points). The benefit therefore does not come from appending a trigger at test time but from training the model to reflect. (iii) The oracle ``bound'' gives $+13.21\%$, $+5.04\%$, $+3.77\%$, and $+3.85\%$, so \model-7B realizes roughly 48 to 70\% of this gain (64\%, 70\%, 53\%, 48\%); we treat the bound only as a reference point.
+
+The black line shows that \model-7B rethinks selectively and in a benchmark-dependent way: on a minority of responses on MMMU-Pro (about 18\%) and MathVista (about 24\%), about a third on MathVision, and the large majority on MathVerse (about 78\%) where the gain is modest, so ratio and gain are not monotonically related (we have no explanation). We have not measured inference-time token cost and make no efficiency claim beyond the ratio being below 100\%.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.5\linewidth]{figures/rethinking.jpg}
+\caption{\textbf{Forced Rethinking in practice.} \emph{Top:} a geometry example. The first response hallucinates $JH=\tfrac12 KL$ and obtains $KL=10$; after the trigger ``Wait, there might be a mistake'' the model notes that the midsegment is parallel to $LM$, not $KL$. \emph{Bottom:} word cloud of text following forced triggers, dominated by verification vocabulary (``double check'', ``mistake'', ``recheck'').}
+\label{fig:rethinking_example}
+\end{figure}
+
+Figure~\ref{fig:rethinking_example} illustrates the behavior. The example response ends with $\boxed{10}$ as the length of $LM$ and the remark that $KL$ ``requires additional information''; it illustrates the self-correction pattern and is not a fully solved instance. The word cloud shows that the text after a trigger is largely verification language, which is consistent with, but does not prove, genuine re-examination.
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{RL and slow thinking for language models.} Chain-of-thought prompting~\citep{wei2022chain} and process supervision~\citep{letsverify} improved reasoning, and o1, R1, and Kimi k1.5~\citep{openai-o1,deepseek-r1,kimi-1_5} made long reflective chains of thought a product of RL on verifiable rewards. Open work reproduces and analyzes this recipe~\citep{simplerl,open-reasoner-zero,deepscaler2025,lightr1,drgrpo}, and test-time budget forcing with ``wait'' tokens also works~\citep{s1}. Closest to our analysis, DAPO~\citep{dapo} filters zero-advantage groups and clips asymmetrically (a baseline and a design choice here), and Dr.~GRPO~\citep{drgrpo} analyzes normalization biases. SSR additionally re-weights retained samples by advantage magnitude and draws on a buffer of past informative samples, as in prioritized experience replay~\citep{per}.
+
+\paragraph{Multimodal reasoning.} Distillation and search-based methods fine-tune VLMs on structured or long reasoning traces~\citep{llavacot,Mulberry,llamav_o1,insight_v,R1OneVision,vision-r1,virgo}. Rule-based RL has been applied by MM-Eureka~\citep{mmeureka}, LMM-R1~\citep{lmm-r1}, R1-VL~\citep{r1vl}, and OpenVLThinker~\citep{OpenVLThinker}, which alternates SFT and RL. We differ by diagnosing the vanishing-advantage problem of saturating multimodal RL and by training reflection inside the RL loop, using triggers during training (with a retention rule and an SFT term) rather than at test time as in~\citet{s1}.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We studied how to elicit reflective reasoning in VLMs through direct RL. GRPO suffers from vanishing advantages, where a growing share of queries yields zero gradient; Selective Sample Replay restores the signal by replaying non-zero-advantage samples in proportion to their advantage magnitude. Forced Rethinking appends triggers to the model's own rollouts, retains successful trajectories, and adds a small likelihood loss. The resulting \model models obtain the highest open-source scores on six of seven benchmarks at 72B and on all seven among compared 7B models, and ablations indicate contributions from both components and from the data mix.
+
+\paragraph{Limitations.} (i) Each configuration was trained once and no seeds or confidence intervals are reported, so differences near one point are indicative only. (ii) The GRPO and GRPO-Filter rows do not clearly isolate SSR from Forced Rethinking, and the data ablation confounds type with quantity. (iii) Only some baseline entries are marked as reproduced, so protocol mismatch may affect small margins. (iv) The model remains well below OpenAI-o1 on MathVision, MMMU-Pro, MMMU-val, EMMA, and MEGA-Bench, trails the best open-source model on MMMU-val, and the 32B variant scores very low on MEGA-Bench core for reasons we have not examined. (v) Triggers, selection probabilities, reward shaping, and replay settings are hand-chosen and untuned, and several statements about curves and rethinking ratios are read off figures. (vi) We did not measure inference cost or response length. (vii) Rule-based verifiers restrict training queries to those with checkable short answers.
+
+\bibliographystyle{unsrtnat}
+
+{\small\setlength{\bibsep}{1pt}
+\bibliography{references}}
+
+\end{document}

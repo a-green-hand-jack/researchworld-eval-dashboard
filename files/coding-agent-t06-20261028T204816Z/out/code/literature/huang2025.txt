@@ -1,0 +1,976 @@
+Dropping Just a Handful of Preferences Can Change
+Top Large Language Model Rankings
+Jenny Y. Huang1,2*, Yunyi Shen1,2*,
+Dennis Wei2,3, and Tamara Broderick1,2
+1Department of Electrical Engineering and Computer Science
+Massachusetts Institute of Technology
+2MIT-IBM Watson AI Lab
+3IBM Research
+*Equal contribution
+August 19, 2025
+Abstract
+We propose a method for evaluating the robustness of a widely used LLM rank-
+ing system—the Bradley–Terry ranking system—to dropping a worst-case very small
+fraction of evaluation data. Our approach is computationally fast and easy to adopt.
+When we apply our method to matchups from two popular human-preference plat-
+forms, Chatbot Arena and MT-Bench, we find that the Bradley–Terry rankings of
+top-performing models are remarkably sensitive to the removal of a small fraction of
+evaluations. Our framework also identifies the specific evaluations most responsible for
+such ranking flips, allowing for inspections of these influential preferences. We observe
+that the rankings derived from MT-Bench preferences are notably more robust than
+those from Chatbot Arena, likely due to MT-bench’s use of expert annotators and
+carefully constructed prompts. Finally, we find that rankings based on crowdsourced
+human-evaluated systems are just as sensitive as those based on LLM-as-a-judge evalu-
+ations, where in both, dropping as little as 0.02% of the total evaluations in the dataset
+can change the top-ranked model.
+1
+arXiv:2508.11847v1  [stat.ML]  16 Aug 2025
+
+1
+Introduction
+Open evaluation platforms like Chatbot Arena have, in large part due to their openness,
+become a gold standard for assessing the capabilities of leading LLMs via human preference.
+These open platforms are now widely used by top LLM developers and companies to evaluate
+and design new models and benchmarks (Chiang et al., 2024a; Singh et al., 2025; Grattafiori
+et al., 2024; Hui et al., 2024; White et al., 2024).
+Such platforms rely on crowdsourced pairwise battles and human votes to compute model
+rankings (Lee et al., 2023; Bai et al., 2022). At the heart of these preference-based evaluation
+and alignment pipelines is the Bradley–Terry (BT) model (Bradley and Terry, 1952; Sun
+et al., 2025), which is widely used to rank LLMs based on human feedback (Chiang et al.,
+2024a), train reward models for RLHF (Ouyang et al., 2022; Touvron et al., 2023; Xu et al.,
+2024), and route incoming queries to the most appropriate LLM or inference-time scaling
+strategy (Damani et al., 2024).
+Recent controversies, however, have raised concerns about the trustworthiness of popular
+LLM evaluation platforms like Chatbot Arena (Chiang et al., 2024a). For instance, Min
+et al. (2025) demonstrate that Chatbot Arena is vulnerable to vote-rigging: by injecting
+just a few hundred manipulated votes (out of 1.7 million), attackers can significantly change
+the top model rankings. Singh et al. (2025) further identify issues such as data leakage and
+private testing practices that allow large, proprietary model developers to selectively report
+the best-performing versions of their models.
+We study a slightly different type of untrustworthiness of LLM ranking systems in this work.
+That is: “Will the top rankings from LLM-evaluation platforms change upon dropping a very
+small fraction of the human (or AI) preference evaluations?” If it turns out that the answer
+is yes, this raises concerns about the generalizability and stability of the rankings produced
+by such systems. One might worry about whether these rankings, or the learned human
+preferences from these systems, actually generalize (Broderick et al., 2020).
+This question motivates the need for a systematic way to assess the robustness of top rankings
+in BT-based evaluation systems to worst-case data dropping. However, no such method
+currently exists (beyond a brute-force combinatorial search over all possible small subsets
+of data) to test whether the model rankings on LLM evaluation systems are robust to the
+removal of a very small fraction of adversarially-chosen evaluations.1
+1This combinatorial search is computationally infeasible for large-scale platforms like Chatbot Arena.
+2
+
+In order to avoid this computationally intractable combinatorial search, we turn to a recent
+line of works from statistics and theoretical computer science that design algorithms for
+assessing whether data analyses are robust to dropping a small, worst-case fraction of data
+points (Broderick et al., 2020; Kuschnig et al., 2021; Moitra and Rohatgi, 2022; Freund and
+Hopkins, 2023; Shiffman et al., 2023; Nguyen et al., 2024; Huang et al., 2024; Rubinstein
+and Hopkins, 2025). One such method, the Approximate Maximum Influence Perturbation
+(AMIP), estimates how much a statistic of interest could change if a worst-case subset of
+the data were dropped (Broderick et al., 2020). We extend these ideas to develop a fast ap-
+proximation method for assessing the robustness of rankings from LLM evaluation systems
+to worst-case data-dropping. We apply our method to two widely used sets of human pref-
+erence matchups: Chatbot Arena and MT-Bench (Chiang et al., 2024a; Zheng et al., 2023).
+Although our methods are largely based on the ranking system used in Chatbot Arena and
+MT-Bench, there are a few differences (including tie-handling and post-processing) between
+the raw BT scores we analyze and the scores implemented on these platforms; see Section 3.1
+for more details. We note that a previous work in computational biology (Shiffman et al.,
+2023) studies the sensitivity of gene set enrichment analyses to dropping just a few cells and
+that, importantly, this work also studies worst-case data-dropping robustness of rankings.
+However, while this previous work studies robustness in the ranking of p-values (specifically,
+p-values derived using the hypergeometric test), our work studies the robustness of rankings
+derived from the BT model (which can be thought of as elements in the coefficient vector of
+a logistic regression model).
+In Section 2, we formalize the setup for assessing worst-case data-dropping robustness in BT-
+based ranking systems, and in Section 3 we introduce a computationally efficient method
+for assessing this form of robustness in practice.
+In Section 4, we apply our robustness
+assessment method to investigate the robustness of LLM preference data.
+Our code is publicly available at https://github.com/JennyHuang19/IsRankingRobust,
+including all scripts required to run our robustness assessing method and to reproduce the
+results presented in this paper.
+2
+Setup
+Human preference data.
+We consider a preference-based ranking system akin to Chat-
+bot Arena (Chiang et al., 2024a). There are in total M language models. Any user can
+3
+
+submit a prompt to be answered by a pair of language models, say models i and j for
+i, j ∈[M] with i̸ = j. The user then determines if the response from model i is better than
+that of model j. Suppose there are in total N such comparisons; the data can be seen as a
+collection of tuples {(in, jn, yn)}N
+n=1, with yn ∈{0, 1} being an indicator for whether in the
+nth match, model in is preferred over model jn. From a collection of preference data, the
+goal is to rank the language models.
+Ranking with the Bradley–Terry model.
+The Bradley–Terry (BT) model is a classical
+statistical model used to rank players from binary preference data that is used by Chatbot
+Arena. In this model, each player (e.g., language model), i, is associated with a BT score,
+θi, and the preferences are assumed to be generated as
+yn ∼Bernoulli(σ(θin −θjn)),
+(1)
+where the sigmoid function σ(x) = 1/(1 + e−x).
+Note, since the “winning” probability
+depends on the difference between two players rather than on their raw scores, the scores
+are identified only up to a constant additive term. There are different ways to avoid this
+identifiability problem (Wu et al., 2022). We adopted the method of setting the first player’s
+score to be 0. We can cast this model as a logistic regression with a specially-structured
+design matrix. We denote the corresponding “design” vector of the nth comparison, xn ∈
+{−1, 0, 1}M, a vector encoding which two players are being compared. That is, if the game
+is between players i and j, then xn has a 1 in the ith element, a −1 in the jth element, and
+0 otherwise. Using this structure, we can rewrite the model as a logistic regression model
+with M −1 parameters corresponding to the scores of the players, θ = (θ1, . . . , θM) ∈RM
+with θ1 = 0,
+yn ∼Bernoulli(σ(x⊤
+n θ)).
+(2)
+We fit the BT-model (i.e., estimate θ) by maximum likelihood,
+ˆθ := arg min
+θ:θ1=0
+N
+X
+n=1
+ −yn log σ(x⊤
+n θ)
+−(1 −yn) log(1 −σ(x⊤
+n θ))
+
+.
+(3)
+Finally, we define the rank of a model as its position in the sorted list of models, (bθ(1), . . . , bθ(M)),
+ordered by their scores in descending order, so that bθ(1) corresponds to the top-ranked model.
+In the rest of this section, we turn to the goal of determining whether there exists a small
+4
+
+fraction of data (e.g., matchups) that we can drop to change the ordering of the estimated
+BT scores.
+Setup for Data-Dropping. We study whether dropping a small fraction α ∈(0, 1) (e.g.,
+α = 0.01) of the preference data can change the ordering of the estimated BT scores. Brod-
+erick et al. (2020) define the Maximum Influence Perturbation as the largest possible change
+induced in a quantity of interest by removing at most 100α% of the data.
+Let wn denote a weight on the nth data point, and collect these into a vector w :=
+(w1, ..., wN). Define the weighted estimator as
+ˆθ(w) := arg min
+θ(w):θ1(w)=0
+N
+X
+n=1
+wn
+ −yn log σ(x⊤
+n θ)
+−(1 −yn) log(1 −σ(x⊤
+n θ))
+
+.
+(4)
+Setting w = 1N (the all-ones vector) recovers the BT scores computed on the full data (e.g.,
+the original arena), while setting wn = 0 corresponds to dropping the nth data point (e.g.,
+a matchup). We define the set of all weight vectors corresponding to dropping at most an
+α-fraction of the data as follows:
+Definition 2.1 (Feasible Drop Set). Let Wα := {w ∈{0, 1}N : PN
+n=1(1 −wn) ≤αN} be
+the set of all binary weight vectors indicating subsets where at most 100α% of the data has
+been dropped.
+Two-Player Arena. We begin by analyzing the robustness of an arena involving just two
+players (e.g., LLMs): player i and player j. Without loss of generality, we assume2 that
+player i has the higher estimated BT score on the full data:
+bθi(1N) ≥bθj(1N).
+We are interested in whether this ordering can be reversed by dropping at most an α-fraction
+of the data.
+Definition 2.2 (Top-1 Data-Dropping Robustness in Two-Player Arenas). An arena con-
+sisting of players i and j is said to be top-1 robust at level α if there does not exist a data
+2If this assumption does not hold, the identities of i and j can be swapped.
+5
+
+weighting w ∈Wα such that the BT scores reverse under reweighting:
+n
+w ∈Wα : bθi(w) < bθj(w)
+o
+= ∅.
+(5)
+To generalize this setup beyond a two-player arena, we introduce more notation.
+M-Player Arena. We now extend this notion to arenas with M players, for any M ≥2.
+Let T (w) := {bθi(w)}M
+i=1 denote the set of BT scores under weighting w.
+Definition 2.3 (Top-k Set). The top-k set under full data is defined as the set of players
+whose scores rank among the top k:
+KT (1N) :=
+n
+bθi(1N) : rank
+h
+bθi(1N); T (1N)
+i
+≤k
+o
+.
+(6)
+Definition 2.4 (Top-k Data-Dropping Robustness in M-Player Arenas). An arena is top-k
+robust at level α if no α-fraction subset of data can be dropped to change the top-k set. That
+is,
+
+w ∈Wα : KT (1N)̸ = KT (w)
+	
+= ∅.
+(7)
+Equation (7) is nontrivial to directly verify; to directly check, we have to test out dropping
+all possible small-fraction subsets of the arena, a combinatorial operation that is computa-
+tionally intractable in practice.
+In Section 3, we show that verifying whether Eq. (7) holds can be reduced to checking the
+robustness of a series of pairwise comparisons. Specifically, top-k robustness as defined in
+Definition 2.4 can be checked by checking whether there exists a reweighting w ∈Wα that
+flips the ranking of a pair (i, j) such that i is inside and j is outside the top-k set. We then
+can test if such flipping can happen by a continuous approximation of the discrete weights
+w. We detail this procedure in Section 3.
+3
+Proposed method
+Recall that our goal is to evaluate the robustness of the rankings induced by a BT-model
+{bθ(1), ..., bθ(M)} when a small fraction of matches (e.g., evaluations) is removed from the arena.
+6
+
+To this end, we introduce a method based on checking the robustness of pairwise BT score
+differences.
+We begin by showing that a top-k set can be characterized by considering a set of pairwise
+comparisons in Proposition 3.1.
+Proposition 3.1. Suppose we have M real numbers, T (w) := {bθi(w)}M
+i=1. Suppose a set
+S ⊂T (w) satisfies |S| = k. Suppose it is the case that ∀bθi(w) ∈S and ∀bθj(w) ∈T (w) \ S,
+we have that bθi(w) > bθj(w). Then, it must be that S is the top-k set, or S = KT (w).
+Proof. We first show that S ⊂KT (w). Suppose that bθi(w) ∈S. By assumption, we have that
+∀bθj(w) ∈T (w)\S, bθi(w) > bθj(w). Since |T (w)\S| = M−k, there must exist at least (M−k)
+values in T (w) that are smaller than bθi(w). This must mean that rank(bθi(w); T (w)) ≤k, so
+bθi(w) ∈KT (w) as needed.
+We next show that KT (w) ⊂S by contradiction. Suppose there exists a bθj(w) such that
+bθj(w) ∈KT (w) but bθj(w) /∈S. Since bθj(w) /∈S, then bθj(w) ∈T (w) \ S. This means that
+∀bθi(w) ∈S we have bθi(w) > bθj(w), and since |S| = k, this implies that rank(bθj(w); T (w)) >
+k, contradicting the assumption bθj(w) ∈KT (w).
+Using the result from Proposition 3.1, we come up with a greedy algorithm to test whether
+the top-k set is robust to worst-case data-dropping.
+The idea here is to test the data-dropping robustness of all players in the top-k set against
+all players outside of the top-k set. If any one of these pairwise comparisons is non-robust,
+then the top-k set is non-robust, since one of the members of the top-k set will have been
+exchanged for an element outside the top-k.
+Before that, we describe what it means for a given pair of player scores, (bθi(w), bθj(w)), to be
+data-dropping robust.
+Pairwise Robust.
+Given a pair of teams, (i, j), we say that the scores for this pair,
+(bθi(w), bθj(w)), are robust to small-fraction data-dropping at level-α if
+{w ∈Wα : bθi(w) ≤bθj(w)} = ∅.
+(8)
+Top-k Robust.
+Recall that an arena is top-k robust at level-α if there does not exist a
+reweighting, w ∈Wα, such that KT (1N)̸ = KT (w) (see Eq. (7)). Using the line of logic in
+7
+
+Proposition 3.1, this is equivalent to showing that, ∀(i, j) where i ∈KT (w) and j /∈KT (w),
+the pair (bθi(w), bθj(w)) is robust. Namely, if every comparison (i, j) in this set of pairwise
+comparisons stays the same (after reweighting), then the top-k set also stays the same (see
+Proposition 3.1 for a detailed proof).
+We now provide a method for checking the robustness of pairwise comparisons.
+Method for Checking Pairwise Robustness. In Eq. (8), we are interested in checking
+whether there exists a small fraction of evaluations, w ∈Wα, that can be dropped to change
+the sign of a difference in BT scores. Without loss of generality, we will assume that the
+sign of the difference of BT scores fit to the full data is positive (e.g., [bθi(1N) −bθj(1N)] > 0,
+meaning that model i has a higher score than model j).
+To evaluate the robustness of the sign of [bθi(1N) −bθj(1N)] to dropping a small fraction of
+matches, we adopt a recently-developed method from the statistics literature known as the
+Approximate Maximum Influence Perturbation (Broderick et al., 2020) (see Appendix A
+for a more detailed discussion on how we adapt this method to our problem setup). This
+method approximates the maximal directional change in a statistic, e.g., [bθi(1N) −bθj(1N)],
+that can result from dropping a worst-case subset of data points (in our case, evaluations) of
+size at most ⌊αN⌋. This method allows us to sidestep running an expensive combinatorial
+search over all data subsets for the worst-case subset of matches to drop, a procedure that
+is computationally prohibitive for large LLM evaluation platforms like Chatbot Arena.
+The optimization problem implied by the Maximum Influence Perturbation problem in our
+particular case is shown below
+max
+w∈Wα
+h
+bθi(1N) −bθj(1N)
+i
+−
+h
+bθi(w) −bθj(w)
+i
+.
+(9)
+The key that makes the AMIP method fast for solving Equation (9) is that it approximates
+the impact of dropping a data point3 by using a first-order approximation (e.g., influence
+functions and variants). In our case, this approximation amounts to replacing Eq. (9) with
+max
+w∈Wα
+XN
+n=1(1 −wn)
+ 
+∂ˆθi(w)
+∂wn
+
+w=1N
+−∂ˆθj(w)
+∂wn
+
+w=1N
+!
+.
+(10)
+Let ej denote the jth standard basis vector and X ∈RN×M denote the design matrix. Let
+3By “impact” here, we mean the impact of data-dropping on some statistical quantity-of-interest, such
+as a regression coefficient, or a parameter, or a test prediction.
+8
+
+bpn = σ(ˆθ⊤xn) and V = diag({bpn(1 −bpn)}n).
+For logistic regression with an effect-size
+quantity of interest, θj, the formula for the influence score for the nth data point (Pregibon,
+1981) is given by
+∂ˆθj(w)
+∂wn
+
+w=1N
+= e⊤
+j (X⊤V X)−1xnbpn(1 −bpn) (yn −bpn) .
+(11)
+Using these influence score approximations for dropping out single evaluations, we find the
+⌊αN⌋-sized subset of evaluations for which the difference in influence scores (as seen in
+Eq. (10)) is largest.4 We denote the approximate solution to Eq. (9) that is returned by
+AMIP as ˜w ∈Wα (i.e., the set of data weights that are 0 at indices of data points that
+AMIP chooses to drop and 1 elsewhere). In addition to the influence score approximation,
+our method allows for the use of another type of data-dropping approximation known as the
+Additive one-step Newton approximation (Huang et al., 2024; Park et al., 2023). For more
+details on data-dropping approximations, see Appendix A.
+For a candidate pair of players, (i, j), we check whether [bθi( ˜w) −bθj( ˜w)] < 0. In other words,
+we refit the BT-model upon leaving out the subset of impactful evaluations identified by
+AMIP and check whether leaving out this subset induces a sign change in the difference of
+BT scores for the pair, (i, j). We say that the BT scores for a pair of players, (i, j), are
+non-robust if the sign of the difference in scores becomes negative upon refitting under ˜w,
+(i.e., if [bθi( ˜w) −bθj( ˜w)] < 0).
+Method for Checking Top-k Robustness. We now describe how we can fold our check
+for pairwise robustness into an overall routine for checking for top-k robustness.
+Recall from earlier in Section 3 that we can check Top-k robustness by checking pairwise
+robustness for every comparison (i, j) where i ∈KT (w) and j /∈KT (w). This amounts to
+checking the pairwise robustness for k(M −k) pairs.
+We do this by iterating over pairs of players. Note that, when checking the robustness of a
+given pair (i, j), we allow matches between any two models (not only (i, j)) to be dropped.
+Since we only need to find one non-robust pair to render the set non-robust, not all pairs need
+to be checked. To save on compute, we take a greedy approach and start with comparing
+the most closely-ranked pairs between the top-k ranked players and the remaining M −k
+4Assuming that player i has a higher estimated BT score than player j on the full data, we select
+evaluations with scores that are the largest in the negative direction, as these are the evaluations that are
+predicted to have the largest impact on changing the sign of the difference in BT scores from positive to
+negative.
+9
+
+players, where “closeness” is quantified using the absolute difference in BT scores fit on the
+full data.5 This is because the closest pairs are the most likely to exhibit data-dropping
+non-robustness. Upon finding any single pair that is pairwise non-robust at an α-level, the
+procedure terminates early and returns the corresponding players and the indices of the
+dropped evaluations. We say that an arena is α-level top-k robust if there does not exist a
+pair of players (i, j), where i ∈KT (w) and j /∈KT (w), that are α-level pairwise non-robust.
+Runtime.
+The above procedure is fast for assessing the robustness of preference-based
+ranking systems. For example, we tested our method on historical preference datasets re-
+leased by the Chatbot Arena project and hosted on Hugging Face (Chiang et al., 2024a).
+Specifically, we ran top-1 and top-5 robustness on a dataset of size around 50,000 evaluations
+in under 3 minutes on a personal computer equipped with an Apple M1 Pro CPU at 3200
+MHz and 16 GB of RAM.
+3.1
+Deviations from LLM-Arena Computations in Practice
+While our methods are based largely on the ranking system used in Chatbot Arena and
+MT-Bench, there are a few differences between the raw BT scores we analyze and the scores
+implemented on the platform. The first difference, which concerns the filtering of ties, may
+affect the resulting rankings, whereas the second difference, an affine transformation, does
+not. We provide more information on these differences next.
+The primary difference is that our analysis is conducted on tie-free data (we discard any
+matchups that were annotated as ties). In contrast, the Chatbot Arena leaderboard calcu-
+lation (Bradley–Terry model) (Chiang et al., 2024c) incorporates ties using a weighted BT
+model. Specifically, in this weighted version, each match contributes two rows: one row is
+generated from the perspective of player i and one from the perspective of player j. A win
+by i over j is encoded as one row where i beats j, and another where j loses to i. A tie
+between i and j is encoded symmetrically: one row where i beats j, and one where j beats
+i. While our tie-free rankings differ from those used in practice by Chatbot Arena, omitting
+ties is fairly common in practice for analyses done on the platform; for example, many of
+the plots on the Chatbot Arena Overview Page (Chiang et al., 2024b) are based on tie-free
+data, and the primary BT model analyzed in the original Chatbot Arena paper also omits
+5The robustness of the relative ranking of two players is correlated with the proximity of their BT scores
+as seen in Fig. 6.
+10
+
+ties (Chiang et al., 2024a).6
+A second difference lies in postprocessing. Chatbot Arena applies a linear transformation
+to the learned BT scores. They use SCALE = 400, INIT RATING = 1,000, and a further shift
+ANCHOR SHIFT to produce the displayed scores:
+ELOn = SCALE · bθn + INIT RATING + ANCHOR SHIFT.
+The final constant (ANCHOR SHIFT) shifts all the ELOn scores relative to a specific reference
+model. Chatbot Arena uses mixtral-8x7b-instruct-v0.1 as the anchor, assigning it a
+fixed score of 1,114 and adjusting all other scores accordingly. We note that the affine trans-
+formation does not affect model rankings because it is a strictly monotonic transformation.
+4
+Experiments
+Our analysis reveals that dropping as little as 0.02% of the evaluation data can flip the top-
+ranked model in popular LLM evaluation platforms, that crowdsourced human-evaluated
+systems are about as non-robust as AI-evaluated systems, and that the LLM-generated
+responses of the dropped evaluations appear similar in content. Henceforth, for convenience,
+we use “robustness” as shorthand for robustness of a system’s top-k ranking to dropping a
+small fraction, α, of the data.
+4.1
+Data and Setup.
+Chatbot Arena. Chatbot Arena is a crowdsourced platform where users engage in con-
+versations with two chatbots at the same time and rate their responses based on personal
+preferences (Zheng et al., 2023). This benchmark contains a total number of 57,477 evalua-
+tions.7 Figure 1 presents the Bradley–Terry scores of the top-20 models on Chatbot Arena.
+MT-Bench. MT-Bench is a benchmark composed of open-ended questions designed to as-
+sess a chatbot’s ability to engage in multi-turn conversation and follow instructions (Zheng
+et al., 2023). It is also constructed to distinguish between models based on reasoning and
+mathematics (Zheng et al., 2023). This benchmark is much smaller because it is handcrafted
+6Chiang et al. (2024a) introduce variations of the original model that does handle ties.
+7We conduct our analysis on historical datasets released by the Chatbot Arena project (Chiang et al.,
+2024a) and hosted on Hugging Face; specifically, we use the arena-human-preference-55k dataset, the chatbot-
+arena-llm-judges dataset, and the mt-bench-human-judgments dataset.
+11
+
+Figure 1: The top-20 model rankings in Chatbot Arena.
+using 58 expert-level human labelers; it contains 3,355 total evaluations. In contrast to Chat-
+bot Arena, these labelers are mostly graduate students, so they are considered more skilled
+than average crowd workers. Figure 5 presents the BT scores of the models in MT-Bench.
+Experimental Setup.
+Using historical data from each platform, publicly available on
+Hugging Face, we construct a design matrix based on model-vs-model comparisons, treating
+each evaluation as a binary outcome.
+Using this design (for more details on this setup, see Section 2), we compute the model
+rankings based on full-data BT scores. We then run our method to check for top-k robustness,
+for k ∈{1, 3, 5, 10, 20} (see Section 3 for more details on this procedure).
+12
+
+4.2
+Sensitivity of Chatbot Arena and MT-Bench
+Dropping less than 0.05% of the evaluation data is sufficient to change the top-1 and top-5
+model rankings in Chatbot Arena. MT-Bench, however, requires over 3% of the data to be
+removed in order to change the top ranked model and over 4% to change one of the models
+in the top-5.
+We find Chatbot Arena to be incredibly sensitive to data-dropping. In particular, we find
+that dropping only around 0.02% of the evaluations changes the top-ranked model (GPT-4-
+0125) to GPT-4-1106. We then find that dropping 20 (0.035% of) evaluations can change
+one of the models in the top-5 rankings (the 5th and 6th-ranked models changed). Surpris-
+ingly, GPT-4-1106-preview participated in the most matchups across the entire arena and
+GPT-4-0125-preview also participated in a sizable number of matchups, as shown in Fig. 4,
+suggesting that data-dropping sensitivity cannot be attributed to a small sample size alone.
+We find MT-Bench Arena to be more robust than Chatbot Arena (see Table 1).
+Here,
+dropping 83 out of 2,575 (3.22% of) evaluations changes the top model from GPT-4 to
+Claude-v1. We then find that dropping 110 (4.27% of) matchups can change one of the
+models in the top-5 rankings (again, the 5th and 6th ranked models changed).
+There are several reasons that may lead MT-Bench to be much more robust than Chatbot
+Arena, such as the use of expert annotators and the higher quality of prompts (Zheng et al.,
+2023).
+Arena
+Evaluator (Judge)
+Num Dropped
+Frac Dropped
+Win Percent
+Chatbot Arena
+Human
+9 out of 39716
+0.000226
+55.17%
+Chatbot Arena
+LLM
+4 out of 34297
+0.000116
+53.73%
+MT-Bench
+Human
+83 out of 2575
+0.0322
+62.75%
+MT-Bench
+LLM
+27 out of 2180
+0.0124
+51.72%
+Table 1: Results of checking top-1 robustness of BT-scores on each of the two arenas (Chatbot
+Arena and MT-Bench). The “Num Dropped” column reports the number of matches that
+are sufficient to flip the first and second-place models. The “Frac Dropped” column shows
+this number as a fraction of the number of total matches in the full arena.
+The “Win
+Percent” column shows the proportion of head-to-head matchups won by the first-place
+model in matchups against the second-place model. Small BT score differences and win
+margins indicate that the two models have similar performance, so even minor perturbations
+in data may easily flip their ranking.
+13
+
+Figure 2: Each bar shows the percentage of data points dropped from Chatbot Arena that is
+sufficient to demote the BT score of a model inside the top-k to outside of the top-k. Results
+are shown for k ∈{1, 3, 5, 10, 20}. The black bars denote results for human evaluators while
+the blue bars indicate results for LLM-as-a-judge evaluators.
+4.3
+Humans vs. LLM-as-a-Judge
+Within both arenas (Chatbot Arena and MT-Bench), we find the sensitivity of the BT-
+based top-k rankings to worst-case data-dropping to be similar between human- and LLM-
+judged evaluations (see Table 1 and Fig. 2). This finding agrees with previous work showing
+that strong LLMs, such as GPT-4, can closely approximate human preferences in model
+evaluation tasks. In particular, Zheng et al. (2023) demonstrate that GPT-4 achieves over
+80% agreement with expert human annotators on MT-Bench.
+When asked what percentage of evaluations were required to change the top-k model rank-
+ings, we find that the human-evaluated data were more sensitive (required dropping fewer
+evaluations) for k ∈{5, 20} while the LLM-evaluated platform was more sensitive for
+k ∈{1, 3, 10} (see Fig. 2).
+4.4
+Player Involvement in Dropped Matches
+For every instance where the top-k leaderboard changes due to dropped evaluations, we find
+that the affected matches always involve at least one of the models whose rank is altered (see
+Fig. 3). This holds true for both human-judged and LLM-judged Chatbot Arenas. While
+Min et al. (2025) find that adding in a small fraction of rigged votes can influence a target
+model’s ranking even when the target model is not directly involved in the rigged votes, we
+14
+
+are unable to find instances where rankings were flipped by removing a small fraction of
+evaluations where neither of the affected models were involved.
+Also, notice in Fig. 3 that there are no partial bars or mixed compositions. We investi-
+gate why this homogeneous pattern appears consistently across bars. Inspecting dropped
+matchups manually, we find that the reason why one or both flipped players are always
+involved in the dropped matchups is because these matchups are always played between
+the model that is flipped, call it the target model, and a specific competitor (either the
+model whose ranking is flipped relative to the target model, or another model) or group of
+competitors (including models whose rankings remain unchanged), and all matchups either
+always favor or disfavor the target model (see Appendix B for a more detailed description).
+This finding reveals something about how non-robustness appears in our analyses: small,
+consistent sets of matchups are sufficient to push a model just above or below another on
+the leaderboard.
+(a) Chatbot Arena (Human-Judge)
+(b) Chatbot Arena (LLM-Judge)
+Figure 3: Player involvement in the most influential matches whose removal caused two
+models (players), one inside the top-k positions and one outside, to exchange places. Each
+bar represents the composition of matches dropped in order to exchange the models. The
+proportions indicate whether neither (green), one (orange), or both (blue) of the affected
+models were involved in each dropped matchup. For Chatbot Arena (Human-Judge) (top),
+the number of matches dropped for each k ∈{1, 3, 5, 10, 20} is (9, 24, 5, 3, 2), respectively.
+For Chatbot Arena (LLM-Judge) (bottom), the number of matches dropped for each k ∈
+{1, 3, 5, 10, 20} is (4, 15, 10, 2, 2). Across all k, we find that 100% of flipped rankings involved
+matches containing at least one of the players whose ranking changed.
+15
+
+Table 2: Side-by-side comparison of LLM responses to five influential prompts that were
+dropped. Lengthy prompts and answers are truncated here (indicated by “...”) to ensure
+readability.
+Prompt
+qwen1.5-72b-chat
+gpt-4-1106-preview
+“Read this content. Do not
+change the content written.
+Add 5 more tips in the
+same tone of voice and
+style. One be use AI. Hey
+freelance writers: Let’s talk
+about writer’s block...”
+Use AI Writing Tools.
+Incorporating AI writing
+tools can occasionally help
+break the creative
+gridlock...
+Use AI to Your Advantage.
+In this age of technology,
+leverage the power of AI to
+overcome writer’s block....
+“Which is the newest model
+that also contain data of
+2023?”
+I’m sorry, but your question
+isn’t clear. When you ask
+about the newest model
+that also contains data of
+2023, I need more context
+to provide you with an
+accurate answer....
+As an AI, I don’t have
+real-time access to updates
+or the ability to browse the
+internet for the most recent
+information....
+“Please answer this
+questions in 8 sentences and
+do not use wording
+indicative of AI. You are
+provided with a legal
+description that seems to
+make sense when you
+initially read but once you
+arrive at the site it no
+longer does...”
+When a legal description
+appears clear initially but
+becomes confusing at the
+site, it indicates an issue of
+latent ambiguity...
+The type of ambiguity
+encountered is likely a
+latent ambiguity, where the
+description seems clear on
+paper but is problematic
+when applied to the
+physical location....
+“Is it possible to give a
+transformer custom
+embeddings?”
+Yes, it is possible to give a
+transformer model custom
+embeddings...
+Yes, it is possible to give a
+transformer model custom
+embeddings...
+”How to use Poetry to
+install packages in python?”
+Poetry is a tool for
+dependency management
+and packaging in Python...
+Poetry is a dependency
+manager for Python that
+makes it easy to manage
+project dependencies and
+create self-contained virtual
+environments...
+16
+
+4.5
+Inspecting Dropped Matches
+We demonstrate that our method can be used to investigate the dropped prompts and
+responses, and we find the dropped responses to be similar in content.
+Setup. To investigate the dropped prompt-response pairs, we compare the responses of just
+five human evaluations that were enough to flip the rankings of mistral-medium (the 6th
+ranked model) with qwen1.5-72b-chat (the 5th ranked model) on Chatbot Arena.
+These five influential evaluations are those where qwen1.5-72b-chat performed exceedingly
+well, winning against gpt-4-1106-preview (the second-place model).
+Dropping these five
+matchups was enough to demote qwen1.5-72b-chat’s ranking from out of the top 5, to below
+that of the 6th place mistral-medium. These five prompts spanned a diverse range of tasks
+(e.g., technical instruction, legal reasoning, opinion clarification) and lengths.
+Given the influence of this small set of responses in determining the top-5 rankings on the
+arena, we display the prompts and responses involved in Table 2. Upon visual inspection of
+these and other dropped matchups, we find that the dropped responses are similar in both
+content and style. This similarity—in addition to leading to ranking reversals—underscores
+the fragility of the ranking system and raises concerns about its sensitivity to subtle variations
+in language model responses.
+5
+Discussion
+Crowdsourced LLM evaluation platforms like Chatbot Arena offer a way to rank LLMs by
+aggregating preferences over responses to open-ended prompts. There is good reason that
+this setup has been widely-adopted: it is easy to scale, doesn’t require expert annotators,
+and enables the aggregation of many prompts and judgments across a wide range of users
+(Zheng et al., 2023; Don-Yehiya et al., 2024).
+In theory, this aggregation helps average out individual annotator variability and yields a
+signal that is generalizable.
+However, in practice, we find that model rankings can de-
+pend on just a small handful of human (or LLM) evaluations. Thus, we encourage users
+of leaderboards and benchmark contests to run our method to investigate the fragility of
+crowdsourced LLM evaluation platforms before publishing results.
+We find that rankings based on MT-Bench matchups are more robust than those from Chat-
+bot Arena to the removal of a small number of evaluations, likely due to higher-quality data;
+17
+
+unlike Chatbot Arena, which relies on noisy, user-generated prompts and crowdsourced votes
+from anonymous users, MT-Bench uses carefully constructed, multi-turn questions evalu-
+ated by expert annotators, such as graduate students (Zheng et al., 2023). Additionally,
+MT-Bench prompts are specifically designed for reasoning, math, and instruction-following,
+which may lead to more decisive win/loss outcomes (we observed many fewer ties in MT-
+Bench). Together, these factors result in MT-Bench rankings being less sensitive to worst-
+case small-fraction data-dropping, indicating that using carefully-constructed queries and
+expert evaluators may result in more robust benchmarks for evaluating chat model perfor-
+mance.
+For researchers in the field of human-AI alignment, more rigorous and nuanced evaluation
+strategies are needed. To this end, we highlight several promising directions for the future of
+open human feedback. These include eliciting not only binary preference but also evaluators’
+confidence levels (M´endez et al., 2022),8 creating tools to identify prompts requiring special-
+ized knowledge in order to route them to appropriate evaluators (Don-Yehiya et al., 2024),
+using mediators to perform fine-grained assessments of crowdsourced responses (Don-Yehiya
+et al., 2024), and categorizing prompts by instruction type (e.g., factual recall, creative
+generation) to promote more fine-grained model comparisons within categories (Chia et al.,
+2023).
+6
+Acknowledgements
+This work was supported in part by an ONR Early Career Grant, the MIT-IBM Watson AI
+Lab, the NSF TRIPODS program (award DMS-2022448), and a MachineLearningApplica-
+tions@CSAIL Seed Award. We thank Hao Sun from the University of Cambridge for helpful
+initial discussions and for pointers to references.
+8The weighted logistic regression model used by Chatbot Arena can easily be extended to take in con-
+fidence ratings on top of binary preferences. One could imagine implementing this through encoding the
+confidence rating as a weight in the Win-Counts matrix described in the “Chatbot Arena Leaderboard
+Calculation (Bradley–Terry model)” Colab notebook referenced in Section 4.
+18
+
+References
+Bai, Y., Jones, A., Ndousse, K., Askell, A., Chen, A., DasSarma, N., Drain, D., Fort, S.,
+Ganguli, D., Henighan, T., et al. (2022). Training a helpful and harmless assistant with
+reinforcement learning from human feedback. arXiv preprint arXiv:2204.05862.
+Bradley, R. A. and Terry, M. E. (1952). Rank analysis of incomplete block designs: I. the
+method of paired comparisons. Biometrika, 39(3/4):324–345.
+Broderick, T., Giordano, R., and Meager, R. (2020). An automatic finite-sample robust-
+ness metric: When can dropping a little data make a big difference?
+arXiv preprint
+arXiv:2011.14999v1.
+Chia, Y. K., Hong, P., Bing, L., and Poria, S. (2023). Instructeval: Towards holistic evalua-
+tion of instruction-tuned large language models. arXiv preprint arXiv:2306.04757.
+Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D., Zhu, B., Zhang,
+H., Jordan, M., Gonzalez, J. E., et al. (2024a). Chatbot arena: An open platform for
+evaluating llms by human preference. In Forty-first International Conference on Machine
+Learning.
+Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D., Zhu, B., Zhang,
+H., Jordan, M., Gonzalez, J. E., et al. (2024b). Chatbot Arena Leaderboard. https:
+//lmarena.ai/leaderboard/text. Accessed: 2025-06-23.
+Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D., Zhu, B.,
+Zhang, H., Jordan, M., Gonzalez, J. E., et al. (2024c).
+Chatbot Arena Leaderboard
+Calculation (Bradley–Terry model).
+https://colab.research.google.com/drive/
+1KdwokPjirkTmpO_P1WByFNFiqxWQquwH. Accessed: 2025-06-23.
+Damani, M., Shenfeld, I., Peng, A., Bobu, A., and Andreas, J. (2024). Learning how hard
+to think: Input-adaptive allocation of lm computation. arXiv preprint arXiv:2410.04707.
+Don-Yehiya, S., Burtenshaw, B., Astudillo, R. F., Osborne, C., Jaiswal, M., Kuo, T.-S.,
+Zhao, W., Shenfeld, I., Peng, A., Yurochkin, M., et al. (2024). The future of open human
+feedback. arXiv preprint arXiv:2408.16961.
+Freund, D. and Hopkins, S. B. (2023).
+Towards practical robustness auditing for linear
+regression. arXiv preprint arXiv:2307.16315.
+Ghosh, S., Stephenson, W., Nguyen, T. D., Deshpande, S., and Broderick, T. (2020). Approx-
+19
+
+imate cross-validation for structured models. Advances in neural information processing
+systems, 33:8741–8752.
+Giordano, R., Jordan, M. I., and Broderick, T. (2019). A higher-order Swiss Army infinites-
+imal jackknife. arXiv preprint arXiv:1907.12116v1.
+Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian, A., Al-Dahle, A., Letman, A.,
+Mathur, A., Schelten, A., Vaughan, A., et al. (2024). The llama 3 herd of models. arXiv
+preprint arXiv:2407.21783.
+Hampel, F. R., Ronchetti, E. M., Rousseeuw, P. J., and Stahel, W. A. (2011).
+Robust
+statistics: the approach based on influence functions. John Wiley & Sons.
+Huang, J. Y., Burt, D. R., Nguyen, T. D., Shen, Y., and Broderick, T. (2024).
+Ap-
+proximations to worst-case data dropping: unmasking failure modes.
+arXiv preprint
+arXiv:2408.09008.
+Hui, B., Yang, J., Cui, Z., Yang, J., Liu, D., Zhang, L., Liu, T., Zhang, J., Yu, B., Lu, K.,
+et al. (2024). Qwen2. 5-coder technical report. arXiv preprint arXiv:2409.12186.
+Koh, P. W. and Liang, P. (2017). Understanding black-box predictions via influence func-
+tions. In International conference on machine learning, pages 1885–1894. PMLR.
+Kuschnig, N., Zens, G., and Crespo Cuaresma, J. (2021). Hidden in plain sight: Influential
+sets in linear models. Technical report, CESifo Working Paper.
+Lee, H., Phatale, S., Mansoor, H., Lu, K. R., Mesnard, T., Ferret, J., Bishop, C., Hall, E.,
+Carbune, V., and Rastogi, A. (2023). Rlaif: Scaling reinforcement learning from human
+feedback with ai feedback. In Proceedings of Machine Learning Research, volume 235.
+M´endez, A. E., Cartwright, M., Bello, J. P., and Nov, O. (2022). Eliciting confidence for
+improving crowdsourced audio annotations. Proceedings of the ACM on Human-Computer
+Interaction, 6(CSCW1):1–25.
+Min, R., Pang, T., Du, C., Liu, Q., Cheng, M., and Lin, M. (2025). Improving your model
+ranking on chatbot arena by vote rigging. arXiv preprint arXiv:2501.17858.
+Moitra, A. and Rohatgi, D. (2022). Provably auditing ordinary least squares in low dimen-
+sions. arXiv preprint arXiv:2205.14284.
+Nguyen, T. D., Giordano, R., Meager, R., and Broderick, T. (2024). Using gradients to
+20
+
+check sensitivity of MCMC-based analyses to removing data. In ICML 2024 Workshop on
+Differentiable Almost Everything: Differentiable Relaxations, Algorithms, Operators, and
+Simulators.
+Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C., Mishkin, P., Zhang, C., Agar-
+wal, S., Slama, K., Ray, A., et al. (2022). Training language models to follow instructions
+with human feedback. Advances in neural information processing systems, 35:27730–27744.
+Park, S. M., Georgiev, K., Ilyas, A., Leclerc, G., and Madry, A. (2023). Trak: Attributing
+model behavior at scale. In International Conference on Machine Learning, pages 27074–
+27113. PMLR.
+Pregibon, D. (1981). Logistic Regression Diagnostics. The Annals of Statistics, 9(4).
+Rubinstein, I. and Hopkins, S. (2025). Robustness auditing for linear regression: To singu-
+larity and beyond. The 13th International Conference on Learning Representations (ICLR
+2025).
+Sekhari, A., Acharya, J., Kamath, G., and Suresh, A. T. (2021). Remember what you want
+to forget: Algorithms for machine unlearning. Advances in Neural Information Processing
+Systems, 34:18075–18086.
+Shiffman, M., Giordano, R., and Broderick, T. (2023). Could dropping a few cells change
+the takeaways from differential expression? arXiv preprint arXiv:2312.06159.
+Singh, S., Nan, Y., Wang, A., D’Souza, D., Kapoor, S., ¨Ust¨un, A., Koyejo, S., Deng,
+Y., Longpre, S., Smith, N., et al. (2025).
+The leaderboard illusion.
+arXiv preprint
+arXiv:2504.20879.
+Sun, H., Shen, Y., and Ton, J.-F. (2025). Rethinking reward modeling in preference-based
+large language model alignment. In The Thirteenth International Conference on Learning
+Representations.
+Suriyakumar, V. and Wilson, A. C. (2022). Algorithms that approximate data removal: New
+results and limitations. Advances in Neural Information Processing Systems, 35:18892–
+18903.
+Touvron, H., Martin, L., Stone, K., Albert, P., Almahairi, A., Babaei, Y., Bashlykov, N.,
+Batra, S., Bhargava, P., Bhosale, S., et al. (2023). Llama 2: Open foundation and fine-
+tuned chat models. arXiv preprint arXiv:2307.09288.
+21
+
+White, C., Dooley, S., Roberts, M., Pal, A., Feuer, B., Jain, S., Shwartz-Ziv, R., Jain, N.,
+Saifullah, K., Naidu, S., et al. (2024). Livebench: A challenging, contamination-free llm
+benchmark. arXiv preprint arXiv:2406.19314, 4.
+Wilson, A., Kasy, M., and Mackey, L. (2020). Approximate cross-validation: Guarantees for
+model assessment and selection. In International conference on artificial intelligence and
+statistics, pages 4530–4540. PMLR.
+Wu, W., Junker, B. W., and Niezink, N. (2022).
+Asymptotic comparison of identifying
+constraints for bradley-terry models. arXiv preprint arXiv:2205.04341.
+Xu, S., Yue, B., Zha, H., and Liu, G. (2024). Uncertainty-aware preference alignment in
+reinforcement learning from human feedback.
+In ICML 2024 Workshop on Models of
+Human Feedback for AI Alignment.
+Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin, Z., Li, Z., Li, D.,
+Xing, E., et al. (2023). Judging llm-as-a-judge with mt-bench and chatbot arena. Advances
+in Neural Information Processing Systems, 36:46595–46623.
+22
+
+Appendix
+A
+The AMIP Method
+In principle, one might solve
+max
+w∈Wα
+
+[bθi(1N) −bθj(1N)] −[bθi(w) −bθj(w)]
+
+(12)
+by computing [ˆθi(w) −ˆθj(w)] for each of the
+ N
+⌊αN⌋
+
+values of w ∈Wα. However, this brute
+force approach can be computationally prohibitive even for moderately-sized N.
+Approximate Maximum Influence Perturbation (AMIP). Broderick et al. (2020)
+propose relaxing w to allow continuous values and replacing the w-specific quantity of interest
+with a first-order Taylor series expansion with respect to w around 1N. This first-order Taylor
+series expansion is known as the influence function (IF) approximation (Hampel et al., 2011),
+a classic technique from robust statistics that approximates the affect of upweighting (or
+dropping) a data point on model parameters using a first-order Taylor series approximation
+in data-weight space.
+Influence functions have become popular tools for approximating
+resampling methods (Giordano et al., 2019) and assigning value to data that a model was
+trained on (Koh and Liang, 2017; Park et al., 2023). This approximation applies to more
+general data analyses and quantities of interest. In our case, this approximation amounts to
+replacing Eq. (12) with
+max
+w∈Wα
+XN
+n=1(1 −wn)
+ 
+∂ˆθi(w)
+∂wn
+
+w=1N
+−∂ˆθj(w)
+∂wn
+
+w=1N
+!
+.
+(13)
+Let ej denote the jth standard basis vector and X ∈RN×P denote the design matrix. Let
+bpn = σ(ˆθ⊤xn) and V = diag({bpn(1 −bpn)}n).
+For logistic regression with an effect-size
+quantity of interest, θj, the formula for the influence score for the nth data point (Pregibon,
+1981) is given by
+∂ˆθj(w)
+∂wn
+
+w=1N
+= e⊤
+j (X⊤V X)−1xnbpn(1 −bpn) (yn −bpn) ,
+(14)
+In addition to influence functions, our framework enables a second data-dropping approxi-
+mation known as the One-step Newton (1sN) approximation, which approximates the effect
+of dropping a data point on model parameters using a second-order Taylor expansion in
+23
+
+parameter space. This Newton-style update has become popular for approximating the dele-
+tion of data in recent works on approximate cross validation (Ghosh et al., 2020; Wilson
+et al., 2020) and machine unlearning (Sekhari et al., 2021; Suriyakumar and Wilson, 2022).
+The 1sN is slightly more expensive to compute than the IF approximation (as it corrects
+the IF with a multiplicative correction term) but is more accurate when the to-be-dropped
+data point has high a leverage score (because the correction term involves the leverage score
+of a data point). Previous works have proposed approximating the removal of a group of
+data points by the sum of leave-one-out 1sN scores, in an algorithm known as the Additive
+one-step Newton approximation (Huang et al., 2024; Park et al., 2023).
+To run the AMIP and Additive one-step Newton algorithm to check pairwise robustness
+between two given players, i and j, we:
+1. Fit a BT model on the entire arena.
+2. Compute the influence scores (Eq. (11)) (one-step Newton scores for the Additive
+one-step Newton algorithm) for all matches in the arena.
+3. Identify the ⌊αN⌋matchups for which the difference in influence scores (as given in
+Eq. (13)) is the largest in the negative direction (assuming that player i has a higher
+estimated BT score than player j on the full data).
+4. Approximate impact of dropping these ⌊αN⌋matchups by the sum of the influence
+score approximations.
+5. If the approximation predicts that the relative ranking between players i and j changed,
+then refit the model leaving out the identified subgroup.9
+These data-dropping algorithms replace a computationally intractable combinatorial search
+with an algorithm that costs only
+O(Analysis + N log(αN) + NP 2 + P 3),
+where Analysis represents the cost of fitting the initial Bradley–Terry model on the original
+arena to compute scores. Data-dropping approximations make identifying candidate subsets
+of the arena that may induce top-k non-robustness very fast because they eliminate the need
+to retrain the BT model repeatedly on every candidate subset. Once a candidate subset
+9Our algorithm gives users the option to refit the BT model for all matchups, regardless of whether a
+predicted ranking change occurs.
+24
+
+is identified, however, our method always performs a refitting of the BT model with the
+identified subset removed to verify whether the non-robustness is true. This final verification
+step ensures that our method does not return false positives.
+B
+Player Involvement, Homogeneous Bars
+Across all top-k robustness experiments, 100% of dropped matches involved either one or
+both of the models whose rankings were flipped, with 100% belonging to one of these two
+cases within a given k (see Fig. 3). There are no partial bars or mixed compositions. Readers
+may ask: Why does this homogeneous pattern consistently appear? Could this be a property
+of the arena data?
+We investigate this by manually inspecting the dropped matchups returned by our robustness
+assessing algorithm for each value of k. Specifically, in each case, we identified the dropped
+matchups and inspected which players appeared in these matchups.
+We summarize the
+findings here:
+• k = 1: 9 games were dropped to flip GPT-4-0125-preview (originally 1st) and GPT-4-
+1106-preview (2nd). All were matches where GPT-4-0125-preview beat GPT-4-1106-
+preview.
+• k = 3: 24 games were dropped to flip GPT-4-0314 (3rd) and Qwen1.5-72B-Chat (5th).
+All dropped matches featured Qwen1.5-72B-Chat losing out to various other models.
+• k = 5: 5 games were dropped to flip Qwen1.5-72B-Chat (5th) and Mistral-Medium
+(6th). All matches were between Qwen1.5-72B-Chat and GPT-4-1106-preview (the
+2nd place model), with Qwen1.5-72B-Chat winning.
+• k = 10: 3 games were dropped to flip Yi-34B-Chat (10th) and Gemini-Pro (11th). All
+were matches where Yi-34B-Chat beat Gemini-Pro.
+• k = 20:
+2 games were dropped to flip Nous-Hermes-2-Mixtral-8x7B-DPO (20th)
+and Vicuna-33B (21st). Both were matches where Nous-Hermes-2 beat GPT-4-1106-
+preview (the 2nd place model).
+The reason the involvement is always entirely either one or both affected players is because
+all of the dropped matchups consist of games played between a central model and a spe-
+cific competitor (or group of competitors) whose outcomes all favor or disfavor the specific
+25
+
+model. This structure then leads the dropped matchups to consist entirely of evaluations
+that involved one or both ranking-flipped models. This finding reveals something interesting
+about the nature of the non-robustness in our analysis: small, consistent sets of matchups
+are sufficient to push a model just above or below another on the leaderboard.
+C
+Additional Supporting Figures
+The figures in this section provide additional insights related to our analysis. Figure 4 shows
+the distribution of model appearances in Chatbot Arena, respectively, revealing differences
+in evaluation density and coverage across platforms. Figure 5 presents the BT scores of top-
+performing models on MT-Bench, highlighting the competitiveness of high-ranked models.
+Figure 6 illustrates the relationship between the robustness of model rankings and the BT
+score gap between adjacent models, confirming that small score differences tend to coincide
+with greater sensitivity to worst-case data-dropping.
+26
+
+Figure 4: The number of times each model appears in a match in Chatbot Arena. The
+horizontal bar chart shows how frequently each model appeared in any match, with GPT-4
+and GPT-3.5 variants being the most represented.
+27
+
+Figure 5: The model rankings in MT-Bench.
+28
+
+Figure 6: Robustness of results is correlated with the proximity of the BT scores. Each point
+represents a pair of models whose relative rankings flipped after dropping a small fraction
+of matchups. In every case, the flip causes one model to enter the top-k rankings (for some
+k ∈{1, 3, 5, 10, 20}) while the other is demoted. These points are taken from both human
+and LLM-as-a-judge evaluation platforms.
+29

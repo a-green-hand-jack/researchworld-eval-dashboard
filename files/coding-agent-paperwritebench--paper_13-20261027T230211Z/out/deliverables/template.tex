@@ -1,0 +1,293 @@
+\documentclass[sigconf, nonacm]{acmart}
+
+
+\usepackage{draftwatermark}
+\SetWatermarkText{AI-Generated}
+\SetWatermarkScale{0.5}
+\SetWatermarkColor[gray]{0.6}
+\AtBeginDocument{\providecommand\BibTeX{{Bib\TeX}}}
+
+\copyrightyear{2025}
+\acmYear{2025}
+\setcopyright{none}
+\acmConference[arXiv preprint]{arXiv preprint}{2025}{}
+\acmBooktitle{}
+\acmDOI{}
+\acmISBN{}
+\settopmatter{printacmref=false}         
+\renewcommand\footnotetextcopyrightpermission[1]{} 
+
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage[skip=2pt]{caption}
+\usepackage{bm}
+\usepackage{booktabs}
+\graphicspath{{figures/}}
+
+
+
+\begin{document}
+\title{FoodLogAthl-218: Constructing a Real-World Food Image Dataset\\ Using Dietary Management Applications}
+
+\author{Anonymous Author}
+
+\begin{abstract}
+Food recognition models for dietary logging are usually trained and evaluated on web-crawled images that are attractive, class-balanced, and independent of one another, which differs from the photos people actually take when logging meals. We introduce FoodLogAthl-218, a benchmark built bottom-up from meal photos submitted to the FoodLog Athl dietary management application: 6,925 images, 14,349 dish bounding boxes, and 218 consolidated dish classes from 513 users, with anonymized user IDs and timestamps. We label first and consolidate afterwards, using a pipeline that combines CLIP-based outlier detection, manual review, GPT-4o-assisted synonym grouping, and human adjudication. The benchmark defines three tasks: closed-set dish classification on crops, continual user-aware adaptation along the time axis, and menu-aware classification of individual dishes in multi-dish meals. Feature-space statistics show that FoodLogAthl-218 has larger intra-class spread and more class overlap than UEC-Food 256 under three feature extractors. Closed-set classification remains hard: the best top-1 recall is 0.424 (GPT-4o) and the best top-5 recall is 0.600 (CLIP ViT-L/14). Continual fine-tuning of a 3B-parameter LMM raises weekly accuracy from roughly 0.2 to roughly 0.5, and for one heavy user, user-specific LoRA fine-tuning eventually matches or exceeds all-user adaptation. Conditioning on a meal-level description raises F1 and P@1 but lowers recall, so it trades recall for precision. We also state the limits of the benchmark: label noise inherited from user logs, a Japan-centric user base, and no reported inter-annotator agreement.
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+Dietary logging applications ask users to photograph meals and then record what they ate, and automatic food recognition is a key component for reducing this burden~\cite{aizawa2015foodlog,nakamoto2022foodlog,merler2016snap,meyers2015im2calories}. Progress has been measured on public datasets such as Food-101~\cite{bossard2014food}, UEC-Food 256~\cite{kawano2015automatic}, ISIA Food-500~\cite{min2020isia}, and Food2K~\cite{min2023large}. Most are assembled by crawling the web with a predefined list of class names. This has three consequences. (i) Classes are chosen before images are collected, so the class set reflects an annotator's taxonomy rather than what people eat. (ii) Images come from sources where users share attractive photos, and class frequencies are balanced or curated. (iii) Samples are independent of each other: there is no user identity, no temporal order, and typically a single dish per photo. None of these properties holds for the photos that a logging application receives, which show natural class imbalance, casual imaging, several dishes per photo, and strong personal and temporal regularities (Fig.~\ref{fig:overview}).
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{distribution_5.jpg}
+  \caption{Comparison between traditional food image datasets (top) and FoodLogAthl-218 (bottom) along the dimensions that motivate the benchmark: data source, label assignment order, class frequency, aesthetic bias, temporal continuity, and number of dishes per photo.}
+  \label{fig:overview}
+\end{figure*}
+
+We therefore build FoodLogAthl-218 from real logs, starting from the images and the labels that users attached to them, and only afterwards cleaning and merging labels. The benchmark is intended to measure how well recognition systems handle realistic logging conditions: a long-tailed class distribution, noisy casual photos, multi-dish meals, and adaptation as a user's records accumulate over time. It is not intended to measure nutrition estimation, portion estimation, or recognition of foods outside the 218 classes.
+
+\paragraph{Design principles.} (1) \emph{Realism}: images, bounding boxes, and metadata come from an operating application, and the natural class imbalance is preserved. (2) \emph{Meal integrity}: the image is the atomic unit, so a photo is either kept whole or removed whole, and multi-dish composition is retained. (3) \emph{Temporal and user grounding}: anonymized user IDs and timestamps support time-ordered and per-user evaluation. (4) \emph{Reproducible curation}: the pipeline mixes automated steps with documented manual decisions. (5) \emph{Ethics}: the study had ethics approval and informed consent, and personal information was removed in two manual stages.
+
+\paragraph{Summary of findings.} Closed-set classification is difficult for current systems: GPT-4o reaches R@1 of 0.424, no model exceeds 0.600 at R@5, and CLIP-style encoders and LMMs rank differently depending on $K$. Feature-space diversity statistics indicate higher intra-class spread and class overlap than UEC-Food 256. Under time-ordered adaptation, zero-shot accuracy of the 3B-parameter LMM drifts downward while fine-tuned accuracy rises. Meal-level descriptions help precision but hurt recall.
+
+\paragraph{Contributions.}
+\begin{itemize}[leftmargin=1.2em,itemsep=0pt,topsep=2pt]
+  \item A public real-world food image dataset with 6,925 images, 14,349 bounding boxes, and 218 classes, carrying anonymized user and time metadata.
+  \item A reproducible curation pipeline that combines CLIP-based outlier filtering, manual review, GPT-4o label grouping, and human adjudication.
+  \item Three tasks that capture practical needs: closed-set classification, continual user-aware adaptation, and menu-aware classification.
+  \item Baselines with CLIP-style encoders and LMMs, plus diversity and difficulty analyses and a discussion of what the benchmark can and cannot show.
+\end{itemize}
+
+\section{Related Works}
+\paragraph{Food image datasets.} Early datasets were small and focused on a region or a cuisine: PFID~\cite{chen2009pfid}, early Japanese food datasets~\cite{joutou2009food,hoashi2010image,matsuda2012multiple}, UEC-Food 100/256~\cite{kawano2015automatic}, and UNICT-FD1200~\cite{farinella2016retrieval}. Web-scale resources followed: Food-101~\cite{bossard2014food}, UPMC Food-101~\cite{wang2015recipe}, ChineseFoodNet~\cite{chen2017chinesefoodnet}, FoodX-251~\cite{kaur2019foodx}, FoodAI~\cite{sahoo2019foodai}, ISIA Food-500~\cite{min2020isia}, and Food2K~\cite{min2023large}. Table~\ref{table:dataset_comparison} compares them with ours. Nearly all are crawled from the web with predefined class lists. Recipe and cooking corpora such as Recipe1M~\cite{marin2019learning}, Cookpad images~\cite{harashima2017cookpad}, and Nutrition5k~\cite{thames2021nutrition5k} target retrieval or nutrition rather than recognition under logging conditions, and FoodSeg103~\cite{wu2021large} targets segmentation. FoodLogAthl-218 differs in its source: personal records from a logging application, with labels assigned before consolidation, natural imbalance, temporal order, and multiple dishes per image.
+
+\paragraph{Personalized and logging-oriented food recognition.} Studies on food logs have long observed that individuals eat repetitive, user-specific food, and that recognition can profit from it. Aizawa et al.~\cite{Aizawa2013FoodBalance} exploit personal dietary tendencies; Yu et al.~\cite{flg469}, Horiguchi et al.~\cite{Horiguchi2018Personalized}, and Kim et al.~\cite{Kim2021Boosting} study personalized classifiers over growing record sets and shared food records; Amano et al.~\cite{Amano2015FoodCategory} derive food categories from meal names in recordings. These works used private or non-public logs. A public benchmark with user and time metadata and standardized adaptation protocols was missing, and Task~2 fills that gap.
+
+\paragraph{Large multimodal models for food.} CLIP~\cite{CLIP} and variants such as EVA-CLIP~\cite{sun2023eva} support zero-shot recognition, and instruction-tuned LMMs such as LLaVA~\cite{liu2024visual,liu2024improved} are evaluated on general benchmarks through toolkits such as lmms-eval~\cite{lmms_eval2024,zhang2024lmmsevalrealitycheckevaluation}. Food-specific work includes FoodLMM~\cite{yin2023foodlmm}, RoDE~\cite{jiao2024rode}, FoodMLLM-JP~\cite{Imajuku2025FoodMLLM}, Food-500 Cap~\cite{ma2023food} for caption-based probing, and WorldCuisines~\cite{winata2024worldcuisines} for multicultural VQA on dishes. These benchmarks mostly use curated web images. Our benchmark evaluates such models on logging-style photos, with a protocol that also admits generative models (Sec.~\ref{sec:protocol}).
+
+\begin{table*}[t]
+\centering
+\caption{Comparison of datasets for food image classification. Bold marks the data source type.}
+\begin{tabular}{@{}rlrrrl@{}}
+\toprule
+Year & Dataset & \#classes & \#samples & Cuisine & Data source \\
+\midrule
+2009 & PFID~\cite{chen2009pfid} & 101 & 4,545 & Western & Fast food chains \\
+2014 & UEC-Food 256~\cite{kawano2015automatic} & 256 & 25,088 & International & \textbf{Web} + original database \\
+2014 & Food-101~\cite{bossard2014food} & 101 & 101,000 & Western & \textbf{Web} (foodspotting.com) \\
+2015 & UPMC Food-101~\cite{wang2015recipe} & 101 & 90,840 & Western & \textbf{Web} (Google~\cite{google}) \\
+2016 & UNICT-FD1200~\cite{farinella2016retrieval} & 1,200 & 4,754 & International & Experiment participants \\
+2017 & Vegfru~\cite{hou2017vegfru} & 25/292\textsuperscript{*} & 160,000 & Vegetables, fruits & \textbf{Web} (Google, ImageNet~\cite{imagenet}, etc.) \\
+2019 & FoodAI-756~\cite{sahoo2019foodai} & 152/756\textsuperscript{*} & 400,000 & International & \textbf{Web} (Google, Bing, etc.) \\
+2021 & Food2K~\cite{min2023large} & 2,000 & 1,036,564 & International & \textbf{Web} (Meituan~\cite{meituan}) \\
+2023 & Food-500 Cap~\cite{ma2023food} & 494 & 24,700 & International & \textbf{Web} (Google, Bing) \\
+\midrule
+2025 & FoodLogAthl-218 (ours) & 218 & 14,349 & International & \textbf{Dietary management app} \\
+\bottomrule
+\end{tabular}
+\label{table:dataset_comparison}
+\vspace{2pt}
+
+\footnotesize\textsuperscript{*}Hierarchical dataset; $n$/$m$ means $m$ classes grouped into $n$ higher-level classes. For FoodLogAthl-218, \#samples counts dish bounding boxes.
+\end{table*}
+
+\section{FoodLogAthl-218 Dataset}
+\subsection{Data Source}
+The data come from FoodLog Athl~\cite{nakamoto2022foodlog}, a dietary management application in which users photograph meals and record them. Each record has an anonymized user ID, date and time, dish names chosen from a database of about 140K items, portion size, and an initial dish detection; users can correct the label. We collected records from May 2023 to October 2024: 11,460 images with 61,414 bounding boxes and 5,889 raw labels from 632 users. Because labels come from a 140K-item database and users' own corrections, the raw label space is large and fine-grained.
+
+\subsection{Curation Pipeline}
+\label{sec:pipeline}
+Table~\ref{data cleaning steps table} lists each step. The image is the atomic unit of selection: images are removed whole to keep the composition of each meal intact, rather than deleting individual dishes.
+
+\begin{table}[t]
+  \centering
+  \caption{Data filtering steps and the numbers of images, bounding boxes, and classes after each step (change from the previous step in parentheses; step~1 values are reproduced as logged).}
+  \resizebox{\columnwidth}{!}{\begin{tabular}{@{}cp{3.3cm}rrr@{}}
+    \toprule
+    Step & Operation & \#images & \#bboxes & \#classes \\
+    \midrule
+    0 & Raw data & 11,460 & 61,414 & 5,889 \\
+    1 & Remove samples w/o image & 11,460 (0) & 26,646 ($-$34,768) & 3,167 ($-$2,722) \\
+    2 & Remove samples w/o bbox & 11,285 ($-$175) & 26,065 ($-$581) & 3,071 ($-$96) \\
+    3 & Remove classes w/ $<$10 samples & 9,121 ($-$2,164) & 21,944 ($-$4,121) & 1,180 ($-$1,891) \\
+    4 & Remove outliers (image features) & 7,537 ($-$1,584) & 17,513 ($-$4,431) & 1,180 (0) \\
+    5 & Manual review, remove invalid images & 6,925 ($-$612) & 14,349 ($-$3,164) & 1,180 (0) \\
+    6 & Merge similar classes, clean labels & 6,925 (0) & 14,349 (0) & 218 ($-$982) \\
+    \bottomrule
+  \end{tabular}}
+  \label{data cleaning steps table}
+\end{table}
+
+\paragraph{Basic filtering (steps 1--3).} Records without an image or without a bounding box are removed, leaving 11,285 images, 26,065 boxes, and 3,071 classes. Classes with fewer than 10 samples are then dropped (9,121 images, 21,944 boxes, 1,180 classes), so that each remaining class can appear in evaluation. This deliberately truncates the very-long tail.
+
+\paragraph{Outlier filtering (step 4).} We embed the box crops with CLIP ViT-B/16~\cite{CLIP} and flag samples more than 1.5 standard deviations from their class centroid in feature space. After this step 7,537 images and 17,513 boxes remain.
+
+\paragraph{Manual review (step 5).} Reviewers corrected or removed invalid boxes and labels. Figure~\ref{fig:errors} shows typical problems: incorrect labels, boxes that do not fit the dish, and inappropriate images such as empty plates or packaging labels. To maintain meal composition, an image containing an unrepairable invalid item was removed entirely. This leaves 6,925 images and 14,349 boxes from 513 users.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.95\columnwidth]{error_example.jpg}
+  \caption{Examples of erroneous data found during curation: incorrect labels, incorrect bounding boxes, and inappropriate images.}
+  \label{fig:errors}
+\end{figure}
+
+\paragraph{Label consolidation (step 6).} Since labels originate from a large database, many are near-synonyms or differ in granularity. GPT-4o proposes groups of synonymous or near-identical labels, and the groups are then refined and merged manually, giving 218 final classes. Human adjudication of the GPT-4o clusters is the final authority. As a result the final label space is coarser than the app's database.
+
+\paragraph{Privacy and ethics.} The study was approved by an ethics board, and users gave informed consent. Personal information in images was removed in two manual stages, and user IDs are anonymized.
+
+\subsection{Dataset Statistics}
+The final dataset has 6,925 images, 14,349 boxes (about 2.1 boxes per image on average), 218 classes, and 513 users, covering records from May 2023 to October 2024. The class distribution is strongly skewed (Fig.~\ref{fig:hist}): many classes have only 10--30 images, while the most frequent have on the order of $10^3$ (read from the figure axis).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.85\columnwidth]{histogram_linear_pdf.jpg}
+  \caption{Number of dish types (vertical, linear) by number of images per class (horizontal, logarithmic). Arrows mark classes shown with examples in the original figure.}
+  \label{fig:hist}
+\end{figure}
+
+\section{Benchmark Tasks and Evaluation Protocol}
+\label{sec:protocol}
+Figure~\ref{fig:tasks} gives an overview of the three tasks.
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.55\textwidth]{ACM_task.jpg}
+  \caption{Overview of the three evaluation tasks: (1) closed-set classification, with an LMM description embedded and matched to label embeddings; (2) continual user-aware adaptation, where the model is updated as records accumulate and evaluated on the following period; (3) menu-aware classification of one dish in a multi-dish image, conditioned on a description of the whole meal.}
+  \label{fig:tasks}
+\end{figure*}
+
+\paragraph{Task 1: closed-set dish classification.} The input is a cropped dish image (from a ground-truth box) and the output is one of the 218 classes. Models are evaluated with Top-1, Top-3, and Top-5 recall (R@1, R@3, R@5) and F1 on the top-1 prediction. CLIP-style encoders are used directly by ranking class-name text embeddings against the image embedding. For generative LMMs, which do not output a ranking over classes, we use the lmms-eval toolkit~\cite{lmms_eval2024} to generate a free-form dish description, embed it with intfloat/e5-large-v2~\cite{wang2023e5}, and rank the labels by cosine similarity between the description embedding and the label-name embeddings. This provides a common scoring route for CLIP and LMMs, and gives top-$K$ values for both.
+
+\paragraph{Task 2: continual user-aware adaptation.} Records are sorted by time. A model is repeatedly adapted on data that arrived up to a given point and tested on the following period, which simulates a deployed recognizer that sees a user's records accumulate. Accuracy is reported per week together with a weighted one-month moving average ($\pm$2 weeks) with weights proportional to the weekly data volume, since weekly volumes vary strongly. Settings compared in the paper are zero-shot, full fine-tuning, and LoRA~\cite{hu2022lora} fine-tuning of Qwen2.5-VL-3B on all users' data, and per-user LoRA fine-tuning for a single heavy logger (User~A).
+
+\paragraph{Task 3: menu-aware classification.} Real meals contain several dishes, and the other dishes are informative. The model first produces a description of the whole image (``menu''), then classifies each cropped dish given that description (Fig.~\ref{fig:desc}). We report F1, P@1, and R@1/3/5 to show the precision--recall trade-off.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.85\columnwidth]{description_eg.jpg}
+  \caption{Examples for description-guided classification: a case where the description fixes a wrong crop-only prediction (left) and a case where it introduces an error (right).}
+  \label{fig:desc}
+\end{figure}
+
+\paragraph{Scope.} The benchmark measures dish-level recognition from images in a closed label space of 218 classes. It does not assess portion size, nutrient estimation, open-vocabulary recognition beyond these classes, or cuisines outside the app's user base.
+
+\section{Benchmark Validation}
+\paragraph{Diversity and difficulty relative to UEC-Food 256.} We compare feature-space statistics of FoodLogAthl-218 and UEC-Food 256 using CLIP, EVA-CLIP~\cite{sun2023eva}, and Swin Transformer~\cite{liu2021swin} features. Trace measures overall spread, and the clustering indices Silhouette~\cite{rousseeuw1987silhouettes}, Davies--Bouldin~\cite{davies1979cluster}, and Calinski--Harabasz~\cite{calinski1974dendrite} measure compactness and separation of the class clusters. Trace and Davies--Bouldin are higher for FoodLogAthl-218 for all three extractors, and Silhouette and Calinski--Harabasz are lower (Table~\ref{table:diversity_metrics_comparison}); for instance, CLIP Trace is 81.70 vs.\ 71.21, and CLIP Silhouette is $-0.021$ vs.\ 0.033. Thus classes are more spread out and overlap more. These indices are computed on pre-trained features of different dataset samples, so they indicate difficulty only indirectly, and absolute values are comparable only within an extractor.
+
+\begin{table*}[t]
+  \centering
+  \caption{Distribution metrics of FoodLogAthl-218 and UEC-Food 256 under three feature extractors. Higher Trace and Davies--Bouldin indicate larger spread; lower Silhouette and Calinski--Harabasz indicate less compact clusters. Bold marks the value indicating the more spread, less compact dataset.}
+  \resizebox{\textwidth}{!}{\begin{tabular}{@{}lcccccccccccc@{}}
+      \toprule
+        & \multicolumn{3}{c}{\textbf{Trace ($\uparrow$)}}
+        & \multicolumn{3}{c}{\textbf{Silhouette ($\downarrow$)}}
+        & \multicolumn{3}{c}{\textbf{Davies--Bouldin ($\uparrow$)}}
+        & \multicolumn{3}{c}{\textbf{Calinski--Harabasz ($\downarrow$)}} \\
+      \cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10} \cmidrule(lr){11-13}
+      \textbf{Dataset}
+      & CLIP & EVA-CLIP & Swin
+      & CLIP & EVA-CLIP & Swin
+      & CLIP & EVA-CLIP & Swin
+      & CLIP & EVA-CLIP & Swin \\
+      \midrule
+      UEC-Food 256
+        & 71.21 & 45.09 & 264.00
+        & 0.0335 & 0.0577 & $-$0.0064
+        & 3.64 & 3.02 & 4.11
+        & 74.05 & 115.80 & 49.17 \\
+      FoodLogAthl-218 (ours)
+        & \textbf{81.70} & \textbf{49.92} & \textbf{282.57}
+        & \textbf{$-$0.0210} & \textbf{0.0036} & \textbf{$-$0.0288}
+        & \textbf{4.52} & \textbf{3.68} & \textbf{4.51}
+        & \textbf{27.51} & \textbf{51.51} & \textbf{21.29} \\
+      \bottomrule
+    \end{tabular}}
+  \label{table:diversity_metrics_comparison}
+\end{table*}
+
+\paragraph{Quality control evidence and what is missing.} Data quality was controlled by automated outlier detection, manual correction of labels and boxes (Fig.~\ref{fig:errors}), and human adjudication of the GPT-4o label groups. The filtering funnel is fully documented (Table~\ref{data cleaning steps table}). We did not measure inter-annotator agreement, so annotation reliability is not quantified. No error-rate estimate is available for residual label noise after curation, and the CLIP outlier filter may have preferentially removed unusual-looking but correctly labeled samples, which would slightly reduce the difficulty of the final set. Neither does the paper test for leakage of these images into the pre-training data of the evaluated models.
+
+\paragraph{Non-triviality.} Zero-shot baselines reach at most 0.424 R@1 and 0.600 R@5 (Table~\ref{table:classification_comparison}), so the benchmark is far from saturated, and different model families rank differently at different $K$, so the metrics are not redundant.
+
+\section{Experiments}
+\subsection{Task 1: Closed-set Classification}
+We evaluate ten models: GPT-4o; the open LMMs Qwen2.5-VL-7B-Instruct, Qwen2-VL-7B-Instruct, Qwen2-VL-3B-Instruct, llava-onevision-qwen2-7b-ov, llava-v1.6-34b, llava-v1.5-7b~\cite{liu2024improved}, and llava-v1.6-mistral-7b; and the CLIP-style encoders EVA-CLIP (ViT-g)~\cite{sun2023eva} and CLIP (ViT-L/14)~\cite{CLIP}. All are evaluated as described in Sec.~\ref{sec:protocol}.
+
+\begin{table}[t]
+  \centering
+  \caption{Classification performance on FoodLogAthl-218 (Task~1). Bold marks the best value per column.}
+  \resizebox{\columnwidth}{!}{\begin{tabular}{@{}lcccc@{}}
+      \toprule
+      \textbf{Model} & \textbf{F1} & \textbf{R@1} & \textbf{R@3} & \textbf{R@5} \\
+      \midrule
+      GPT-4o                            & \textbf{0.3732} & \textbf{0.4243} & \textbf{0.4991} & 0.5221  \\
+      Qwen2.5-VL-7B-Instruct            & 0.2349          & 0.3684          & 0.4609          & 0.4859  \\
+      Qwen2-VL-7B-Instruct              & 0.1594          & 0.3656          & 0.4590          & 0.4781  \\
+      Qwen2-VL-3B-Instruct              & 0.1386          & 0.2663          & 0.3250          & 0.3517  \\
+      llava-onevision-qwen2-7b-ov       & 0.1546          & 0.3629          & 0.4497          & 0.4639  \\
+      EVA-CLIP (ViT-g)                  & 0.2465          & 0.2654          & 0.4897          & 0.5944  \\
+      CLIP (ViT-L/14)                   & 0.2393          & 0.2567          & 0.4885          & \textbf{0.6000} \\
+      llava-v1.6-34b                    & 0.1354          & 0.2432          & 0.3779          & 0.4063  \\
+      llava-v1.5-7b                     & 0.0991          & 0.2140          & 0.2721          & 0.2973  \\
+      llava-v1.6-mistral-7b             & 0.0944          & 0.1932          & 0.2595          & 0.2831  \\
+      \bottomrule
+    \end{tabular}}
+  \label{table:classification_comparison}
+\end{table}
+
+Table~\ref{table:classification_comparison} shows that GPT-4o is best on F1 (0.373), R@1 (0.424), and R@3 (0.499), but even it fails on more than half of the crops at top-1. CLIP ViT-L/14 has the highest R@5 (0.600), with EVA-CLIP close behind (0.594). The two families behave differently: CLIP-style encoders have low R@1 (0.257 and 0.265) but R@5 more than twice as large, while LMMs, whose scoring depends on a single generated description, gain little from larger $K$ (GPT-4o: 0.424 to 0.522; Qwen2.5-VL-7B: 0.368 to 0.486). Among open LMMs, the Qwen-based models and llava-onevision reach R@1 of about 0.36--0.37, whereas LLaVA v1.5 and v1.6 variants score 0.19--0.24, including the 34B model (0.243). In this setup model size alone therefore does not predict accuracy. F1 is much lower than R@1 for most LMMs (e.g., Qwen2-VL-7B: 0.159 vs.\ 0.366), whereas the CLIP-style encoders have F1 close to R@1; this suggests that LMM errors are unevenly distributed over classes, although we have not analyzed per-class results here. We did not repeat the evaluations with multiple seeds or prompts, so small differences (e.g., Qwen2.5-VL-7B vs.\ Qwen2-VL-7B at R@1) should not be interpreted as significant.
+
+\subsection{Task 2: Continual User-aware Adaptation}
+Qwen2.5-VL-3B is adapted incrementally as in Fig.~\ref{fig:tasks}. Figure~\ref{fig:all} shows weekly accuracy and its weighted moving average for zero-shot, full fine-tuning, and LoRA fine-tuning on data from all users. Zero-shot accuracy stays at roughly 0.2 at the start and drifts down to about 0.1--0.15 later (values read from the plot), whereas both fine-tuned variants rise to about 0.5 by early 2024, a gain of over 30 percentage points relative to zero-shot. Full fine-tuning is above LoRA for most of the period, and the two end at similar levels. Weekly values (dashed lines) are noisy, which motivates the volume-weighted moving average.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.9\columnwidth]{all_data_1_35_with_legend.jpg}
+  \caption{Incremental accuracy over time for zero-shot, full fine-tuning, and LoRA fine-tuning using all users' data. Dashed: weekly values; solid: weighted moving average.}
+  \label{fig:all}
+\end{figure}
+
+Figure~\ref{fig:user} focuses on one heavy logger (User~A). Zero-shot accuracy for this user is lower still (under about 0.15). A LoRA adapter trained on all users starts higher than one trained only on User~A's data, since the latter has little data at the start. As User~A's records accumulate, the user-specific adapter overtakes it (around mid-2023 in the moving average) and reaches roughly 0.6, a gain of about 50 percentage points over zero-shot. Toward the end of the period the two adapters are again close, and the all-user adapter is higher at the final points, so the advantage of personalization is not uniform, and as it comes from a single user the result should be seen as a case study, not a general estimate of personalization gains.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.8\columnwidth]{user_zero_lora_ma_wide_legend.jpg}
+  \caption{Accuracy over time for User~A: zero-shot, LoRA fine-tuned on all users, and LoRA fine-tuned on User~A only.}
+  \label{fig:user}
+\end{figure}
+
+\subsection{Task 3: Menu-aware Classification}
+Table~\ref{table:desc_guided} compares classification of the same crops with and without the whole-image description. With the description, F1 rises from 0.159 to 0.230 and P@1 from 0.102 to 0.179, while R@1/3/5 fall (R@1: 0.366 to 0.324; R@5: 0.478 to 0.434). At the level of individual predictions, the description corrects 687 errors but introduces 1,222 new ones. Context therefore changes the error pattern rather than uniformly improving it. Figure~\ref{fig:desc} illustrates both outcomes: a description naming ``gyoza'' fixes a mislabeled dumpling crop, while a vague description of a drink leads to an incorrect answer on a crop that was previously correct. We did not test other context formats, such as structured menus or neighbor-dish labels.
+
+\begin{table}[t]
+  \centering
+  \caption{F1, P@1, and Recall@K for Qwen2.5-VL-7B-Instruct on description-guided classification (as labeled in the source results). Bold marks the better value per column.}
+  \begin{tabular}{lccccc}
+      \toprule
+                    & \textbf{F1}  & \textbf{P@1} & \textbf{R@1} & \textbf{R@3} & \textbf{R@5} \\
+      \midrule
+      w/o description & 0.1594       & 0.1019       & \textbf{0.3656}       & \textbf{0.4590}       & \textbf{0.4781}       \\
+      w/ description  & \textbf{0.2304}       & \textbf{0.1788}       & 0.3240       & 0.4032       & 0.4336       \\
+      \bottomrule
+    \end{tabular}\label{table:desc_guided}
+\end{table}
+
+A caveat: the ``w/o description'' row equals the Qwen2-VL-7B-Instruct row of Table~\ref{table:classification_comparison} (F1 0.1594, R@1 0.3656, R@3 0.4590, R@5 0.4781), not the Qwen2.5-VL-7B-Instruct row. We report the table as labeled in the results but flag this inconsistency in model identity.
+
+\section{Discussion}
+\paragraph{What the benchmark offers.} FoodLogAthl-218 allows researchers to test recognition under conditions that web-crawled datasets remove: skewed class frequencies, casual photos, several dishes per image, and time-ordered per-user records. The three tasks separate different questions: static recognition (Task 1), adaptation under temporal drift and personalization (Task 2), and use of meal context (Task 3). The results show a large headroom in all three: the best top-1 recall is 0.424, zero-shot accuracy decays over time, and context helps precision but hurts recall.
+
+\paragraph{How to use it and how not to.} Results should be compared at the same $K$ and with the same text-embedding route, since LMM and CLIP scores depend on how a free-form answer is mapped to labels. The e5-based mapping adds its own errors, so low LMM scores may partly reflect the mapping rather than visual recognition. Task 2 numbers depend on the order and volume of records, and conclusions about personalization are drawn from one user.
+
+\paragraph{Limitations.} (i) Labels derive from user-chosen database entries and were cleaned manually, but inter-annotator agreement was not measured and label noise remains possible. (ii) Consolidation to 218 classes through GPT-4o grouping and manual refinement involves subjective choices about granularity, and removing classes with fewer than 10 samples truncates the long tail. (iii) The users of one application, apparently mostly in Japan, define the food distribution, so conclusions may not transfer to other cuisines or populations. (iv) The CLIP-based outlier filter used a model that is also evaluated, which can bias difficulty for that family. (v) Evaluated models were not tested for prior exposure to these images. (vi) Diversity statistics are indirect evidence of difficulty. (vii) We report single runs without confidence intervals.
+
+\section{Conclusion}
+We presented FoodLogAthl-218, a benchmark of 6,925 images, 14,349 dish boxes, and 218 classes built from real dietary logging records, with three tasks for closed-set, continual user-aware, and menu-aware classification. Evaluations of ten CLIP-style and LMM baselines show that closed-set recognition remains hard (best R@1 0.424, best R@5 0.600), that the feature-space statistics are more spread out than UEC-Food 256, that continual fine-tuning of a 3B LMM raises accuracy from about 0.2 to about 0.5 and that user-specific adaptation can help a heavy logger, and that meal-level context trades recall for precision. The benchmark's value is in measuring these realistic aspects; its limits, including label noise without measured agreement and a narrow user population, are discussed above.
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}

@@ -1,0 +1,1425 @@
+000
+001
+002
+003
+004
+005
+006
+007
+008
+009
+010
+011
+012
+013
+014
+015
+016
+017
+018
+019
+020
+021
+022
+023
+024
+025
+026
+027
+028
+029
+030
+031
+032
+033
+034
+035
+036
+037
+038
+039
+040
+041
+042
+043
+044
+045
+046
+047
+048
+049
+050
+051
+052
+053
+Under review as a conference paper at ICLR 2025
+BEYOND TOKEN BOUNDARIES:
+BYTE-LEVEL PRE-
+DICTION FROM TOKENIZED LANGUAGE MODELS
+Anonymous authors
+Paper under double-blind review
+ABSTRACT
+Tokenized language models condition on discrete encodings, but users supply text
+that may end inside a token. Conditioning on a single encoding can therefore
+disagree with conditioning on the observed bytes, and different model vocabu-
+laries complicate probability-level ensembling. We formulate byte prediction as
+marginalization over token histories that first cover the observed prefix, yielding
+an exact representation of the byte process induced by a token model without
+weight updates. We derive incremental inference and a reverse-search specializa-
+tion, making explicit the support assumptions required for tokenizer-based prun-
+ing. On HumanEval Random Span, byte-level prediction raises CodeLlama-7b’s
+suffix-prefix-middle greedy pass rate from 45.0 to 63.9 and its reported pass@10
+from 66.5 to 84.3. Averaging predictions in byte space reaches 65.4 on MMLU
+and 42.1 pass@1 on HumanEval, exceeding the best reported individual scores of
+63.4 and 38.4. Benefits are not universal: individual-model code generation can
+regress, and the GSM8K ensemble underperforms its strongest member. These
+results support byte-space conditioning for boundary-sensitive completion and
+vocabulary-independent ensembling, while leaving runtime and approximation er-
+ror unresolved.
+1
+INTRODUCTION
+Subword tokenization provides a practical vocabulary for language modeling, including representa-
+tions of rare words Sennrich et al. (2016). Yet a token boundary is an internal modeling choice, not
+a constraint on the text a user can provide. A code completion prompt may stop halfway through an
+identifier, and the tokenization of that partial identifier may differ from the corresponding prefix of
+the tokenization of the completed program. A model asked to continue the former token history can
+consequently make a different prediction from the one obtained by conditioning its underlying text
+distribution on the observed prefix.
+We call this discrepancy tokenization bias. Here, bias denotes a difference between two condition-
+ing operations on the same model, not social bias or necessarily a discrepancy from the true data
+distribution. The distinction matters: recovering the byte distribution induced by a model does not
+correct errors already present in that model. Nevertheless, the supplied synthetic experiments exhibit
+a particularly sharp boundary failure: a valid next byte receives zero probability under deterministic
+token-history conditioning even though its data-generating probability is positive.
+Our approach retains the token model and changes inference. For an observed byte prefix, we
+consider all token histories whose final token first reaches or crosses its endpoint. These cover
+encodings partition the event of observing that prefix. Their probabilities give the prefix likelihood
+and, by taking ratios, the next-byte distribution. Crucially, a covering token may extend beyond the
+prompt: restricting the sum to tokenizations that end exactly at the prompt boundary would omit
+precisely the hypotheses needed for mid-token completion.
+This formulation also resolves an interface problem in ensembling. Token probabilities from dis-
+tinct vocabularies cannot be directly averaged by token index. Byte probabilities can: each model
+contributes a distribution over the same 256 byte values, together with a termination event. Figure 1
+summarizes both applications.
+1
+
+
+054
+055
+056
+057
+058
+059
+060
+061
+062
+063
+064
+065
+066
+067
+068
+069
+070
+071
+072
+073
+074
+075
+076
+077
+078
+079
+080
+081
+082
+083
+084
+085
+086
+087
+088
+089
+090
+091
+092
+093
+094
+095
+096
+097
+098
+099
+100
+101
+102
+103
+104
+105
+106
+107
+Under review as a conference paper at ICLR 2025
+Figure 1: Boundary-sensitive completion and a common output space. Left: the supplied illustra-
+tion contrasts token-history conditioning with byte-prefix conditioning when a prompt ends inside
+an identifier. Right: mapping different vocabularies into byte probabilities permits probability aver-
+aging. The displayed probabilities are illustrative, not benchmark measurements.
+The paper makes three contributions. First, it gives a byte-token representation lemma and separates
+unconditional exactness of the representation from assumptions needed to prune token histories.
+Second, it specifies incremental marginalization and a reverse-search specialization that reuse token-
+model predictions without retraining. Third, it evaluates boundary-sensitive infilling, individual-
+model prediction, and heterogeneous ensembling using the recorded experiments. The strongest
+evidence concerns suffix-prefix-middle (SPM) infilling; mixed results elsewhere delimit the claim.
+We do not claim that byte-level decoding uniformly improves accuracy or that exact marginalization
+is inexpensive for every token model.
+2
+RELATED WORK
+Tokenization and segmentation.
+Subword units address vocabulary coverage in neural language
+processing Sennrich et al. (2016). Tokenizer choices also affect pretraining and domain adaptation
+Dagan et al. (2024). These studies motivate treating the tokenizer as part of the modeling interface
+rather than an interchangeable text preprocessing step. Marginalization over alternative segmen-
+tations has an established role in language modeling: Grave et al. (2019) trains hybrid models by
+summing over segmentations. Our focus is instead inference with a fixed pretrained token model,
+including histories whose last token overshoots an observed byte prefix. The representation iden-
+tity is a probability decomposition; efficient evaluation requires additional structure in the model’s
+support.
+Infilling and boundary repair.
+Fill-in-the-middle training rearranges text to support generation
+conditioned on both a prefix and a suffix Bavarian et al. (2022). Code Llama includes models with
+infilling capabilities Rozi`ere et al. (2023). Boundary repair is directly relevant when the supplied
+prefix ends inside a subword. Token healing backs up from the boundary and constrains regener-
+ation to match the observed text; Dagan et al. (2024) discusses both the motivation and variants
+of this procedure. Token alignment uses character matching for subword completion Athiwaratkun
+et al. (2024). Both provide relevant empirical baselines. Our mathematical target is the full model-
+induced byte conditional, which averages compatible histories according to their probability rather
+than selecting a single repaired history. The experimental records do not specify the exact healing
+or alignment implementation, so the comparisons apply to the recorded configurations.
+Evaluation and heterogeneous models.
+HumanEval Chen et al. (2021) and MBPP Austin et al.
+(2021) evaluate program synthesis. MMLU Hendrycks et al. (2020), PIQA Bisk et al. (2020), Nat-
+ural Questions Kwiatkowski et al. (2019), TriviaQA Joshi et al. (2017), and GSM8K Cobbe et al.
+(2021) cover knowledge, physical reasoning, question answering, and mathematical problem solv-
+ing. We use the results recorded for these benchmarks to examine whether boundary correction
+transfers beyond infilling. Our ensemble uses an arithmetic mean of byte conditionals, providing
+2
+
+
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+Under review as a conference paper at ICLR 2025
+a shared prediction space without requiring shared token identifiers. The comparison to voting is
+limited to the two benchmarks with recorded voting results.
+3
+METHODOLOGY
+3.1
+TOKEN PROCESSES, BYTE PREFIXES, AND CONDITIONING
+Let B = {0, . . . , 255} and let V be a finite vocabulary of ordinary tokens. Each token t has a
+nonempty byte string d(t) ∈B+. Decoding concatenates these strings:
+D(t1:k) = d(t1) · · · d(tk),
+P(t1:k) =
+k
+Y
+i=1
+P(ti | t<i).
+(1)
+Here P(t1:k) is the probability of a token prefix, not of terminating after token k. Set P(∅) =
+1. The deterministic encoder E satisfies D(E(x)) = x on representable strings. The derivation
+assumes concatenative, lossless byte decoding. A tokenizer with normalization or context-dependent
+decoding requires an explicit decoder state; the simple formulas below do not cover it automatically.
+We condition on any fixed external control context, such as beginning-of-sequence or FIM control
+tokens, and suppress that context in the notation. Such controls must retain their model-specific
+semantics rather than being treated as ordinary text bytes. An end-of-sequence event EOS terminates
+the process and is handled separately. There are no other silent transitions in this formulation.
+For a finite string x, define the byte-prefix mass
+Q(x) = Pr{the decoded token process begins with x},
+Q(∅) = 1.
+(2)
+Write x ⪯y when x is a prefix of y. For Q(x) > 0, the desired next-byte probability is
+pbyte(b | x) = Q(xb)
+Q(x) ,
+b ∈B.
+(3)
+In contrast, deterministic token-history conditioning gives
+pdet(b | x) =
+X
+t∈V: d(t)1=b
+P(t | E(x)).
+(4)
+These condition on different events. A byte-level discrepancy can be measured by total variation
+between the two distributions, including their respective termination probabilities. The experiments
+do not report this quantity numerically.
+3.2
+THE BYTE-TOKEN REPRESENTATION LEMMA
+For n = |x| > 0, define the set of minimal cover histories
+C(x) = {h = t1:k : x ⪯D(h),
+|D(t1:k−1)| < n ≤|D(h)|} .
+(5)
+Minimality means that the final token is the first to reach position n. It prevents double counting
+histories that merely append further tokens after the prefix is already covered. Set C(∅) = {∅}.
+Lemma 1 (Byte-token representation). For the token process defined above and every finite byte
+string x,
+Q(x) =
+X
+h∈C(x)
+P(h).
+(6)
+Consequently, whenever Q(x) > 0, equation 3 gives the exact next-byte conditional induced by that
+token process.
+Proof. Every token realization whose decoding begins with x has a unique first token that reaches
+byte |x|. The token prefix through that token belongs to C(x). Conversely, every extension of a
+cover history begins with x. These token-prefix events are disjoint: extending a cover history cannot
+produce another minimal cover of the same x. Summing their probabilities proves the identity.
+3
+
+
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+Under review as a conference paper at ICLR 2025
+The lemma does not assume that the model generates only canonical encodings. It is exact for the
+model distribution, regardless of whether that distribution matches the data. If the entire decoded
+process matches a data-generating byte process, its prefix conditionals also match wherever their
+denominator is positive. Recovering ground-truth transition probabilities in a synthetic example is
+therefore consistent with the lemma, but is not guaranteed for an imperfect learned model.
+Termination must not be silently discarded. Define
+Qstop(x) =
+X
+h:D(h)=x
+P(h)P(EOS | h).
+(7)
+Then Q(x) = Qstop(x) + P
+b∈B Q(xb). Sampling from the normalized joint distribution over bytes
+and termination preserves the token model’s decoded process. Renormalizing only the byte entries
+instead conditions on producing at least one more byte. Appendix A details this distinction and a
+small symbolic example.
+3.3
+VALID ENCODINGS AND REVERSE SEARCH
+Call a token history canonical when E(D(h)) = h. A deterministic tokenizer may never emit a
+noncanonical sequence, but that fact alone does not imply P(h) = 0 for a learned token model.
+Discarding such a sequence changes the represented distribution if its probability is positive.
+For an efficient specialization, impose the following explicit canonical support condition:
+P(h) > 0
+=⇒
+E(D(h)) = h
+for every finite ordinary-token history h.
+(8)
+This is a sufficient assumption, not a property established by the experimental logs. Under it, a
+cover history whose final token starts at byte j must have the form h = E(x1:j−1) ∥t. Let L =
+maxt∈V |d(t)|. All candidates can be found by the following reverse search:
+1. Visit j = n, n −1, . . . , max(1, n −L + 1).
+2. Retrieve all tokens t for which xj:n ⪯d(t), using a vocabulary prefix index.
+3. Construct h = E(x1:j−1) ∥t. Retain it if it passes the canonical check, and score it with
+equation 1.
+4. Sum retained history probabilities to obtain Q(x).
+The empty preceding history is allowed. The search stops after L possible start positions because
+an earlier final token cannot reach byte n. Under equation 8, every positive-mass cover is consid-
+ered and rejected histories have zero mass. Without this condition, exact search must retain every
+positive-mass preceding token history that decodes to x1:j−1, rather than only its deterministic en-
+coding.
+Figure 2 illustrates the specialization. Its candidate count is at most L|V|, before using prefix in-
+dexing. This is not a bound on end-to-end neural inference time: evaluating history probabilities
+and obtaining their next-token logits also costs computation. For unrestricted models, the number
+of compatible histories can grow exponentially with prefix length. Thus the exact representation
+for arbitrary token models should be distinguished from an efficient implementation under restricted
+support.
+3.4
+INCREMENTAL NEXT-BYTE PREDICTION
+Maintain each h ∈C(x) together with its mass wh = P(h) and its token-model state. Initialize from
+an exact cover enumeration, or from the reverse specialization when its assumption holds. Split the
+next step into two cases.
+If |D(h)| > |x|, the token already fixes the next byte. Add wh to the accumulator for byte D(h)|x|+1
+and keep h in the corresponding next cover set. If |D(h)| = |x|, query the next-token distribution
+at h. Each ordinary token t contributes whP(t | h) to the accumulator for its first byte, and the
+extended history h ∥t becomes a cover of that extended byte prefix. Add whP(EOS | h) to the
+termination accumulator. Summing across histories produces
+Ab = Q(xb),
+Astop = Qstop(x),
+X
+b
+Ab + Astop = Q(x).
+(9)
+4
+
+
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+Under review as a conference paper at ICLR 2025
+Figure 2: Cover histories and reverse search in the supplied BPE illustration. A covering token may
+extend past the observed string. The accept/reject checks shown in the artwork yield exact pruning
+only under the canonical support condition in equation 8; the general representation lemma does not
+require that condition.
+Normalize by Q(x), sample a byte or termination, and retain the associated cover set for the follow-
+ing step. Greedy byte decoding instead chooses the largest normalized entry. Unnormalized history
+masses can be maintained in log space with log-sum-exp aggregation. Caching model states avoids
+reprocessing an unchanged token history. Appendix B includes the supplied sampling illustration.
+Under canonical support, at most one positive-mass history ends exactly at a particular byte prefix,
+namely E(x). The incremental step then requires at most one new next-token distribution, while
+overshooting covers contribute already determined bytes. This does not imply one model call per
+generated token, or a measured speedup. Without canonical support, distinct boundary histories
+require distinct model states and predictions.
+Byte-greedy and token-greedy decoding also optimize different local choices. Even at an unam-
+biguous token boundary, the sum of probabilities of several tokens sharing a first byte can exceed
+the probability of the single most likely token. A gain from byte-greedy decoding therefore need
+not demonstrate removal of a mid-token error. Truncating histories or using a beam to approxi-
+mate marginalization is not exact in general; the recorded beam experiment does not specify enough
+implementation detail to equate beam width with retained probability mass.
+3.5
+ENSEMBLING IN A COMMON BYTE SPACE
+For M models, compute each model’s byte conditional at the same observed text, using its own
+tokenizer and token probabilities. With a ∈B ∪{stop}, the recorded ensemble rule is
+pens(a | x) = 1
+M
+M
+X
+m=1
+pm(a | x).
+(10)
+This is a valid distribution when all members are defined and use consistent termination semantics.
+After selecting a byte, update each model’s cover state separately. The rule is a stepwise arithmetic
+pool, not generally the posterior predictive distribution of a mixture that selects one model for an
+entire sequence. No improvement guarantee follows: an inaccurate member can reduce the prob-
+ability assigned to a correct continuation. The experiments use two members; their selection and
+evaluation protocols are discussed below.
+5
+
+
+270
+271
+272
+273
+274
+275
+276
+277
+278
+279
+280
+281
+282
+283
+284
+285
+286
+287
+288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298
+299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+315
+316
+317
+318
+319
+320
+321
+322
+323
+Under review as a conference paper at ICLR 2025
+4
+EXPERIMENTS
+4.1
+SETUP AND REPORTING SCOPE
+The experimental record covers first- and third-order Markov chains, a six-hidden-layer GPT-2 ar-
+chitecture trained on synthetic data, and pretrained Transformer language models. General-purpose
+evaluations use Llama2-7B, Yi-1.5-6B, and Mistral-7B-v0.3. Infilling uses CodeLlama-7b. The
+code-generation table labels its models CodeLlama2-7b, CodeLlama2-13b, and Yi-Coder-1.5B; we
+preserve those labels because checkpoint identifiers are not supplied and the 7B naming differs
+across experiments.
+Infilling is evaluated on HumanEval Random Span Bavarian et al. (2022) in prefix-suffix-middle
+(PSM) and suffix-prefix-middle (SPM) modes. The baselines are ordinary token generation, heal-
+ing, and alignment; the latter two are reported only for SPM. We reproduce greedy pass rates and
+the supplied @10 scores. The provided infilling figure specifies that @10 is the maximum over
+a temperature sweep, rather than a score at one fixed temperature. The grid, sampling seeds, and
+sample-count details are unavailable.
+The general benchmarks are MMLU, PIQA, NQ, TriviaQA, and GSM8K; code generation uses Hu-
+manEval and MBPP. All reported scores are percentages. We retain the logs’ accuracy and pass@1
+terminology without assuming unreported answer extraction or normalization rules. Ensembles av-
+erage byte probabilities of the top two models. The record does not establish how the top two
+were selected, whether selection used held-out data, or all task-specific pair identities. It explic-
+itly identifies Yi-Coder-1.5B and CodeLlama2-13b for HumanEval, and discusses Yi-1.5-6B with
+Mistral-7B-v0.3 for GSM8K.
+The records provide aggregate results, not example-level outputs, repeated runs, uncertainty inter-
+vals, compute measurements, or complete inference configurations. Accordingly, numerical dif-
+ferences below are descriptive; we make no statistical significance claim. Missing entries denote
+unreported measurements, not zero performance. Appendix D lists the principal reproducibility
+gaps.
+4.2
+SYNTHETIC VERIFICATION
+The first-order example uses byte symbols A and B and a vocabulary containing A, B, and AA
+(Figure 3). The record reports a zero token-conditioned probability for A following context A,
+despite a byte transition probability 1 −α. A token history ending in standalone A can exclude
+futures that would instead have merged that byte into AA. Byte-prefix conditioning retains those
+histories through a cover token that straddles the observed boundary.
+The third-order experiment reports severe predictive distortion under token conditioning and recov-
+ery of the chain’s original conditional probabilities after conversion. The supplied plot supports
+qualitative agreement between corrected and ground-truth predictions across the displayed contexts.
+The record does not include numeric errors, learned parameters, chain coefficients, training hyper-
+parameters, or repeated runs. We therefore use these experiments as a qualitative mechanism check,
+not a quantified accuracy or calibration guarantee for arbitrary neural models.
+4.3
+CODE INFILLING AND BOUNDARY SENSITIVITY
+Table 1 shows the clearest effect. Standard token-level greedy decoding drops from 64.9 in PSM
+to 45.0 in SPM, a 19.9 percentage-point decrease. Byte-level decoding reaches 63.9 in SPM, an
+18.9-point gain over its token baseline; the corresponding PSM–SPM gap is only 1.8 points. The
+@10 SPM gain is 17.8 points, from 66.5 to 84.3. These are absolute percentage-point differences,
+not relative percentages.
+Both boundary-repair baselines recover much of the SPM degradation. Byte-level decoding exceeds
+healing by 1.2 points greedily and 0.5 points at @10, and alignment by 0.9 and 1.4 points, respec-
+tively. The gains over these baselines are therefore much smaller than the gain over unmodified SPM
+decoding. In PSM, byte-level decoding improves greedy performance by 0.8 points and @10 by 0.1
+points. These modest changes are compatible with the different local objectives of token-greedy and
+byte-greedy generation, in addition to any boundary effect.
+6
+
+
+324
+325
+326
+327
+328
+329
+330
+331
+332
+333
+334
+335
+336
+337
+338
+339
+340
+341
+342
+343
+344
+345
+346
+347
+348
+349
+350
+351
+352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376
+377
+Under review as a conference paper at ICLR 2025
+Figure 3: Synthetic evidence from the supplied experiments. Left: the first-order chain and token
+representation illustrate how conditioning on standalone A excludes the next A. Right: the third-
+order plot compares the next-A probability across byte contexts, showing qualitative agreement after
+correction. No numerical error estimates are available.
+Table 1: HumanEval Random Span pass rates (%) with CodeLlama-7b. The @10 entries are re-
+ported maxima over a temperature sweep. Dashes indicate unreported settings. Bold marks the
+highest value in each column.
+PSM
+SPM
+Method
+Greedy
+@10
+Greedy
+@10
+Token-level
+64.9
+84.0
+45.0
+66.5
+Token-level + healing
+—
+—
+62.7
+83.8
+Token-level + alignment
+—
+—
+63.0
+82.9
+Byte-level
+65.7
+84.1
+63.9
+84.3
+The qualitative record identifies partial identifiers such as delimeter, collatz, and
+palindrome as failure cases resolved by byte-level completion. These observations are consis-
+tent with the proposed mechanism, but neither their frequency nor a controlled isolation of boundary
+effects is available. The prompt-template comparison supports sensitivity to boundaries rather than
+proving that every PSM–SPM difference has the same cause. Appendix C reproduces the supplied
+infilling plot.
+4.4
+GENERAL PREDICTION AND HETEROGENEOUS ENSEMBLING
+Byte-level prediction alone is mixed (Table 2). Several scores are unchanged or move by only a few
+tenths of a point. Llama2-7B, however, drops from 25.0 to 23.4 on NQ and from 15.1 to 12.5 on
+GSM8K. TriviaQA decreases for all three individual models. These results do not support treating
+byte conversion as a general capability improvement.
+The ensemble exceeds the best reported individual result on four of five benchmarks: MMLU by
+2.0 points (65.4 versus 63.4), PIQA by 0.4 (80.7 versus 80.3), NQ by 1.2 (30.0 versus 28.8), and
+TriviaQA by 0.6 (64.2 versus 63.6). Its improvements over the recorded voting baseline are 3.3
+points on MMLU and 0.6 points on PIQA. Voting implementation and tie-breaking details are not
+reported, and voting results for the other tasks are unavailable.
+GSM8K provides a clear counterexample: the ensemble’s 55.8 is 5.7 points below Yi-1.5-6B’s byte
+score of 61.5. The corresponding Mistral score is 39.0, a 22.5-point capability gap. Equal weighting
+can dilute the stronger model’s predictions; this explanation is consistent with the result, but the
+aggregate scores alone do not establish a causal threshold for useful model diversity. The ensemble
+also uses multiple models, so the comparison is not matched for inference cost.
+7
+
+
+378
+379
+380
+381
+382
+383
+384
+385
+386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+Under review as a conference paper at ICLR 2025
+Table 2: Knowledge and reasoning scores (%). T and B denote token- and byte-level prediction.
+Voting is the recorded top-two baseline; the ensemble averages byte probabilities. Bold marks the
+highest reported score per benchmark.
+Model
+Space
+MMLU
+PIQA
+NQ
+TriviaQA
+GSM8K
+Llama2-7B
+T
+45.4
+78.1
+25.0
+58.4
+15.1
+B
+45.7
+78.2
+23.4
+58.1
+12.5
+Yi-1.5-6B
+T
+63.4
+78.5
+22.8
+53.7
+61.3
+B
+63.4
+78.5
+22.7
+53.4
+61.5
+Mistral-7B-v0.3
+T
+62.1
+80.1
+28.5
+63.6
+39.0
+B
+62.1
+80.3
+28.8
+63.5
+39.0
+Voting (top two)
+—
+62.1
+80.1
+—
+—
+—
+Top-two ensemble B
+65.4
+80.7
+30.0
+64.2
+55.8
+Table 3: Code-generation pass@1 (%). Model labels follow the supplied table, including its CodeL-
+lama2 naming. Bold marks the best score for each benchmark across both prediction spaces.
+HumanEval
+MBPP
+Model
+Token
+Byte
+Token
+Byte
+CodeLlama2-7b
+32.3
+28.7
+40.6
+42.4
+CodeLlama2-13b
+35.8
+33.5
+47.6
+47.4
+Yi-Coder-1.5B
+38.4
+36.5
+52.8
+53.6
+Top-two ensemble
+—
+42.1
+—
+53.6
+4.5
+CODE GENERATION AND BEAM WIDTH
+Table 3 distinguishes individual conversion from ensembling. Every individual model loses Hu-
+manEval pass@1 after byte conversion: the changes are −3.6, −2.3, and −1.9 points. Nonetheless,
+the ensemble reaches 42.1, exceeding the best token-level individual score by 3.7 points and the
+best byte-level individual score by 5.6 points. Thus its gain is not evidence that conversion alone
+improves code synthesis. On MBPP, conversion helps the 7B and Yi-Coder entries but slightly hurts
+the 13B entry. The ensemble ties the best byte-level individual at 53.6 rather than exceeding it.
+Increasing the recorded beam width from one to four improves PSM by 2.0 points and SPM by 2.9
+points (Table 4). The width-one entries match the greedy infilling results. The monotonic trend sug-
+gests that additional search helps these recorded configurations, but does not establish convergence
+to exact marginalization, a particular decoding objective, or a favorable accuracy–latency tradeoff.
+No beam runtime or token-level beam control is available.
+5
+CONCLUSION
+Byte-prefix conditioning provides a principled interface between tokenized language models and
+arbitrary text boundaries. Minimal cover histories yield an exact representation of a token model’s
+induced byte distribution; reverse search and incremental reuse make the computation structured,
+with efficient canonical pruning requiring a separate support assumption. The experimental evi-
+dence is strongest for SPM code infilling, where byte-level prediction recovers most of the degra-
+dation relative to PSM. A shared byte space also enables ensembles that improve several recorded
+benchmarks.
+The results establish neither universal accuracy gains nor inexpensive exact inference for unre-
+stricted neural models. Individual-model regressions, the GSM8K ensemble loss, missing uncer-
+tainty estimates, and unmeasured pruning error limit stronger claims. Future work should measure
+noncanonical probability mass and inference cost, specify reproducible decoding protocols, and
+evaluate ensemble weighting using held-out selection. The essential benefit is a coherent condition-
+ing and aggregation space; its computational and task-level value must be assessed separately.
+8
+
+
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455
+456
+457
+458
+459
+460
+461
+462
+463
+464
+465
+466
+467
+468
+469
+470
+471
+472
+473
+474
+475
+476
+477
+478
+479
+480
+481
+482
+483
+484
+485
+Under review as a conference paper at ICLR 2025
+Table 4: Recorded byte-level beam-width ablation on HumanEval infilling. Scores are pass rates
+(%); the record does not specify beam scoring, length normalization, or whether beams contain
+output hypotheses or cover histories.
+Beam width
+PSM
+SPM
+1
+65.7
+63.9
+2
+66.8
+65.9
+4
+67.7
+66.8
+REPRODUCIBILITY STATEMENT
+The paper provides the probability identity, its proof, explicit support and decoder assumptions, a
+reverse-search procedure, and an incremental update rule. All tabulated measurements reproduce
+the supplied experimental record; additional numbers in the analysis are arithmetic differences of
+those measurements. The supplied figures are retained as illustrations or qualitative evidence. Exact
+experimental replication is currently limited by missing checkpoint revisions, code, dataset config-
+urations, prompts, seeds, and inference settings, detailed in Appendix D. In particular, the records
+do not establish whether the evaluated wrapper preserves all noncanonical probability mass. No
+unavailable implementation detail is treated as a measured fact.
+REFERENCES
+Ben Athiwaratkun, Shiqi Wang, Mingyue Shang, Yuchen Tian, Zijian Wang, Sujan Kumar Gonu-
+gondla, Sanjay Krishna Gouda, Robert Kwiatkowski, Ramesh Nallapati, Parminder Bhatia, and
+Bing Xiang.
+Token alignment via character matching for subword completion.
+In Findings
+of the Association for Computational Linguistics: ACL 2024, pp. 15725–15738, 2024.
+doi:
+10.18653/v1/2024.findings-acl.929.
+Jacob Austin, Augustus Odena, Maxwell Nye, et al. Program synthesis with large language models.
+arXiv preprint arXiv:2108.07732, 2021. doi: 10.48550/arXiv.2108.07732.
+Mohammad Bavarian, Heewoo Jun, Nikolas Tezak, John Schulman, Christine McLeavey, Jerry
+Tworek, and Mark I-Cheng Chen. Efficient training of language models to fill in the middle.
+arXiv preprint arXiv:2207.14255, 2022. doi: 10.48550/arXiv.2207.14255.
+Yonatan Bisk, Rowan Zellers, Ronan Joseph Le Bras, Jianfeng Gao, and Yejin Choi. PIQA: Rea-
+soning about physical commonsense in natural language. In Proceedings of the AAAI Conference
+on Artificial Intelligence, volume 34, pp. 7432–7439, 2020. doi: 10.1609/aaai.v34i05.6239.
+Mark I-Cheng Chen, Jerry Tworek, Heewoo Jun, et al. Evaluating large language models trained on
+code. arXiv preprint arXiv:2107.03374, 2021. doi: 10.48550/arXiv.2107.03374.
+Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, et al. Training verifiers to solve math word
+problems. arXiv preprint arXiv:2110.14168, 2021. doi: 10.48550/arXiv.2110.14168.
+Gautier Dagan, Gabriel Synnaeve, and Baptiste Rozi`ere. Getting the most out of your tokenizer
+for pre-training and domain adaptation. arXiv preprint arXiv:2402.01035, 2024. doi: 10.48550/
+arXiv.2402.01035.
+´Edouard Grave, Sainbayar Sukhbaatar, Piotr Bojanowski, and Armand Joulin.
+Training hy-
+brid language models by marginalizing over segmentations.
+In Proceedings of the 57th An-
+nual Meeting of the Association for Computational Linguistics, pp. 1477–1482, 2019.
+doi:
+10.18653/v1/P19-1143.
+Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Xiaodong Song,
+and Jacob Steinhardt.
+Measuring massive multitask language understanding.
+arXiv preprint
+arXiv:2009.03300, 2020. doi: 10.48550/arXiv.2009.03300.
+9
+
+
+486
+487
+488
+489
+490
+491
+492
+493
+494
+495
+496
+497
+498
+499
+500
+501
+502
+503
+504
+505
+506
+507
+508
+509
+510
+511
+512
+513
+514
+515
+516
+517
+518
+519
+520
+521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+531
+532
+533
+534
+535
+536
+537
+538
+539
+Under review as a conference paper at ICLR 2025
+Mandar Joshi, Eunsol Choi, Daniel S. Weld, and Luke Zettlemoyer.
+TriviaQA: A large scale
+distantly supervised challenge dataset for reading comprehension. In Proceedings of the 55th
+Annual Meeting of the Association for Computational Linguistics, pp. 1601–1611, 2017. doi:
+10.18653/v1/P17-1147.
+Tom Kwiatkowski, Jennimaria Palomaki, Olivia Redfield, et al. Natural Questions: A benchmark
+for question answering research. Transactions of the Association for Computational Linguistics,
+7:453–466, 2019. doi: 10.1162/tacl a 00276.
+Baptiste Rozi`ere, Jonas Gehring, Fabian Gloeckle, et al. Code Llama: Open foundation models for
+code. arXiv preprint arXiv:2308.12950, 2023. doi: 10.48550/arXiv.2308.12950.
+Rico Sennrich, Barry Haddow, and Alexandra Birch. Neural machine translation of rare words with
+subword units. In Proceedings of the 54th Annual Meeting of the Association for Computational
+Linguistics, pp. 1715–1725, 2016. doi: 10.18653/v1/P16-1162.
+10
+
+
+540
+541
+542
+543
+544
+545
+546
+547
+548
+549
+550
+551
+552
+553
+554
+555
+556
+557
+558
+559
+560
+561
+562
+563
+564
+565
+566
+567
+568
+569
+570
+571
+572
+573
+574
+575
+576
+577
+578
+579
+580
+581
+582
+583
+584
+585
+586
+587
+588
+589
+590
+591
+592
+593
+Under review as a conference paper at ICLR 2025
+A
+PROBABILITY IDENTITIES AND EXACTNESS
+Finiteness and disjointness.
+For n > 0, each token in a cover history contributes at least one
+byte, so its token count is at most n. With finite V, the set in equation 5 is finite. Its cardinality
+can nevertheless grow exponentially in n. If one cover history were a strict token-prefix extension
+of another, its penultimate decoding would already contain n bytes, contradicting minimality. Thus
+the corresponding token-cylinder events are pairwise disjoint. This establishes the sum without
+assuming a unique tokenization of any byte string.
+Termination and normalization.
+Conditional on a decoded prefix x, a realization either stops
+exactly at x or supplies one next byte b. Stopping exactly at x requires an ordinary-token history h
+with D(h) = x followed by EOS, yielding equation 7. All other realizations fall into exactly one
+event with prefix xb. Consequently,
+pstop(x) +
+X
+b∈B
+pbyte(b | x) = 1,
+pstop(x) = Qstop(x)
+Q(x)
+.
+(11)
+If a task forces continuation, the correct conditional is Q(xb)/(Q(x) −Qstop(x)), provided the
+denominator is positive. This is a different conditioning event from the unmodified token process.
+The experimental logs do not specify their end-of-generation handling, so that choice cannot be
+reconstructed from the reported scores.
+A symbolic boundary example.
+Consider a vocabulary with byte strings A, B, and AA and a
+prompt consisting of the single byte A. Denote token probabilities at the initial context by P(A)
+and P(AA). Its two covers are the one-token histories (A) and (AA), so
+Q(A) = P(A) + P(AA),
+(12)
+Q(AA) = P(AA) + P(A)
+
+P(A | A) + P(AA | A)
+
+.
+(13)
+The first term in Q(AA) comes from a token already spanning both bytes. Deterministic condition-
+ing on token A omits it. If tokens beginning in A have zero conditional probability after standalone
+token A, but P(AA) > 0, then pdet(A | A) = 0 while pbyte(A | A) = P(AA)/(P(A)+P(AA)) >
+0. This is a logical illustration of the failure mode, not an additional experiment or a fitted param-
+eterization of the supplied Markov chain. An exact zero requires the stated support restriction; the
+records do not establish literal zeros for every pretrained neural model.
+Completeness of reverse search under canonical support.
+Let h = (u, t) be any positive-mass
+cover of x, with j = |D(u)|+1. Its final token has length at most L, so j ≥n−L+1. Since h covers
+x, D(u) = x1:j−1 and xj:n ⪯d(t). Positive mass of h implies positive mass of u. Under equation 8,
+u = E(x1:j−1) and h = E(D(h)). The reverse search therefore constructs and accepts h. Every
+accepted candidate is a minimal cover by construction. Any omitted noncanonical cover has zero
+probability under the assumption. Without that assumption, rejection based only on deterministic
+re-encoding is not justified.
+Exactness versus approximation.
+The general algorithm must distinguish token histories even
+when they decode to the same bytes: their next-token probabilities need not agree. A cache may
+share computation for identical token prefixes, but cannot collapse different histories merely be-
+cause their decoded strings match. If a cover approximation retains a subset R(x) with discarded
+conditional mass
+δ(x) = 1 −
+P
+h∈R(x) P(h)
+Q(x)
+,
+(14)
+then renormalizing the retained histories changes the next-event distribution by at most δ(x) in
+total variation, provided each retained history’s next-event distribution is evaluated exactly. This
+follows by writing the full conditional as a mixture of retained and discarded-history conditionals.
+No discarded-mass values are available for the reported experiments; a beam width alone does not
+bound δ(x).
+11
+
+
+594
+595
+596
+597
+598
+599
+600
+601
+602
+603
+604
+605
+606
+607
+608
+609
+610
+611
+612
+613
+614
+615
+616
+617
+618
+619
+620
+621
+622
+623
+624
+625
+626
+627
+628
+629
+630
+631
+632
+633
+634
+635
+636
+637
+638
+639
+640
+641
+642
+643
+644
+645
+646
+647
+Under review as a conference paper at ICLR 2025
+B
+INCREMENTAL SAMPLING ILLUSTRATION
+Figure 4 expands the two update cases in Section 3.4: carry forward histories whose final token
+already extends beyond the current prefix, and extend histories ending exactly at the prefix with
+next-token probabilities. The figure depicts the canonical specialization, including accept/reject
+checks and a single boundary-history model call. The general algorithm must keep all positive-mass
+boundary histories and must not perform unsupported rejection. Each history’s prefix probability is
+essential even when omitted from the artwork for clarity.
+Figure 4: Supplied sampling illustration. Overshooting cover tokens determine their next byte di-
+rectly, while histories ending at the current prefix require next-token probabilities. Actual aggre-
+gation multiplies conditional token probabilities by the probability of the preceding history. The
+depicted rejection rule requires the support qualification discussed in the main text.
+C
+SUPPLIED INFILLING VISUALIZATION
+Figure 5 reproduces the available infilling visualization. Its table agrees with Table 1, and its an-
+notation identifies the @10 scores as maxima over the plotted temperature sweep. The raw values
+underlying the curves are not supplied. We therefore do not extract additional performance estimates
+from their geometry or assume a particular temperature grid.
+Figure 5: Supplied HumanEval Random Span visualization for CodeLlama-7b, including the re-
+ported table and temperature curves. The figure supports the qualitative comparison of PSM, SPM,
+and healing; Table 1 is the numerical reporting source.
+D
+EXPERIMENTAL REPORTING DETAILS AND LIMITATIONS
+The available evidence consists of aggregate tables, qualitative observations, and the six supplied
+figures. The following missing details constrain replication and interpretation.
+• Models and tokenizers.
+Checkpoint revisions, tokenizer versions, precision, context
+limits, and special-token handling are unspecified. The setup calls the infilling model
+CodeLlama-7b, while the code-generation table uses CodeLlama2-7b and CodeLlama2-
+13b. These names are preserved without inferring checkpoint equivalence.
+• Synthetic experiments. Transition matrices, values of α and β, training-set sizes, opti-
+mizer settings, random seeds, and numerical probability-recovery errors are not recorded.
+12
+
+
+648
+649
+650
+651
+652
+653
+654
+655
+656
+657
+658
+659
+660
+661
+662
+663
+664
+665
+666
+667
+668
+669
+670
+671
+672
+673
+674
+675
+676
+677
+678
+679
+680
+681
+682
+683
+684
+685
+686
+687
+688
+689
+690
+691
+692
+693
+694
+695
+696
+697
+698
+699
+700
+701
+Under review as a conference paper at ICLR 2025
+The six-layer GPT-2 architecture is mentioned without a complete mapping from training
+runs to plotted results.
+• Evaluation. Dataset splits and revisions, exact prompts, few-shot counts, span-sampling
+rules, generation budgets, answer extraction, test-execution settings, and pass-rate estima-
+tors are unspecified. The @10 temperature-maximization annotation is available, but the
+search grid and selection procedure are not.
+• Inference. The record does not specify whether noncanonical histories are retained, how
+probability mass is truncated, how termination is treated, or how beam scores and stopping
+rules are defined. Consequently, the mathematical exactness theorem cannot certify the
+numerical implementation from the logs alone.
+• Ensembles and voting. The record describes top-two selection and equal probability av-
+eraging but does not give a complete task-by-task member list, held-out selection proto-
+col, or voting tie-breaking rule. The identified HumanEval pair is Yi-Coder-1.5B with
+CodeLlama2-13b; the GSM8K discussion identifies Yi-1.5-6B with Mistral-7B-v0.3.
+• Uncertainty and cost. No per-example predictions, repeated-run dispersion, confidence
+intervals, hardware descriptions, memory measurements, throughput, or latency are avail-
+able. Small score differences and compute efficiency therefore remain unverified beyond
+the reported aggregates.
+These omissions do not change the values reproduced in the tables, but they prevent a complete
+independent replication or attribution of every observed difference to exact byte marginalization.
+13

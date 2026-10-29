@@ -1,0 +1,11 @@
+# Preliminary implementation review
+
+Inspected experiment-repo commit `636d08cf2b0ab2787165a290824aaf00a9342af7`, its `Brief` wiki page, implementation, output JSON, independent-check code and log, and its recorded split in experiment-repo#2 / paper-repo#4–5. Re-read objective #1 and the frozen instructions. The settled split leaves production code and results with experiment-repo, assembly with paper-repo, and review records with this position. Both task paths are accounted for in the proposed allocation.
+
+The implementation applies each requested formula literally using columns 0 and 1. It uses the supplied inputs without normalization, weights pooled H sums correctly despite unequal group sizes, creates its output directory, and serializes native floats with the task's six factor names. The objective supplies no alternative key convention. The relative output path is correct when run from `/workspace` as stated in the Brief and program docstring.
+
+Ran `python3 checks/verify_delivery.py /hutian/review-stage-636d08cf` against an archive of the inspected commit, in the foreground. The checker starts the program in a fresh temporary working directory, confirms creation of the requested relative output file, and compares its contents exactly with the delivered JSON. The independent reference converts input matrices to lists and uses scalar products and `math.fsum`, not the production dot/sum calls. All six values agree at absolute error <= 3.34e-16, within the 1e-12 check tolerance. The log records full input SHA-256 provenance, shapes, versions, and values.
+
+No actionable finding in the task implementation. The supplied numerical evidence is adequate. The Brief's W-norm/cosine characterization is approximate (the displayed norms are near one); the program correctly uses the requested unnormalized inner products, and the task does not ask for a cosine interpretation. There is no report, table or figure in the inspected delivery, nor does the objective request one.
+
+This is an early evidence check, not approval of a version. The assembled paper-repo release/final head, all its delivered files and ownership, and its system checks remain to be inspected when proposed.

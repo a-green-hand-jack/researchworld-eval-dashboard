@@ -1,0 +1,261 @@
+\documentclass{article}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{hyperref}
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+\usepackage{icml2026}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\newcommand{\nloc}{n_{\mathrm{loc}}}
+\newcommand{\kstar}{k^\star}
+
+\icmltitlerunning{How Fragile Are Pairwise-Comparison Leaderboards?}
+
+\begin{document}
+
+\twocolumn[
+  \icmltitle{How Fragile Are Pairwise-Comparison Leaderboards?\\
+  A Square-Root Law for Minimal Rank-Flipping Edits Across Evaluation Designs}
+
+  \begin{icmlauthorlist}
+    \icmlauthor{Anonymous Authors}{anon}
+  \end{icmlauthorlist}
+  \icmlaffiliation{anon}{Anonymous Institution}
+  \icmlcorrespondingauthor{Anonymous Authors}{anonymous@example.com}
+  \icmlkeywords{Bradley-Terry, leaderboards, robustness, influence, Chatbot Arena}
+  \vskip 0.3in
+]
+\printAffiliationsAndNotice{}
+
+\begin{abstract}
+Leaderboards built from pairwise preferences (Chatbot Arena, MT-Bench, sports Elo) fit a Bradley--Terry (BT) model and publish a ranking. How many comparisons must change, whether through noise or on purpose, before a published order flips? We define the \emph{flip budget} $\kstar$ of a pair of items as the smallest number of dropped, relabelled or injected comparisons after which an exact refit reverses their order. We estimate it with an influence-guided greedy search whose output is always a refit-verified witness (an upper bound on the true minimum). On ten leaderboards from four evaluation designs (crowd votes, expert annotation, LLM judges, 69 NBA seasons), we find that (i)~most adjacent pairs on a large leaderboard are statistical ties and flip after a few edits (median 5 dropped votes on 64-model Arena; its top two models swap after 2); (ii)~for pairs that are statistically separated, $\kstar \approx c\,z\sqrt{\nloc}$, where $z$ is the standardized score gap and $\nloc$ the number of comparisons involving the pair (fitted exponents $1.10$ [1.00,\,1.17] on $z$ and $0.46$ [0.42,\,0.51] on $\nloc$, and the law predicts held-out Arena-140k pairs within $\pm50\%$ in 9 of 10 cases); (iii)~the constant $c$ varies only within $0.45$--$0.63$ (drops) across designs, so designs differ in fragility mainly through the resolution they buy ($z$, $\nloc$), not through intrinsic vulnerability; (iv)~random edits of the same size almost never flip such pairs, so worst-case edits are orders of magnitude cheaper than noise. Conclusions are specific to BT with soft ties, adjacent-pair targets, and worst-case (not realistic) edits.
+\end{abstract}
+
+\section{Introduction}
+Public leaderboards that aggregate pairwise preferences are widely used for model selection and for announcing results. Chatbot Arena \citep{chiang2024} fits a Bradley--Terry model \citep{bradley1952} to crowd-sourced votes and reports ranks with confidence intervals; MT-Bench \citep{zheng2023} offers expert and LLM-judge comparisons on a small model set; sports ratings have long used the same family of models \citep{elo1978}. Confidence intervals quantify \emph{sampling} noise, but they say little about two other questions that matter in practice: how many comparisons would have to differ for the published order to change, and does the answer depend on the evaluation design? The first matters for noisy data (bots, duplicated or mislabeled votes) and for deliberate manipulation \citep{min2025}; the second matters because leaderboards from different designs are routinely compared and trusted to a similar degree.
+
+We study the \emph{flip budget}: the minimal number $\kstar$ of comparisons that must be dropped, relabelled, or injected for a chosen pair of items to swap. This is the leaderboard analogue of asking how many observations must be removed to overturn an estimate \citep{broderick2020}. The central difficulty for cross-dataset comparison is scale: $\kstar$ in raw counts depends on dataset size, and as a fraction of all comparisons it depends on how comparisons are spread across items. We therefore also study three normalizations ($k/N$; the standardized gap $z$; and $c=\kstar/(z\sqrt{\nloc})$) and ask which of them makes datasets comparable.
+
+\textbf{Contributions.} (1) A search procedure for flip budgets that returns refit-verified witnesses, matches brute-force optima on small instances, and costs tens of milliseconds per pair (\cref{sec:method}). (2) A cross-design empirical study on two Arena releases, MT-Bench (human and GPT-4), three LLM judges labelling the same Arena battles, and 69 NBA seasons (\cref{sec:exp}). (3) An empirical scaling law $\kstar\approx c\,z\sqrt{\nloc}$ with a near design-invariant $c$, supported by a log-log regression, a held-out test and a dependence-on-$N$ experiment (\cref{sec:law,sec:scaling}). (4) A comparison with random perturbations showing the adversarial/noise gap (\cref{sec:random}). We do not claim that worst-case edits are realistic: they quantify how much slack a ranking has, not how likely it is to be attacked.
+
+\section{Related Work}
+\textbf{BT leaderboards.} The BT model \citep{bradley1952}, its ties extensions \citep{raokupper1967} and fitting algorithms \citep{hunter2004} underlie Arena's ranking \citep{chiang2024}. \citet{ameli2024} propose a statistical framework (covariance estimation, ties, rank-based inference) for ranking chatbots; our noise baselines use plain bootstrap, which they refine. \citet{singh2025} document data-access and sampling practices that can bias Arena; we instead take the comparisons as given and ask how much they must change.
+
+\textbf{Influence and data-dropping robustness.} Influence functions \citep{hampel1974,cook1977,koh2017}, the infinitesimal jackknife \citep{giordano2019} and the approximate-maximal-influence metric of \citet{broderick2020} provide first-order tools for asking whether removing a small subset changes a conclusion. We adapt this idea to rank comparisons: the first-order influence only \emph{proposes} edits, and every reported budget is validated by an exact refit. Unlike the data-dropping setting, we also consider relabelling and injection, and our focus is cross-design comparison and scaling.
+
+\textbf{Manipulation.} \citet{min2025} study vote-rigging strategies against Arena-type leaderboards. Our injection edit is an idealized, unconstrained version of such an attacker; their strategies are more realistic (they must identify the target's battles) and therefore cost more than our lower-level budgets.
+
+\section{Method}\label{sec:method}
+\textbf{Model.} Items $1..p$ have scores $\theta\in\mathbb R^p$. A comparison $(a,b,h,y)$ has $y\in\{0,\tfrac12,1\}$ (a tie is half a win, as in common Arena pipelines) and $P(a\succ b)=\sigma(\theta_a-\theta_b+\eta h)$, with $h=1$ iff $a$ is at home (NBA only; $\eta$ shared). $\hat\theta$ minimizes the logistic loss with soft labels plus a tiny ridge $\tfrac{\lambda}{2}\|\theta\|^2$, $\lambda=10^{-3}$ (identifiability). The rank order is the order of $\hat\theta$. The fit depends on the data only through counts $N_{c,l}$ of label $l$ in cell $c=(a,b,h)$, so a refit costs milliseconds even for 57k comparisons.
+
+\textbf{Edits and flip budget.} An \emph{edit} is one of: \textsc{drop} (delete a comparison), \textsc{relabel} (change its label to another value in the dataset's label set; for decisive-only data this is a flip), \textsc{inject} (add one decisive comparison in an observed cell). For $i,j$ with $\hat\theta_i>\hat\theta_j$, $\kstar_{\rm op}(i,j)$ is the smallest number of edits of type op after which the refit has $\hat\theta_i<\hat\theta_j$. For top-1, $\kstar$ is the minimum over challengers (ranks 2--5); for the top-$K$ set, the minimum over the nine (member, outsider) pairs adjacent to the boundary.
+
+\textbf{Search.} Let $u=e_i-e_j$, $H$ the Hessian of the loss at the current fit and $x_c=X_c^\top H^{-1}u$ for cell $c$. To first order, removing one comparison with label $y$ in cell $c$ \emph{lowers} the gap $u^\top\hat\theta$ by $(y-\sigma_c)x_c$; relabelling it $y\to y'$ lowers it by $(y-y')x_c$; injecting a comparison with label $y$ lowers it by $(\sigma_c-y)x_c$. The search sorts all (cell, label) options by this gain, takes the best until the predicted decrease reaches half the remaining gap, refits exactly, and repeats until the order flips (typically 5--10 rounds). It then binary-searches the shortest prefix of the chosen edit sequence that flips the pair \emph{under an exact refit}. Hence the returned $k$ is always the size of a verified flipping set, i.e.\ an \emph{upper bound} on the true minimum; we have no lower bound. Variants used as ablations: a one-shot ranking by first-order gain (the approach of \citealp{broderick2020}), and edits restricted to comparisons between $i$ and $j$. We cap budgets at $0.3N$ and report failures as missing.
+
+\textbf{Making budgets comparable.} For a pair we compute $\epsilon=\kstar/N$; the standardized gap $z=(\hat\theta_i-\hat\theta_j)/\mathrm{SE}_{ij}$ with $\mathrm{SE}_{ij}^2=u^\top H^{-1}u$; the number $\nloc$ of comparisons involving $i$ or $j$; and
+\begin{equation}
+ c \;=\; \kstar\big/\bigl(z\sqrt{\nloc}\bigr).
+\end{equation}
+\cref{app:heuristic} gives a heuristic reason for $\kstar\propto z\sqrt{\nloc}$: SE shrinks as $1/\sqrt{\nloc}$ while the best single edit moves the gap by an amount of order $\mathrm{SE}/\sqrt{\nloc}$. We test this empirically instead of assuming it. Because $\kstar$ is an integer (at least 1), $c$ and regressions use pairs with $z\ge1$, a selection independent of $\kstar$ (selecting on $\kstar\ge5$ truncates the response and biases slopes toward 0; we first made this mistake, see \cref{app:negative}).
+
+\textbf{Random baselines.} (i) Bootstrap resamples of comparisons ($B=200$); (ii) random drops and (iii) random relabels of $\epsilon N$ comparisons, $\epsilon\in\{1,2,5,10,20,50\}\%$ ($R=100$). Metrics: Kendall $\tau$ with the full-data scores, fraction of runs with the same top-1, fraction of full-data adjacent pairs that reverse.
+
+\section{Experiments}\label{sec:exp}
+\textbf{Data} (versions and checksums in \cref{app:data}; \cref{tab:data}). \emph{Arena-64}: all 57,477 battles of the 55k release (64 models, crowd votes, 31\% ties). \emph{Arena-140k}: the 2025 release (135,634 battles, 53 models, 28\% ties; its ``both bad'' verdicts are treated as ties), used as a held-out test of the law. \emph{Arena-6}: Arena restricted to one checkpoint per MT-Bench model, a six-item crowd board. \emph{MT-Bench expert} (3,355 human judgments, 6 models) and \emph{GPT-4 judge} (2,400 pairwise verdicts; inconsistent order-swapped verdicts count as ties). \emph{ArenaST}: 49,938 single-turn Arena battles with human labels and with labels from three open LLM judges (Llama-3-70B-Instruct, Qwen2-72B-Instruct, Mistral-7B-Instruct-v0.2; both-orders averaged probabilities, argmax verdict), so design (human vs.\ model judge) varies with the comparison set fixed. \emph{NBA}: regular-season games of each of 69 seasons (1947--2015) as 69 separate leaderboards with a home-advantage term. Uncertainty: for non-NBA boards, percentile intervals over 100 bootstrap datasets (the full attack pipeline re-run on each); for NBA, over seasons.
+
+\begin{table}[t]
+\caption{Leaderboards. $p$ items, $N$ comparisons (NBA: median season), tie share, comparisons per item, fraction of item pairs observed, SD of fitted scores (logits).}\label{tab:data}
+\centering\scriptsize\setlength{\tabcolsep}{2pt}
+\begin{tabular}{llrrrrrr}
+\toprule
+Board & Design & $p$ & $N$ & ties & per item & cov. & SD($\hat\theta$)\\
+\midrule
+\input{../results/tab_datasets.tex}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Main results}
+\begin{table*}[t]
+\caption{Flip budgets by leaderboard. ``Resolved'' = adjacent pairs with $z>2$ (mean per leaderboard; NBA: per season). Top-1: edits needed to dethrone the top item (min over ranks 2--5; NBA: median over seasons), absolute and as \% of $N$. $c=\kstar/(z\sqrt{\nloc})$: median over adjacent pairs with $z\ge1$, [95\% interval over resampled datasets (NBA: over seasons)]. Intervals are percentile intervals of resampled medians and need not be centred on the full-data value.}\label{tab:main}
+\centering\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Board & Resolved & median $z$ & top-1 drop (\%$N$) & top-1 relabel (\%$N$) & $c_{\rm drop}$ & $c_{\rm relabel}$\\
+\midrule
+\input{../results/tab_main.tex}\\
+\bottomrule
+\end{tabular}
+\end{table*}
+\cref{tab:main} shows three regularities. \emph{First}, most adjacent pairs on large leaderboards are not statistically resolved: on Arena-64 only 3 of 63 adjacent pairs have $z>2$ (median $z=0.20$), on Arena-140k 5 of 52, and on NBA seasons only $\approx$0.16 of $\approx$24. Such pairs flip after a handful of edits: on Arena-64 the top two models (two GPT-4 snapshots, gap $0.004$ logits, $z=0.06$) swap after 2 dropped, 1 relabelled or 2 injected votes, and 95\% of the adjacent pairs flip with at most 0.1\% of $N$ (57 votes); all 63 do with at most 1\%. This is expected given that their bootstrap flip probability is already large, and it is a statement about \emph{resolution} rather than fragility. \emph{Second}, for separated pairs the budgets are larger but still small in relative terms: dethroning Arena's top model with the cheapest resolved challenger among ranks 2--5 (Qwen1.5-72B, $z=6.4$) needs 105 drops (0.18\% of $N$) or 72 relabels. On Arena-140k the top model is better separated ($z=2.5$ from the runner-up) and needs 62 drops (0.046\%) to be dethroned. On MT-Bench, $z$-separated top pairs need 92 drops (2.7\%; bootstrap 95\% interval $[55,126]$ edits) for the expert board and 143 (6.0\%; $[111,199]$) for the GPT-4-judge board; the matched six-model Arena board needs 40 (2.5\%; $[9,73]$), so for the same six-model structure crowd and expert boards have budgets of similar relative size. \emph{Third}, $c$ is nearly constant across designs: $0.45$--$0.63$ for drops and $0.21$--$0.29$ for relabels (relabelling is about twice as effective, since a decisive relabel moves a vote by 1 instead of $\approx\tfrac12$). Top-$K$ boundaries behave similarly (\cref{app:topk}).
+
+\subsection{A square-root law}\label{sec:law}
+\begin{figure*}[t]
+\centering\includegraphics[width=\textwidth]{../figures/fig_collapse.pdf}
+\caption{Flip budget $\kstar$ versus $z\sqrt{\nloc}$ for every adjacent pair of every board (drops left, relabels right). Lines: $k=c\,z\sqrt{\nloc}$ with $c=1,\,0.5,\,0.25$ (left; halved on the right). Points near $\kstar\approx1$--$3$ at small abscissa are the integer floor.}\label{fig:collapse}
+\end{figure*}
+\cref{fig:collapse} plots $\kstar$ against $z\sqrt{\nloc}$ for all 1,800 adjacent pairs; points from all designs fall on one band. We fit $\log\kstar=\beta_0+\beta_z\log z+\beta_n\log\nloc$ on the 175 pairs with $z\ge1$ (drop edits) and obtain $\beta_z=1.10$ [1.00, 1.17], $\beta_n=0.46$ [0.42, 0.51] (residual SD of $\log\kstar$: 0.20; cluster bootstrap over leaderboards). For relabels, $\beta_z=1.00$ [0.95, 1.05], $\beta_n=0.44$ [0.40, 0.47]; for injections 1.11 [1.01, 1.18] and 0.51 [0.48, 0.55]. The prediction $(1,\tfrac12)$ is inside or at the edge of all six intervals. \emph{Held-out test.} Fitting the same regression on the 165 pairs of all other boards and predicting the 10 Arena-140k pairs with $z\ge1$ (whose $\nloc$ reaches 18,415, beyond the training maximum 9,727) gives a median absolute log error of 0.21 (0.18 with the fixed-form law $\kstar=c_0z\sqrt{\nloc}$, $c_0=0.49$ from the training pairs), with 6 of 10 predictions within $\pm25\%$ and 9 of 10 within $\pm50\%$. Caveats: the pooled pairs are dominated by NBA (95 of 175), so the pooled slopes are mostly a statement about NBA plus the pooled data; per-board slopes on the other designs rest on 9--19 pairs and are noisy (\cref{app:slopes}); the law is empirical and covers $z\in[1,9]$ and $\nloc\in[88,18{,}415]$.
+
+\subsection{Random versus worst-case edits}\label{sec:random}
+\begin{figure*}[t]
+\centering\includegraphics[width=\textwidth]{../figures/fig_random_vs_adv.pdf}
+\caption{Share of adjacent pairs that change order. Grey: random edits (affect all pairs jointly; smallest budget tested is 1\%). Coloured: for each adjacent pair separately, an adversary with budget $\epsilon N$ \emph{targeting that pair} succeeds (empirical CDF of $\kstar/N$). The two are not the same experiment; the point is the budget scale.}\label{fig:random}
+\end{figure*}
+Random noise already reorders unresolved pairs: bootstrapping Arena-64 gives Kendall $\tau=0.92$ with the full-data scores, an unchanged top-1 in only 51\% of resamples, and 33\% of adjacent pairs reversed; for MT-Bench expert the corresponding values are $0.965$, 100\%, 5\%, and for NBA seasons $0.80$, 63\%, 35\% (\cref{tab:noise}). Using the adversary's own budget on pairs with $z\ge1$, random drops of the same size flipped the pair in 0 of 100 draws for every one of the 175 pairs, and random relabels likewise for every pair with a verified relabel budget (173; \cref{app:ablation}), while the targeted edits flip them by construction; the bootstrap flip probability of any pair with $z>2$ is at most 0.03. So deliberate edits are far cheaper than noise for resolved pairs, while for unresolved pairs noise and worst case coincide in scale (\cref{fig:random}).
+
+\begin{table}[t]
+\caption{Random perturbations (NBA: mean over seasons). Bootstrap ($B=200$): Kendall $\tau$ with the full-data scores, share of resamples with the same top-1, share of adjacent pairs reversed. Random drop / relabel of 5\% of comparisons ($R=100$): $\tau$ and share of adjacent pairs reversed.}\label{tab:noise}
+\centering\scriptsize\setlength{\tabcolsep}{2pt}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Board & boot $\tau$ & top-1 & adj. & drop5 $\tau$ & adj. & rel5 $\tau$ & adj.\\
+\midrule
+\input{../results/tab_noise.tex}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Dependence on dataset size and design}\label{sec:scaling}
+\begin{figure*}[t]
+\centering\includegraphics[width=\textwidth]{../figures/fig_scaling.pdf}
+\caption{Arena-64 subsampled to $N$ comparisons (20 replicates; mean $\pm$ SD, or median with IQR; open markers: the single full-data realization). Left: resolved adjacent pairs. Middle: edits needed to dethrone top-1. Right: median $c$ (shown where $\ge10$ replicates have a pair with $z\ge1$).}\label{fig:scaling}
+\end{figure*}
+Subsampling Arena-64 (\cref{fig:scaling}) shows the mechanism behind the design differences. The number of resolved pairs grows from 0 at $N=1000$ to 1.85 at $N=40{,}000$ (3 on the full data), the top-1 budget grows roughly like $\sqrt N$ (median 1, 1, 3, 4, 5, 8.5 edits for $N=1\mathrm{k},2\mathrm{k},5\mathrm{k},10\mathrm{k},20\mathrm{k},40\mathrm{k}$), while median $c$ stays at $0.51$--$0.54$ for $N\ge2000$. Hence budgets as a share of $N$ shrink with $N$, and the share \emph{between} designs is driven mainly by $N$ and $\nloc$ rather than by $c$: for pairs with $z\in[2,4)$ the median drop budget is 0.16\% of $N$ on Arena-64 (2 pairs) versus 3.9\% on NBA seasons (11 pairs; \cref{app:zmatched}), consistent with $c\,z\sqrt{\nloc}/N$ at $\nloc\approx 5000$, $N=57{,}000$ versus $\nloc\approx 160$, $N\approx 1000$. The raw top-1 share is therefore not a design-comparable number; $c$ (or $\epsilon$ at matched $z$ and $N$) is.
+
+\subsection{Judges, ties, search and dependence}
+On the identical 49,938 Arena battles, human and LLM-judge boards give similar flip structure: $c_{\rm drop}$ is $0.52$ [0.48, 0.59] for humans and $0.45$ [0.38, 0.46], $0.46$ [0.41, 0.51], $0.48$ [0.38, 0.50] for the Llama, Qwen and Mistral judges, slightly lower and nearly overlapping (\cref{tab:main}). The judge rankings differ from the human one (Kendall $\tau$ 0.79, 0.81, 0.69; verdict agreement 52\%, 53\%, 45\%), so judge boards are not interchangeable as \emph{rankings} even though they are comparably fragile; judges' tie shares (5\%, 26\%, 1\% vs.\ 31\%) are very different. Treating ties as missing (discarding them) instead of half-wins moves $c_{\rm drop}$ on Arena-64 / MT-Bench expert / MT-Bench GPT-4 from 0.53/0.55/0.56 to 0.47/0.50/0.41 and increases resolved pairs on Arena-64 from 3 to 5 (\cref{app:noties}); conclusions are unchanged in kind.
+
+\textbf{Search ablations.} Re-running the greedy search with smaller steps ($\alpha=0.2,0.05$ instead of 0.5) changes the budget in 0.2\% of the 1,800 adjacent pairs (three NBA pairs, each lowered by one edit); the one-shot first-order selection matches in 99.3\% (lower in 0.06\%, i.e.\ one Llama-judge pair by one edit; higher in 0.6\%). A \emph{target-only} injection attacker that may only add votes \emph{for the lower-ranked item} in battles involving it (cf.\ \citealp{min2025}) needs exactly the unconstrained-injection budget in 95\% of adjacent pairs (max ratio 1.55), because the optimal injection is almost always of that form.
+
+\textbf{Dependence between comparisons.} Our $z$ treats comparisons as independent. Resampling whole MT-Bench questions (80 clusters) inflates the standard deviation of the gap by a median $1.8\times$ relative to resampling comparisons ($1.35$--$1.47\times$ the model-based SE), although the number of pairs with $z>2$ does not change (4 and 5). On Arena-55k, clustering rows by identical prompt (15\% of rows share a prompt with another row) changes it by $1.005\times$ (range 0.90--1.20). Relative to the model-based SE used for $z$, the cluster-bootstrap SD is $1.35$--$1.47\times$ larger, so with a cluster-robust $z$ the MT-Bench $c_{\rm drop}$ would be about $1.35$--$1.47\times$ larger than in \cref{tab:main} (about 0.74--0.82); so the near-invariance of $c$ across designs holds for the model-based $z$, not for a cluster-robust $z$ on MT-Bench.
+
+\section{Discussion and Limitations}
+\textbf{What the results say.} A leaderboard's order is only as sharp as its resolution. Once resolution is accounted for ($z$ and $\nloc$), the three designs we could compare (crowd, expert, model judge) are similarly fragile; NBA seasons are similar too, with higher $c$ for relabels. In practice this suggests reporting, alongside ranks, a per-pair budget $\hat k=0.5\,z\sqrt{\nloc}$ (drops), computable from the Fisher information without any search, and treating a rank as meaningful only when this budget exceeds plausible contamination (bots, duplicates, label noise).
+
+\textbf{Limitations.} (1) $\kstar$ values are \emph{upper bounds}; the greedy matched brute force on 12 tiny synthetic instances (4 items, 26 comparisons) and the one-shot variant on real data, but this does not certify optimality at scale, and a smarter search could shrink budgets (and change $c$). (2) We analyse plain BT with soft ties; Rao--Kupper/Davidson-type tie models, covariates (style control, as used on the live Arena) and Bayesian shrinkage could change budgets. (3) Edits are unconstrained: drop and relabel assume access to arbitrary votes, injection to arbitrary observed cells; a real attacker has fewer degrees of freedom \citep{min2025}. We therefore do not estimate attack feasibility or risk. (4) Comparisons are treated as iid; this matters for MT-Bench (cluster-bootstrap SDs are $\approx1.35$--$1.47\times$ the model-based SE, so $c$ would be larger there), little for Arena prompts, and we could not check voter clustering (no voter id). (5) Targets are adjacent pairs, top-1 and boundary pairs; we do not optimize global rank-correlation targets. (6) The Arena data are samples from 2023--25 (64 and 53 models), an MT-Bench model set of 6, and NBA seasons up to 2015; the judge boards use three open models, not GPT-4; the relation to the live leaderboards (more votes, more models) is extrapolated, not tested. (7) The law is empirical: the exponents are tested in a limited range, based on 175 pairs, dominated by NBA, with a held-out check of only 10 pairs; the explanation in \cref{app:heuristic} is a heuristic. (8) Differences in $c$ between designs (e.g.\ 0.63 on Arena-6 vs.\ 0.53 on Arena-64) are small, were not tested for significance beyond the intervals shown, and we did not isolate their cause.
+
+\section*{Impact Statement}
+This paper studies the sensitivity of public rankings and quantifies how few edits can reorder statistically unresolved items. It could in principle inform manipulation of crowd leaderboards; the budgets are idealized lower-level numbers that assume unconstrained edits, and the practical message is defensive: leaderboard operators should report resolution-aware ranks and audit for contamination. No new data were collected; all data are public.
+
+\bibliography{refs}
+\bibliographystyle{icml2026}
+
+\newpage
+\appendix
+\onecolumn
+\section{Data, versions and reproducibility}\label{app:data}
+Raw data are not in the code repository; \texttt{README.md} gives download commands. Sources (all fixed commits): Arena 55k, \citet{lmarena55k}, \texttt{train.csv} sha256 \texttt{0692154a\ldots}; MT-Bench judgments \citep{mtbenchhf} (\texttt{human-\ldots.parquet} sha256 \texttt{4877bc46\ldots}, \texttt{gpt4\_pair-\ldots.parquet} sha256 \texttt{57068327\ldots}); LLM-judge outputs \citep{potsawee2024} (\texttt{train.single-turn.json}, three \texttt{llm-judges-prob-avg/*.jsonl} files; the dataset page states no license, README says it derives from the Kaggle LMSYS competition data); NBA Elo data \citep{nbaelo} (\texttt{nbaallelo.csv} sha256 \texttt{d46ed354\ldots}, regular season, \texttt{\_iscopy}=0, one row per game). Arena-6 uses \emph{gpt-4-0613, gpt-3.5-turbo-0613, claude-1, vicuna-13b, alpaca-13b, llama-13b} (for each MT-Bench model, the Arena checkpoint with the most comparisons); it has only 1,602 comparisons. NBA home advantage $\eta$ is fitted per season. Arena-140k \citep{lmarena140k}: the seven parquet files (1.58~GB; commit 6322995, only the columns \texttt{model\_a, model\_b, winner} are read; verdicts \texttt{model\_a/model\_b/tie/both\_bad}, the last two treated as ties); file sizes match the Hugging Face listing, and I recorded no whole-dataset checksum. I did not use the WebDev Arena data (license agreement). Code: Python 3.11.2, numpy 2.4.6, scipy 1.17.1, pandas 3.1.0, matplotlib 3.11.2, pyarrow 26.0.0. Seeds: base seed 20261028 plus a CRC32 of the task name. Total wall-clock for all experiments: about 40 minutes with 12 worker processes on a 40-core machine (the budget is CPU-only; we did not time a 4-core run).
+
+\section{Heuristic for the square-root law}\label{app:heuristic}
+Let $z_{\rm w}=H^{-1}u$ and $x_c=X_c^\top z_{\rm w}$. Then $\mathrm{SE}^2=u^\top H^{-1}u=\sum_c n_c\sigma_c(1-\sigma_c)x_c^2$. Suppose the influence on the gap $g=u^\top\hat\theta$ concentrates on the $\nloc$ comparisons that involve $i$ or $j$, with a typical $|x_c|\approx\bar x$ and $\sigma(1-\sigma)\approx\bar w$. Then $\mathrm{SE}\approx\bar x\sqrt{\bar w\,\nloc}$. Removing a vote whose residual $y-\sigma_c$ has the helpful sign moves the gap by $\bar r\bar x$ with $\bar r\approx\tfrac12$ for balanced matches; a linear (small-edit) budget is then $k\approx g/(\bar r\bar x)=z\,\mathrm{SE}/(\bar r\bar x)=z\sqrt{\bar w\,\nloc}/\bar r$, i.e.\ $c\approx\sqrt{\bar w}/\bar r\approx1$ for balanced matches; the observed $c\approx0.5$ is smaller, plausibly (we did not test this) because the highest-influence cells have larger-than-typical $|x_c|$. A relabel moves a decisive vote by 1 instead of $\bar r$, which explains the observed relabel/drop ratio $\approx0.5$ (0.42--0.57, \cref{app:ablation}). The argument is first-order and ignores curvature and heterogeneity; we use it only to motivate the functional form, which we test empirically. The first-order prediction of the change in gap from removing the $K\in\{10,50,200\}$ top-influence comparisons agreed with the exact refit with correlation 0.98 (median ratio actual/predicted 1.04) for the top 20 adjacent Arena pairs (\texttt{results/validation.json}).
+
+\section{Validation of the search}\label{app:validation}
+(a) The fitting routine matches a generic L-BFGS optimizer on the row-level likelihood to $|\Delta\theta|_\infty\le10^{-5}$ on Arena, $2\cdot10^{-6}$ on NBA 2007 and $2\cdot10^{-7}$ on MT-Bench. (b) On 12 random synthetic instances (4 items, 26 binary comparisons, true scores $\sim N(0,0.6^2)$, pair = ranks 2 and 3) we enumerated all subsets up to size 5 to obtain the true minimal budget for drops and for relabels: the greedy search returned exactly the optimum in 12/12 cases for both (optima 1--5 drops, 1--3 relabels). These instances are tiny and the bound-attaining result need not transfer to real data; on real data the one-shot first-order ranking gives the same budget as the iterated greedy search in $98$--$100\%$ of adjacent pairs per board; it is smaller in 1.6\% of the Llama-judge pairs (so the iterated greedy is not always the best of the two) and larger in 0.8\% of the NBA pairs (\cref{tab:ablation}), and smaller steps ($\alpha=0.2,0.05$) differ in 0.2\% of pairs. (c) All judge files list the same battle ids in the same order (checked).
+
+\section{Additional tables}
+\subsection{Ablation of the search; random edits at the adversary's budget}\label{app:ablation}
+\begin{table}[H]
+\caption{Pairs with $z\ge1$ (count $n$). ``one-shot'': share of all adjacent pairs where the one-shot first-order selection equals greedy, and median ratio one-shot/greedy; ``direct'': median ratio of the direct-only (edits only among comparisons between $i$ and $j$) budget to the greedy budget where it succeeds, in parentheses the share of pairs where direct-only cannot flip the pair; relabel/drop and inject/drop: median budget ratios; ``rand'': fraction of 100 random drops of the same size $\kstar$ that flip the pair (mean over pairs).}\label{tab:ablation}
+\centering\small\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Board & $n$ & one-shot = & ratio & direct (n/a) & rel./drop & inj./drop & rand\\
+\midrule
+\input{../results/tab_ablation.tex}\\
+\bottomrule
+\end{tabular}
+\end{table}
+(Direct-only on MT-Bench GPT-4: no pair can be flipped using only its own comparisons within the cap; entry ``nan''.)
+
+\subsection{Top-$K$ boundary budgets}\label{app:topk}
+\begin{table}[H]
+\caption{Minimal drop budget (median over leaderboards for NBA) to change the top-$K$ set, minimum over (member, outsider) pairs among ranks $K\!-\!2..K$ vs.\ $K\!+\!1..K\!+\!3$ (top-1: ranks 2--5 challengers); \% of $N$ in parentheses. ``--'': not defined ($p<K+3$).}
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+Board & top-1 & top-3 & top-5 & top-10\\
+\midrule
+\input{../results/tab_topk.tex}\\
+\bottomrule
+\end{tabular}
+\end{table}
+The non-monotone patterns in the judge boards (e.g.\ Qwen top-10: 44) reflect which adjacent pairs happen to be separated, not a systematic trend.
+
+\subsection{Budgets at matched $z$}\label{app:zmatched}
+\begin{table}[H]
+\caption{Median drop budget as \% of $N$ (number of pairs) for adjacent pairs with $z$ in the given bin. Cells with few pairs are noisy.}
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+Board & $z\in[1,2)$ & $[2,4)$ & $[4,8)$ & $\ge8$\\
+\midrule
+\input{../results/tab_zmatched.tex}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Per-board slopes and sensitivity to the $z$ cutoff}\label{app:slopes}
+\begin{table}[H]
+\caption{OLS of $\log\kstar$ on $\log z,\log\nloc$ for pairs with $z\ge1$; pooled with cluster-bootstrap 95\% intervals (over leaderboards); per-board rows only where $\ge8$ pairs (Arena-64, Arena-6 and MT-Bench have too few).}
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+ & $n$ & $\beta_z$ & $\beta_n$ & resid. SD\\
+\midrule
+\input{../results/tab_slopes.tex}\\
+\bottomrule
+\end{tabular}
+\end{table}
+\begin{table}[H]
+\caption{Median $c_{\rm drop}$ / $c_{\rm relabel}$ (and number of pairs) for different cutoffs $z\ge z_{\min}$.}
+\centering\small
+\begin{tabular}{lrrr}
+\toprule
+Board & $z\ge0.5$ & $z\ge1$ & $z\ge2$\\
+\midrule
+\input{../results/tab_czmin.tex}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ties discarded instead of half-wins}\label{app:noties}
+\begin{table}[H]
+\caption{Ties removed (BT on decisive comparisons only). Entries: half-win ties / ties discarded.}
+\centering\small
+\begin{tabular}{lrrrrr}
+\toprule
+Board & $N$ (no ties) & resolved pairs & $c_{\rm drop}$ & $c_{\rm relabel}$ & top-1 drop\\
+\midrule
+\input{../results/tab_noties.tex}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Negative and abandoned results}\label{app:negative}
+\begin{itemize}\setlength\itemsep{0pt}
+\item \emph{Truncation bias.} Our first regression selected pairs with $\kstar\ge5$; this truncates the response, biased the pooled $\beta_z$ for relabels to 0.37 and for NBA to $\approx0$, and we replaced it by selection on $z\ge1$. The first $c$ summary on all adjacent pairs (including $\kstar\in\{1,2\}$) gave lower values for the Arena boards (0.37--0.45 for drops) because of the integer floor; reported $c$ now uses $z\ge1$.
+\item \emph{Search ablation.} The one-shot first-order ranking and iterated greedy search give identical budgets in $\ge98\%$ of pairs, so the iterated search adds little here; we expected larger differences.
+\item \emph{Not done:} WebDev Arena, Rao--Kupper/Davidson tie models, style-controlled BT, cluster-aware bootstraps, lower bounds on $\kstar$, GPT-4-as-judge on Arena battles, and a 4-core timing. The pooled law was not verified outside $\nloc\in[10^2,10^4]$.
+\item \emph{Starter literature.} One item of the starter list (item 8) was deliberately not read or cited (see README).
+\end{itemize}
+
+\section{Disclosure}
+Code, analysis and text were written with the assistance of an LLM agent (Claude); all numbers in this paper come from the code in the accompanying repository, and the LLM did not provide any numerical result by itself.
+
+\section{Checklist}
+Claims match the evidence (see \cref{app:negative} for what is not supported); limitations are in the Discussion; no theoretical results beyond the labelled heuristic; code and exact data versions are provided (README); seeds, intervals and the compute budget are reported; datasets are public with the licenses noted above; no human subjects or new data collection; broader-impact statement is included.
+
+\end{document}

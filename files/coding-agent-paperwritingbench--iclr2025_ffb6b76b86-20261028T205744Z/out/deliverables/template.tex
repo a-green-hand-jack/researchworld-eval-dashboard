@@ -1,0 +1,462 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2025_conference,times}
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+\usepackage{algorithm} % loaded before hyperref to avoid duplicate float anchors
+
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+
+\newcommand{\enc}{\operatorname{encode}}
+\newcommand{\dec}{\operatorname{decode}}
+\newcommand{\cover}{\operatorname{cover}}
+\newcommand{\vocab}{\mathcal{V}}
+\newcommand{\alphabet}{\mathcal{A}}
+\newcommand{\tok}[1]{\texttt{#1}}
+\providecommand{\rX}{\mathrm{X}}
+\providecommand{\rT}{\mathrm{T}}
+\providecommand{\vtau}{\boldsymbol{\tau}}
+
+%%%%%%%%% TITLE - PLEASE UPDATE TITLE HERE
+\title{Exact Byte-Level Probabilities from \\ Tokenized Language Models}
+
+\author{Ambitious AI Researcher\\
+AI Research Institute\\
+123 AI Avenue, ML City\\
+\texttt{researcher@institute.ai}
+}
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+%%%%%%%%% ABSTRACT %%%%%%%%%
+Tokenization makes modern language models (LMs) efficient, but it also changes what they predict. Prompting a tokenized LM means conditioning on one particular encoding of the context. The prompt implicitly asserts that a token boundary falls where the prompt ends, so the predictive distribution can differ systematically from the byte-level distribution of the text. We call this effect \emph{tokenization bias}. It is most damaging when a prompt ends in the middle of a token, as in fill-in-the-middle (FIM) code completion: the correct next character can then receive exactly zero probability. We show that a tokenized LM still determines an equivalent byte-level process, which can be recovered without retraining. Our \emph{Byte-Token Representation Lemma} writes the probability of any byte string as a sum over a small set of \emph{cover encodings}. These are found by a backward search that uses the tokenizer to discard invalid encodings. On top of this lemma, we build an inference-time sampler that converts next-token predictions into exact next-byte predictions with a single model call per byte. On synthetic Markov chains, the method recovers the true transition probabilities that the naive tokenized predictor distorts. On the HumanEval random-span FIM benchmark with CodeLlama-7b, it raises the greedy pass rate of the mid-token Suffix-Prefix-Middle format from 45.0\% to 63.9\% (about 18 points). This also beats the token healing and token alignment heuristics. Mapping models into a shared byte space also lets us ensemble LMs that use different tokenizers. A simple average of the top two models outperforms the best single model on most benchmarks, by up to 3.7 points on HumanEval. It does not help when the member models differ widely in capability.
+%%%%%%%%% ABSTRACT %%%%%%%%%
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+%%%%%%%%% INTRODUCTION %%%%%%%%%
+Almost every state-of-the-art language model operates on \emph{tokens} rather than on bytes or characters~\citep{radford2019language,brown2020language,touvron2023llama,jiang2023mistral}. Subword tokenizers such as Byte-Pair Encoding (BPE)~\citep{sennrich2016neural}, WordPiece~\citep{schuster2012japanese} and SentencePiece~\citep{kudo2018sentencepiece} compress text into shorter sequences. Shorter sequences reduce the cost of Transformer training and inference~\citep{vaswani2017attention}, and token-level modeling still clearly outperforms byte-level modeling at a fixed compute budget. Tokenization is therefore unlikely to disappear soon. Yet it is a lossy interface between the user, who thinks in characters, and the model, which thinks in tokens.
+
+This paper studies a statistical consequence of that interface. A tokenized LM is trained on sequences produced by a deterministic tokenizer, so some token sequences never occur in training. For instance, under BPE two adjacent tokens are never followed by a pair that the merge rules would have combined. At inference time the user supplies a byte string, which is tokenized and fed to the model. The next-token distribution then conditions not only on the text, but also on the event that \emph{the tokenization of the full text keeps a token boundary exactly at the end of the prompt}. This event carries information about the future. As a result, the model's predictive distribution over the next byte can differ from the true conditional distribution of the next byte given the prompt. We call this discrepancy \emph{tokenization bias}. It is not a modeling error that more data or capacity would remove: it persists even for a model that matches the training distribution perfectly.
+
+Figure~\ref{fig:teaser} (left) shows a practical case. A code completion prompt ends in the middle of a token, as happens in fill-in-the-middle (FIM) tasks~\citep{bavarian2022efficient,fried2023incoder}. Because the tokenizer would have merged the final characters with the correct continuation, the correct next character has \emph{zero} probability under the tokenized model. Practitioners have proposed heuristics such as \emph{token healing}~\citep{dagan2024getting} and \emph{token alignment}~\citep{athiwaratkun2024token}. These back up a few tokens and constrain generation to match the removed characters. They help, but they lack a precise statistical justification.
+
+\begin{figure}[t]
+\begin{center}
+\includegraphics[width=0.95\linewidth]{figures/figure_1.png}
+\end{center}
+\caption{\textbf{Left:} tokenized LMs can suffer tokenization bias when prompts end mid-token, as in this code completion example: the correct continuation \tok{a} has zero probability of being chosen. Our method avoids this problem and predicts the correct byte with the same model. \textbf{Right:} our method maps the next-token predictions of arbitrary tokenized LMs to statistically equivalent next-byte predictions (Section~\ref{sec:method}). This enables any ensembling strategy, such as averaging or mixture of experts.}
+\label{fig:teaser}
+\end{figure}
+
+We take a principled route. Tokenization bias comes from conditioning on a single deterministic encoding of the past. If we instead \emph{marginalize} over all token sequences that are consistent with the observed bytes, the bias disappears. Naively, this sum ranges over exponentially many tokenizations. We show, however, that deterministic tokenizers make most tokenizations \emph{invalid}: they can never be produced by the tokenizer and thus carry zero probability. Only a small set of \emph{cover encodings} remains. These are valid token sequences whose last token straddles the end of the byte string. This observation yields an exact and efficient conversion from token-level to byte-level probabilities that needs no retraining.
+
+\textbf{Contributions.}
+\begin{itemize}
+\item \textbf{Theory.} We formalize tokenization bias and show that it affects even a perfectly trained model (Proposition~\ref{prop:bias}). We prove a \emph{Byte-Token Representation Lemma} (Lemma~\ref{lem:representation}), which expresses the byte-level probability of any string exactly in terms of token-level probabilities of its cover encodings.
+\item \textbf{Algorithms.} We give a backward search that enumerates cover encodings with a bounded number of candidates (Algorithm~\ref{alg:cover}). We also give a next-byte sampler that reuses cover encodings across steps and needs one model call per generated byte (Algorithm~\ref{alg:sample}). Together they turn any tokenized LM into a token-free LM at inference time.
+\item \textbf{Robust FIM.} On HumanEval random-span infilling with CodeLlama-7b, byte-level prediction removes most of the degradation caused by mid-token prompts. It improves greedy pass rates in the Suffix-Prefix-Middle format by about 18 points and outperforms token healing and token alignment.
+\item \textbf{Ensembling across vocabularies.} Byte-level predictions give heterogeneous LMs a common output space. A simple average of the top two models improves over the best individual model on most knowledge, reasoning and code benchmarks we evaluate. We also identify when this fails.
+\end{itemize}
+%%%%%%%%% INTRODUCTION %%%%%%%%%
+
+\section{Related Work}
+\label{sec:related_work}
+%%%%%%%%% RELATED WORK %%%%%%%%%
+\textbf{Tokenization.}
+Subword tokenization was popularized in neural machine translation by BPE~\citep{sennrich2016neural} and WordPiece~\citep{schuster2012japanese}. It is now standard via libraries such as SentencePiece~\citep{kudo2018sentencepiece}; see \citet{mielke2021between} for a survey. Its downsides are well documented. Different tokenizers compress text with different efficiency~\citep{bostrom2020byte,rust2021good}, tokenization can introduce disparities across languages~\citep{petrov2023language}, and tokenizer choices affect downstream behavior~\citep{dagan2024getting}. Stochastic tokenization at training time, such as subword regularization~\citep{kudo2018subword} and BPE-dropout~\citep{provilkov2020bpe}, exposes models to several segmentations of the same string. By contrast, we leave training untouched and correct the predictions of models trained with deterministic tokenizers. \citet{minixhofer2024zero} transfer models to new tokenizers through a learned hypernetwork. Our approach instead requires no learning and maps every model to the same byte-level space.
+
+\textbf{Theory of tokenization.}
+Recent work studies tokenization formally. \citet{zouhar2023tokenization} relate tokenizer quality to information-theoretic efficiency, and \citet{gastaldi2024foundations} give a formal framework for the statistical consistency of tokenizer-based estimators. \citet{rajaraman2024toward} analyze Transformers trained on $k$-th order Markov processes with and without tokenization. Like them, we use Markov chains as an analytically tractable testbed. Our focus differs: we study the mismatch between token-conditional and byte-conditional predictions at inference time, and how to remove it exactly.
+
+\textbf{Marginalizing over tokenizations.}
+\citet{cao2021you} argue that LMs should be evaluated by the marginal likelihood over all tokenizations of a string, which they estimate by sampling. In psycholinguistics, \citet{pimentel2024compute} and \citet{oh2024leading} show that word probabilities computed naively from subword LMs are incorrect, notably because of leading whitespace in tokens, and derive corrections. Our Byte-Token Representation Lemma generalizes this line of work to arbitrary byte strings. It exploits the deterministic structure of the tokenizer to restrict the marginalization to a small set of cover encodings, which makes \emph{exact} computation and \emph{autoregressive sampling} practical.
+
+\textbf{Prompt boundary heuristics.}
+\emph{Token healing}~\citep{dagan2024getting} removes the last token of the prompt and constrains the first generated token to begin with the removed characters. \emph{Token alignment}~\citep{athiwaratkun2024token} backtracks several tokens and constrains generation to match the removed prefix. Both mitigate the mid-token problem in code completion. However, they do not guarantee the correct conditional distribution: they still condition on one particular tokenization of the shortened prompt. Our method instead computes exact byte-level conditionals, and we compare against both heuristics directly.
+
+\textbf{Byte-level and token-free models.}
+Token-free models operate directly on bytes or characters. Examples include ByT5~\citep{xue2022byt5}, CANINE~\citep{clark2022canine}, Charformer~\citep{tay2022charformer}, MEGABYTE~\citep{yu2023megabyte} and MambaByte~\citep{wang2024mambabyte}. These avoid tokenization bias by construction but require training new models, often at higher cost. Our method obtains a token-free model from any existing tokenized LM at inference time.
+
+\textbf{Ensembling LMs.}
+Ensembling is a classical way to combine complementary models~\citep{dietterich2000ensemble,jacobs1991adaptive,shazeer2017outrageously}. For LLMs, differing vocabularies prevent direct averaging of next-token distributions. Existing approaches therefore operate on complete outputs, as in voting and self-consistency~\citep{wang2023selfconsistency} or ranking and fusion~\citep{jiang2023llmblender}. Others distill several models into one~\citep{wan2024knowledge}, or align vocabularies through learned or heuristic mappings, such as embedding projections~\citep{xu2024bridging}, relative representations~\citep{huang2024ensemble} or vocabulary unions~\citep{yu2024breaking}. Our byte-level conversion gives a mapping into a shared space that is \emph{exact} under the model and requires neither training nor vocabulary matching.
+%%%%%%%%% RELATED WORK %%%%%%%%%
+
+\section{Methodology}
+\label{sec:method}
+%%%%%%%%% METHOD %%%%%%%%%
+\subsection{Preliminaries}
+\label{sec:prelim}
+Let $\alphabet$ be a finite alphabet of \emph{bytes}. We use ``byte'' for the atomic symbol of the tokenizer's base alphabet. We write $x_i^j = x_i x_{i+1}\cdots x_j$ for a string, with $x_i^j$ empty if $j<i$. A tokenizer is given by a vocabulary $\vocab \subset \alphabet^+$ with $\alphabet \subseteq \vocab$, so every byte is a token. It also has a pair of maps $\dec: \vocab^* \to \alphabet^*$, which concatenates tokens, and $\enc: \alphabet^* \to \vocab^*$, which is deterministic and satisfies $\dec(\enc(\vx)) = \vx$. We write $\vt = t_1^k$ for token sequences, $\vt \oplus v$ for appending token $v$, and $L = \max_{v\in\vocab}|v|$ for the maximum token length.
+
+\textbf{Byte and token processes.}
+Text is generated by a byte-level stochastic process $\rX = (\rX_1, \rX_2, \dots)$ with prefix probabilities $P(x_1^n) := \Pr(\rX_1^n = x_1^n)$. A tokenized LM is trained on the token process $\rT = \enc(\rX)$ and models its prefix probabilities $P(t_1^k) := \Pr(\rT_1^k = t_1^k) = \prod_{i=1}^k P(t_i \mid t_1^{i-1})$. For the analysis we assume the LM matches the token process exactly. This is the most favorable case for the tokenized model, and it shows that the issues we identify are not due to estimation error. We require one structural property of the tokenizer.
+
+\begin{assumption}[Prefix consistency]
+\label{ass:prefix}
+For any string $\vx$, finite or infinite, and any $k$, the first $k$ tokens $t_1^k$ of $\enc(\vx)$ satisfy $\enc(\dec(t_1^k)) = t_1^k$.
+\end{assumption}
+
+In words, re-encoding the text covered by any prefix of a tokenization returns that same prefix. The assumption holds exactly for maximum prefix encoding (MPE, greedy longest-match) tokenizers. It holds for BPE whenever later bytes cannot change earlier merges, which is the overwhelming majority of cases in practice, especially with pre-tokenization. It makes the token process well defined and leads to the central notion of validity.
+
+\begin{definition}[Valid and invalid encodings]
+\label{def:valid}
+A token sequence $\vt \in \vocab^*$ is \emph{valid} if $\enc(\dec(\vt)) = \vt$, and \emph{invalid} otherwise.
+\end{definition}
+
+By Assumption~\ref{ass:prefix}, every prefix of $\rT$ is valid, so $P(\vt) = 0$ for every invalid $\vt$. For example, with $\vocab \supseteq \{\tok{A}, \tok{AA}\}$ under MPE, the sequence $(\tok{A}, \tok{A})$ is invalid because $\enc(\tok{AA}) = (\tok{AA})$. A trained LM never observes such sequences. It may assign them some probability, but this mass reflects neither the data nor the byte process.
+
+\subsection{Tokenization Bias}
+\label{sec:bias}
+The standard way to predict the next byte with a tokenized LM is to encode the prompt, $t_1^k = \enc(x_1^n)$, and read off the next-token distribution:
+\begin{equation}
+\hat P(x_{n+1}=a \mid x_1^n) \;=\; \sum_{v \in \vocab:\, v_1 = a} P(t_{k+1} = v \mid t_1^k)
+\;=\; \Pr\!\big(\rX_{n+1} = a \,\big|\, \rT_1^k = \enc(x_1^n)\big).
+\label{eq:naive}
+\end{equation}
+The event $\{\rT_1^k = \enc(x_1^n)\}$ is strictly smaller than $\{\rX_1^n = x_1^n\}$. It additionally asserts that the tokenization of the \emph{entire} text has a token boundary after position $n$, which constrains the bytes that follow. We define the \emph{tokenization bias} as the discrepancy between $\hat P(x_{n+1}\mid x_1^n)$ and $P(x_{n+1}\mid x_1^n)$. The next proposition shows that it can be as large as possible, even for a perfect model.
+
+\begin{figure}[t]
+\begin{center}
+\includegraphics[width=0.85\linewidth]{figures/figure_2.png}
+\end{center}
+\caption{Tokenization bias on a 1st-order Markov chain. Given the context token ``\tok{A}'', the model never samples \tok{A} as the next token, whereas the true probability of the next byte being \tok{A} is $1-\alpha$. In practice this bias occurs when prompts end with tokens that are part of another token, a common issue in FIM tasks, and it leads to incorrect completions.}
+\label{fig:markov1}
+\end{figure}
+
+\begin{proposition}[Tokenization bias under a perfect model]
+\label{prop:bias}
+Consider a 1st-order Markov chain on $\alphabet=\{\tok{A},\tok{B}\}$ with $P(\tok{B}\mid\tok{A}) = \alpha$ and $P(\tok{A}\mid\tok{B}) = \beta$, where $\alpha, \beta \in (0,1)$. Tokenize it with MPE and $\vocab = \{\tok{A},\tok{B},\tok{AA}\}$ (Figure~\ref{fig:markov1}). Then for every prompt $x_1^n$ whose encoding ends with the token \tok{A}, the naive predictor gives $\hat P(x_{n+1} = \tok{A} \mid x_1^n) = 0$, while $P(x_{n+1}=\tok{A} \mid x_1^n) = 1-\alpha$.
+\end{proposition}
+\begin{proof}
+If the token \tok{A} at the end of $\enc(x_1^n)$ were followed by the byte \tok{A} in the full text, MPE would have matched the longer token \tok{AA} at that position. Hence $\Pr(\rX_{n+1}=\tok{A} \mid \rT_1^k = \enc(x_1^n))=0$. The true conditional follows from the Markov property.
+\end{proof}
+
+The same mechanism underlies the FIM failure in Figure~\ref{fig:teaser}. Once the prompt ends with a token that is a proper prefix of other tokens, every continuation that the tokenizer would have merged becomes impossible. Increasing model capacity or data cannot fix this, because the bias is a property of the \emph{conditioning event}, not of the estimator.
+
+\subsection{The Byte-Token Representation Lemma}
+\label{sec:lemma}
+To remove the bias, we compute $P(x_1^n)$, and hence $P(x_{n+1}\mid x_1^n) = P(x_1^{n+1})/P(x_1^n)$, from token probabilities. The relevant token sequences are those whose last token covers the final byte of the string.
+
+\begin{definition}[Cover encodings]
+\label{def:cover}
+The set of \emph{cover encodings} of $x_1^n$ (with $n \geq 1$) is
+\begin{equation*}
+\cover(x_1^n) = \big\{ t_1^k \text{ valid} \;:\; x_1^n \preceq \dec(t_1^k) \text{ and } \dec(t_1^{k-1}) \prec x_1^n \big\},
+\end{equation*}
+where $\vy \preceq \vz$ denotes that $\vy$ is a prefix of $\vz$ and $\vy \prec \vz$ that it is a proper prefix.
+\end{definition}
+
+So the last token $t_k$ starts at some position $i \le n$ and reaches at least to position $n$, possibly extending beyond it (Figure~\ref{fig:cover}, left).
+
+\begin{lemma}[Byte-Token Representation]
+\label{lem:representation}
+Under Assumption~\ref{ass:prefix}, for every byte string $x_1^n$,
+\begin{equation}
+P(x_1^n) \;=\; \sum_{\vt \in \cover(x_1^n)} P(\vt).
+\label{eq:representation}
+\end{equation}
+\end{lemma}
+
+\emph{Proof sketch.} For any realization of $\rX$ beginning with $x_1^n$, exactly one token of $\rT$ contains position $n$; the prefix of $\rT$ ending with that token is valid (Assumption~\ref{ass:prefix}) and lies in $\cover(x_1^n)$, and no other cover encoding can be a prefix of $\rT$. Hence the events $\{\rT_1^{|\vt|}=\vt\}$, $\vt \in \cover(x_1^n)$, partition $\{\rX_1^n = x_1^n\}$ (full proof in Appendix~\ref{app:proofs}). \hfill$\square$
+
+The cover set is small because the history before the last token is forced.
+
+\begin{lemma}[Structure of cover encodings]
+\label{lem:structure}
+Under Assumption~\ref{ass:prefix}, every $\vt \in \cover(x_1^n)$ has the form $\vt = \enc(x_1^{i-1}) \oplus v$, where $i\in\{\max(1, n-L+1), \dots, n\}$ and $v \in \vocab$ has $x_i^n$ as a prefix. Consequently,
+$|\cover(x_1^n)| \le \sum_{i=\max(1,n-L+1)}^{n} \big|\{v\in\vocab : x_i^n \text{ is a prefix of } v\}\big|.$
+\end{lemma}
+\begin{proof}
+Since $\vt$ is valid, $\vt = \enc(\dec(\vt))$. Assumption~\ref{ass:prefix} then implies that $t_1^{k-1}$ is valid, so $t_1^{k-1} = \enc(\dec(t_1^{k-1})) = \enc(x_1^{i-1})$, where $i-1 = |\dec(t_1^{k-1})| < n$. The last token must contain $x_i^n$ as a prefix, which forces $n - i + 1 \le L$.
+\end{proof}
+
+Lemmas~\ref{lem:representation} and~\ref{lem:structure} convert an apparently exponential marginalization into a sum with at most $L$ groups of candidates. Each group requires the next-token distribution after a single, deterministic context $\enc(x_1^{i-1})$, because $P(\enc(x_1^{i-1})\oplus v) = P(\enc(x_1^{i-1}))\,P(v\mid \enc(x_1^{i-1}))$.
+
+\begin{figure}[t]
+\begin{center}
+\includegraphics[width=\linewidth]{figures/figure_4.png}
+\end{center}
+\caption{\textbf{Left:} representation of $P(x_1^n)$ under a tokenized LM, with an example of cover encodings and of valid/invalid encodings. \textbf{Right:} illustration of Algorithm~\ref{alg:cover} for cover encoding search. A green tick and a red cross denote valid and invalid encodings (Definition~\ref{def:valid}). The termination step (no token is longer than the remaining suffix) is easy to implement although not shown in the algorithm. We use BPE in this example.}
+\label{fig:cover}
+\end{figure}
+
+\subsection{Backward Search for Cover Encodings}
+\label{sec:search}
+Lemma~\ref{lem:structure} suggests a \emph{backward} search (Algorithm~\ref{alg:cover}, Figure~\ref{fig:cover} right). We move the candidate start position $i$ of the last token from $n$ down to $n-L+1$. For each $i$, we encode the history $x_1^{i-1}$ once, enumerate the tokens $v$ that begin with $x_i^n$, and keep $\enc(x_1^{i-1})\oplus v$ only if it is valid, i.e., if re-encoding its decoded string reproduces it. The search never revisits the context beyond the last $L$ bytes, apart from computing $\enc(x_1^{i-1})$ and its prefix probability. The latter can share a key-value cache across iterations because the encodings differ only near the end. Prefix tries over $\vocab$ make the enumeration of tokens with a given prefix efficient.
+
+\begin{algorithm}[t]
+\caption{Backward search for cover encodings}
+\label{alg:cover}
+\begin{algorithmic}[1]
+\Require byte string $x_1^n$, tokenizer $(\enc,\dec,\vocab)$, tokenized LM $P$
+\State $\mathcal{C} \gets \emptyset$
+\For{$i = n, n-1, \dots, \max(1, n-L+1)$}
+  \State $\vtau \gets \enc(x_1^{i-1})$; \; compute $P(\vtau)$ and $P(\cdot \mid \vtau)$ \Comment{one model call}
+  \For{each $v \in \vocab$ such that $x_i^n$ is a prefix of $v$}
+    \If{$\enc(\dec(\vtau) \, v) = \vtau \oplus v$} \Comment{validity check (Def.~\ref{def:valid})}
+      \State $\mathcal{C} \gets \mathcal{C} \cup \{(\vtau \oplus v,\; P(\vtau)\,P(v\mid\vtau))\}$
+    \EndIf
+  \EndFor
+\EndFor
+\State \Return $\mathcal{C}$ \Comment{$P(x_1^n)=\sum_{(\vt,p)\in\mathcal{C}} p$ by Lemma~\ref{lem:representation}}
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Exact Next-Byte Sampling}
+\label{sec:sampling}
+For generation, we need $P(x_{n+1}=a\mid x_1^n)$ for all $a \in \alphabet$ at every step. Rerunning Algorithm~\ref{alg:cover} for each candidate byte would be wasteful. Instead, we maintain $\cover(x_1^n)$ with probabilities and update it incrementally (Figure~\ref{fig:sampling}). Let $\vtau_n = \enc(x_1^n)$. Note that $\vtau_n \in \cover(x_1^n)$: it is the unique cover encoding whose last token ends exactly at position $n$, so $P(\vtau_n)$ is already known.
+
+\begin{proposition}[Incremental decomposition]
+\label{prop:increment}
+Under Assumption~\ref{ass:prefix}, for every $a \in \alphabet$, $\cover(x_1^n a) = \mathcal{C}_{n+1}(a) \,\cup\, \bar{\mathcal{C}}_{n+1}(a)$ (disjoint), where
+\begin{align*}
+\mathcal{C}_{n+1}(a) &= \{\vt \in \cover(x_1^n) : |\dec(\vt)| > n,\ \dec(\vt)_{n+1} = a\}, \\
+\bar{\mathcal{C}}_{n+1}(a) &= \{\vtau_n \oplus v : v\in\vocab,\ v_1 = a,\ \vtau_n\oplus v \text{ valid}\}.
+\end{align*}
+Hence
+\begin{equation}
+P(x_1^n a) \;=\; \sum_{\vt \in \mathcal{C}_{n+1}(a)} P(\vt) \;+\; P(\vtau_n)\!\!\sum_{v:\, \vtau_n \oplus v\, \in\, \bar{\mathcal{C}}_{n+1}(a)}\!\! P(v \mid \vtau_n).
+\label{eq:nextbyte}
+\end{equation}
+\end{proposition}
+
+The first set contains the cover encodings of $x_1^n$ whose last token already extends past position $n$ with byte $a$ at position $n+1$ (\emph{regrouping}). The second contains new encodings whose last token starts at position $n+1$ (\emph{extension}). By Lemma~\ref{lem:structure}, the history of an extension must be exactly $\vtau_n$. The proof is in Appendix~\ref{app:proofs}. Eq.~(\ref{eq:nextbyte}) yields Algorithm~\ref{alg:sample} (Appendix~\ref{app:impl}). Each step needs a single model call, namely $P(\cdot\mid\vtau_n)$, together with tokenizer-only validity checks. After sampling $x_{n+1}$, the set $\cover(x_1^{n+1}) = \mathcal{C}_{n+1}(x_{n+1}) \cup \bar{\mathcal{C}}_{n+1}(x_{n+1})$ is directly available for the next step. Algorithm~\ref{alg:cover} is therefore run only once, on the prompt.
+
+\textbf{Normalization with imperfect models.}
+For an exact model, $\sum_a P(x_1^n a) = P(x_1^n)$, since the byte process continues with probability one. A trained LM assigns some mass to invalid encodings, and Eq.~(\ref{eq:nextbyte}) discards it. We therefore normalize over the alphabet: $P(x_{n+1} = a\mid x_1^n) \propto P(x_1^n a)$. Discarding invalid encodings is a feature of the method: the tokenizer, not the model, decides which encodings can occur.
+
+\begin{figure}[t]
+\begin{center}
+\includegraphics[width=\linewidth]{figures/figure_5.png}
+\end{center}
+\caption{Illustration of sampling $x_{n+1}$ from a tokenized LM $P(t_{k+1}\mid t_1^k)$, continuing the example of Figure~\ref{fig:cover}. Step 2 regroups previous cover encodings that extend past position $n$ ($\mathcal{C}_{n+1}$); Step 3 adds new encodings after $\enc(x_1^n)$ using one model call ($\bar{\mathcal{C}}_{n+1}$); Step 4 combines them into $\cover(x_1^n a)$ for each byte $a$. We omit $P(\vt)$ for simplicity. Details in Section~\ref{sec:sampling}.}
+\label{fig:sampling}
+\end{figure}
+
+
+\subsection{Applications}
+\label{sec:applications}
+\textbf{Fill-in-the-middle and special tokens.}
+FIM prompts interleave special sentinel tokens with code. Sentinels are never merged with ordinary bytes, so they form hard token boundaries. We keep everything up to the last sentinel as a fixed token context and apply the byte-level conversion to the byte string that follows it. In the Prefix-Suffix-Middle (PSM) format~\citep{bavarian2022efficient}, generation starts right after a sentinel. In the Suffix-Prefix-Middle (SPM) format, the generated middle directly continues the code prefix, which in the random-span setting typically ends mid-token. This is exactly where tokenization bias arises.
+
+\textbf{Byte-level decoding and beam search.}
+Greedy byte-level decoding selects $\arg\max_a P(x_{n+1}=a\mid x_1^n)$. This marginalizes over all tokens that share a first byte, which differs from greedy token-level decoding. Byte-level beam search keeps the $B$ byte prefixes with the highest $P(x_1^{n+1})$. Each beam carries its own cover set, and the joint probabilities follow from Lemma~\ref{lem:representation}.
+
+\textbf{Ensembling across vocabularies.}
+Each tokenized model $P_m$, with its own tokenizer, induces a distribution $P_m(x_{n+1}\mid x_1^n)$ over the \emph{same} alphabet. We combine $M$ models by averaging in byte space, $P_{\text{ens}}(x_{n+1}\mid x_1^n) = \frac{1}{M}\sum_{m=1}^M P_m(x_{n+1}\mid x_1^n)$, and decode from $P_{\text{ens}}$ with Algorithm~\ref{alg:sample}. Each member maintains its own cover set. More elaborate combination rules, such as weighted averages or mixtures of experts~\citep{jacobs1991adaptive}, plug in identically (Figure~\ref{fig:teaser}, right).
+%%%%%%%%% METHOD %%%%%%%%%
+
+\section{Experiments}
+\label{sec:experiments}
+%%%%%%%%% EXPERIMENTS %%%%%%%%%
+We evaluate three questions. (i) Does tokenization bias occur as predicted, and does our conversion remove it (Section~\ref{sec:exp_synthetic})? (ii) Does byte-level prediction fix mid-token prompts in code infilling (Section~\ref{sec:exp_fim})? (iii) How do byte-level predictions and byte-level ensembles perform on standard benchmarks (Section~\ref{sec:exp_ensemble})?
+
+\textbf{Models.} We use general-purpose LMs (Llama2-7B~\citep{touvron2023llama}, Yi-1.5-6B~\citep{young2024yi}, Mistral-7B-v0.3~\citep{jiang2023mistral}) and code LMs (CodeLlama-7b and -13b~\citep{roziere2023code}, Yi-Coder-1.5B). All are Transformer LLMs with different tokenizers and vocabularies. For the synthetic study we train a GPT-2-style Transformer~\citep{radford2019language} with 6 hidden layers on tokenized Markov chain data.
+
+\textbf{Benchmarks and metrics.} For infilling we use the HumanEval random-span benchmark~\citep{bavarian2022efficient}, reporting pass rates with greedy decoding and pass@10. For general LMs we use MMLU~\citep{hendrycks2021measuring}, PIQA~\citep{bisk2020piqa}, Natural Questions (NQ)~\citep{kwiatkowski2019natural}, TriviaQA~\citep{joshi2017triviaqa} and GSM8K~\citep{cobbe2021training}, reporting accuracy. For code generation we use HumanEval~\citep{chen2021evaluating} and MBPP~\citep{austin2021program}, reporting pass@1. In each case we compare the standard \emph{token-level} predictions with \emph{byte-level} predictions from our method, applied to the same model without any weight updates.
+
+\textbf{Baselines.} Besides standard token-level prediction, we compare against \emph{token healing}~\citep{dagan2024getting} and \emph{token alignment}~\citep{athiwaratkun2024token} in the SPM infilling setting, where prompt boundaries are problematic. For ensembling, we compare against the individual members and, for multiple-choice tasks, a top-2 voting baseline. Ensembles always combine the two best-performing models on the respective benchmark with uniform weights in byte space.
+
+\subsection{Tokenization Bias on Markov Chains}
+\label{sec:exp_synthetic}
+On the 1st-order chain of Figure~\ref{fig:markov1}, the tokenized model behaves exactly as Proposition~\ref{prop:bias} predicts. After a context ending in the token \tok{A}, the next token is never \tok{A}: the probability of the byte \tok{A} following the context \tok{A} is $0.0$ in token space, whereas the ground truth is $1-\alpha$.
+
+We then train the 6-layer GPT-2 model on tokenized samples from a 3rd-order Markov chain over $\{\tok{A},\tok{B}\}$. Figure~\ref{fig:markov3} compares, for each 3-byte context, the true transition probability $P(x_{n+1}=\tok{A}\mid x_{n-2}^n)$, the naive estimate conditioned on the encoded context, and our byte-level estimate computed from the same trained model. The naive predictor is severely biased: for most contexts it assigns near-zero probability to the next byte being \tok{A}, even when the true probability is large. Our bias-corrected estimate closely matches the ground truth for every context. This confirms that the trained tokenized model already contains the byte-level process, and that Lemma~\ref{lem:representation} recovers it.
+
+\begin{figure}[t]
+\begin{minipage}[c]{0.36\linewidth}
+\begin{center}
+\includegraphics[width=\linewidth]{figures/figure_3.png}
+\end{center}
+\end{minipage}\hfill
+\begin{minipage}[c]{0.60\linewidth}
+\caption{Tokenization bias on a 3rd-order Markov chain. For each context of three bytes, we show the probability that the next byte is \tok{A} under the ground-truth chain, under the naive (biased) estimate $P(x_{n+1}\mid t_1^k)$ of a trained tokenized model, and under our byte-token conversion (bias correction, Section~\ref{sec:method}) applied to the same model. Our method accurately recovers $P(x_{n+1}\mid x_{n-2}^n)$ of the original chain.}
+\label{fig:markov3}
+\end{minipage}
+\end{figure}
+
+\subsection{Fill-in-the-Middle Code Completion}
+\label{sec:exp_fim}
+
+\begin{figure}[t]
+\begin{center}
+\includegraphics[width=\linewidth]{figures/figure_6.png}
+\end{center}
+\caption{Pass rates on the HumanEval random-span benchmark~\citep{bavarian2022efficient} with CodeLlama-7b for infilling Python. Across all settings, byte-level predictions yield better completions. We evaluate the two standard infilling templates, Prefix-Suffix-Middle (PSM) and Suffix-Prefix-Middle (SPM), and use token healing~\citep{dagan2024getting} and token alignment~\citep{athiwaratkun2024token} as baselines. Left: greedy pass rates and pass@10, where pass@10 is the maximum over the temperature sweep. Right: pass@10 as a function of sampling temperature. The SPM template forces the model to predict from the middle of a token, which byte-level predictions handle.}
+\label{fig:fim}
+\end{figure}
+
+Figure~\ref{fig:fim} reports infilling results for CodeLlama-7b.
+
+\textbf{Mid-token prompts severely degrade token-level models.} With standard token-level prediction, switching from PSM to SPM lowers the greedy pass rate from 64.9\% to 45.0\% and pass@10 from 84.0\% to 66.5\%. The SPM curve also stays well below PSM across the whole temperature sweep (Figure~\ref{fig:fim}, right). In SPM the code prefix immediately precedes the generated middle, and random spans frequently cut words in half. These out-of-distribution token boundaries are exactly the setting of Proposition~\ref{prop:bias}.
+
+\textbf{Byte-level prediction recovers PSM-level performance.} Applied to the same model, our method raises SPM greedy to 63.9\% and pass@10 to 84.3\%. This is an improvement of 18.9 and 17.8 points over token-level prediction, and comparable to PSM performance. The byte-level SPM and PSM curves nearly coincide over the whole temperature sweep, which suggests that the conversion effectively removes the dependence on where the prompt ends.
+
+\textbf{Byte-level prediction outperforms heuristic fixes.} Token healing (62.7\% greedy, 83.8\% pass@10) and token alignment (63.0\%, 82.9\%) recover much of the SPM gap, but both remain below byte-level prediction (63.9\%, 84.3\%). Unlike these heuristics, our method does not commit to a single tokenization of a shortened prompt. It sums over all valid encodings that are consistent with the bytes.
+
+\textbf{Gains even when boundaries are benign.} In PSM, where generation starts right after a sentinel, byte-level prediction still improves greedy decoding from 64.9\% to 65.7\% (pass@10: 84.0\% vs.\ 84.1\%). We attribute this to two effects. First, random spans can still end mid-token relative to the suffix that follows. Second, greedy byte-level decoding aggregates probability over all tokens that share the next byte instead of committing to the single most likely token. The magnitude of this effect is small, and we do not claim it generalizes beyond this setting.
+
+\textbf{Qualitative analysis.} Inspecting failures of the token-level SPM model, we find many cases where the prompt ends mid-word, for example within identifiers such as \tok{delimeter}, \tok{collatz} and \tok{palindrome}. The token-level model fails to complete the word correctly because of the token boundary mismatch, as in Figure~\ref{fig:teaser} (left). The byte-level method identifies the correct completion.
+
+\textbf{Ablation: beam width.} Table~\ref{tab:beam} varies the width of byte-level beam search. Wider beams yield consistent gains: from width 1 to 4, PSM improves from 65.7\% to 67.7\% and SPM from 63.9\% to 66.8\%, a gain of up to 2.9 points.
+
+\subsection{Byte-Level Predictions and Cross-Vocabulary Ensembles}
+\label{sec:exp_ensemble}
+
+\begin{table}[t]
+\caption{Accuracy (\%) of general-purpose LMs with token-level (Tok.) and byte-level (Byte) predictions, and of top-2 voting and our top-2 byte-level ensemble. N/A: not applicable (ensembles and voting only exist in byte space; voting is only applicable to multiple-choice tasks). Bold marks the best result per benchmark.}
+\label{tab:general}
+\begin{center}
+\setlength{\tabcolsep}{4.2pt}
+\begin{tabular}{lcccccccccc}
+\toprule
+& \multicolumn{2}{c}{MMLU} & \multicolumn{2}{c}{PIQA} & \multicolumn{2}{c}{NQ} & \multicolumn{2}{c}{TriviaQA} & \multicolumn{2}{c}{GSM8K} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}\cmidrule(lr){10-11}
+Model & Tok. & Byte & Tok. & Byte & Tok. & Byte & Tok. & Byte & Tok. & Byte \\
+\midrule
+Llama2-7B & 45.4 & 45.7 & 78.1 & 78.2 & 25.0 & 23.4 & 58.4 & 58.1 & 15.1 & 12.5 \\
+Yi-1.5-6B & 63.4 & 63.4 & 78.5 & 78.5 & 22.8 & 22.7 & 53.7 & 53.4 & 61.3 & \textbf{61.5} \\
+Mistral-7B-v0.3 & 62.1 & 62.1 & 80.1 & 80.3 & 28.5 & 28.8 & 63.6 & 63.5 & 39.0 & 39.0 \\
+\midrule
+Voting (top-2) & N/A & 62.1 & N/A & 80.1 & N/A & N/A & N/A & N/A & N/A & N/A \\
+Top-2 ensemble (ours) & N/A & \textbf{65.4} & N/A & \textbf{80.7} & N/A & \textbf{30.0} & N/A & \textbf{64.2} & N/A & 55.8 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\begin{table}[t]
+\begin{minipage}[t]{0.56\linewidth}
+\caption{Pass@1 (\%) of code LMs with token-level (Tok.) and byte-level (Byte) predictions, and of our top-2 byte-level ensemble. Bold: best per benchmark.}
+\label{tab:code}
+\begin{center}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{HumanEval} & \multicolumn{2}{c}{MBPP} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Model & Tok. & Byte & Tok. & Byte \\
+\midrule
+CodeLlama-7b & 32.3 & 28.7 & 40.6 & 42.4 \\
+CodeLlama-13b & 35.8 & 33.5 & 47.6 & 47.4 \\
+Yi-Coder-1.5B & 38.4 & 36.5 & 52.8 & \textbf{53.6} \\
+\midrule
+Top-2 ensemble (ours) & N/A & \textbf{42.1} & N/A & \textbf{53.6} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.40\linewidth}
+\caption{Ablation on beam width for byte-level FIM decoding with CodeLlama-7b (HumanEval random-span pass rate, \%). Width 1 is greedy byte-level decoding.}
+\label{tab:beam}
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Beam width & 1 & 2 & 4 \\
+\midrule
+PSM & 65.7 & 66.8 & \textbf{67.7} \\
+SPM & 63.9 & 65.9 & \textbf{66.8} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{minipage}
+\end{table}
+
+\textbf{Byte-level vs.\ token-level predictions.} Tables~\ref{tab:general} and~\ref{tab:code} show that on standard benchmarks, where prompts end at natural boundaries, byte-level and token-level predictions usually perform similarly. On MMLU, PIQA, NQ and TriviaQA most differences are within a few tenths of a point, in both directions. The picture is less uniform on generation-heavy tasks. Byte-level prediction lowers Llama2-7B on GSM8K (15.1 to 12.5) and NQ (25.0 to 23.4), and lowers all three code models on HumanEval (by 1.9 to 3.6 points). On MBPP it improves CodeLlama-7b (40.6 to 42.4) and Yi-Coder-1.5B (52.8 to 53.6). We do not have a definitive explanation for the HumanEval drops. Plausible factors include the following. Byte-level greedy decoding is not equivalent to token-level greedy decoding, which matches the decoding procedure most commonly used to evaluate these models. Trained models also place non-negligible mass on invalid encodings, which our method discards and renormalizes. Finally, small per-step differences can compound over long generations. In this regime the main benefit of the byte-level view is not single-model accuracy but the common output space it provides.
+
+\textbf{Ensembling models with different vocabularies.} Llama2, Yi and Mistral use different tokenizers, so their next-token distributions cannot be averaged directly. In byte space they can. Our top-2 ensemble outperforms the best individual model on MMLU (65.4 vs.\ 63.4), PIQA (80.7 vs.\ 80.3), NQ (30.0 vs.\ 28.8) and TriviaQA (64.2 vs.\ 63.6). On the multiple-choice tasks it also clearly beats top-2 voting (62.1 on MMLU, 80.1 on PIQA). For code, ensembling Yi-Coder-1.5B and CodeLlama-13b reaches 42.1\% on HumanEval, 3.7 points above the best individual model (38.4\%, token-level). On MBPP the ensemble matches the best byte-level member (53.6\%). These gains come without any training, vocabulary alignment or model modification.
+
+\textbf{Limitation: divergent members.} Ensembling does not help when the members differ too much in capability. On GSM8K, Yi-1.5-6B outperforms Mistral-7B-v0.3 by more than 20 points (61.5 vs.\ 39.0), and the uniform ensemble (55.8) falls below its best member. Uniform averaging lets the weaker model's errors corrupt multi-step reasoning chains, where a single wrong byte can derail the answer. Weighted or adaptive combination rules, which our framework supports directly, are a natural remedy that we leave to future work.
+%%%%%%%%% EXPERIMENTS %%%%%%%%%
+
+\section{Conclusion}
+\label{sec:conclusion}
+%%%%%%%%% CONCLUSION %%%%%%%%%
+We identified \emph{tokenization bias}: the predictive distribution of a tokenized LM depends on how the prompt is tokenized, not only on its bytes, and this dependence persists even for a perfect model. We showed that it can be removed exactly. The Byte-Token Representation Lemma expresses byte-level probabilities as sums over a small set of valid cover encodings. A backward search finds these encodings, and an incremental sampler produces next-byte predictions with one model call per byte. The result is an inference-time procedure that turns any tokenized LM into a statistically equivalent token-free LM. Empirically, it recovers true transition probabilities on Markov chains. It largely eliminates the mid-token failure in FIM code completion, with an improvement of about 18 points in the SPM format, and outperforms token healing and token alignment. It also enables direct ensembling of LMs with different vocabularies, which improves over the best single model on most benchmarks we tested.
+
+\textbf{Limitations and future work.} Our guarantees rely on prefix consistency (Assumption~\ref{ass:prefix}), which holds exactly for MPE and approximately for BPE. They also treat the trained LM as an exact model of the token process. Real models deviate from it, which we handle by renormalization. Byte-level generation makes one model call per byte instead of per token, so generation costs more model calls than token-level decoding. Hybrid schemes that switch to byte-level prediction only near problematic boundaries could reduce this overhead. On some generation benchmarks, notably HumanEval, byte-level decoding of single models underperforms token-level decoding, and the causes deserve further study. Finally, uniform averaging fails when members differ greatly in quality. Learned weights, mixtures of experts and byte-level combination with speculative decoding are promising directions.
+%%%%%%%%% CONCLUSION %%%%%%%%%
+
+\section*{Reproducibility Statement}
+Section~\ref{sec:method} specifies all definitions, assumptions and algorithms, and Appendix~\ref{app:proofs} contains complete proofs. The method requires no training and uses only the public tokenizers and weights of the evaluated models. All benchmarks are publicly available, and Section~\ref{sec:experiments} describes the evaluation protocols and baselines.
+
+%%%%%%%%% REFERENCES %%%%%%%%%
+\bibliography{references}
+\bibliographystyle{iclr2025_conference}
+%%%%%%%%% REFERENCES %%%%%%%%%
+
+%%%%%%%%% Appendix %%%%%%%%%
+\appendix
+\section{Proofs}
+\label{app:proofs}
+
+\textbf{Proof of Lemma~\ref{lem:representation}.}
+Let $E = \{\rX_1^n = x_1^n\}$ and, for $\vt \in \cover(x_1^n)$, let $E_{\vt} = \{\rT_1^{|\vt|} = \vt\}$. Then $\Pr(E_{\vt}) = P(\vt)$. We show that the sets $E_{\vt}$ are pairwise disjoint and that their union is $E$.
+
+\emph{(Union $\supseteq E$.)} Take an outcome in $E$. The tokens of $\rT = \enc(\rX)$ concatenate to $\rX$, so there is a unique $k$ such that $|\dec(\rT_1^{k-1})| < n \le |\dec(\rT_1^{k})|$. Since $\rX$ begins with $x_1^n$, the string $x_1^n$ is a prefix of $\dec(\rT_1^k)$, and $\dec(\rT_1^{k-1})$ is a proper prefix of $x_1^n$. By Assumption~\ref{ass:prefix}, $\rT_1^k$ is valid. Hence $\rT_1^k \in \cover(x_1^n)$, and the outcome lies in $E_{\rT_1^k}$.
+
+\emph{(Union $\subseteq E$.)} If $\rT_1^{|\vt|} = \vt$ for some $\vt \in \cover(x_1^n)$, then $\rX$ begins with $\dec(\vt)$, which has $x_1^n$ as a prefix.
+
+\emph{(Disjointness.)} Suppose $\vt = t_1^k$ and $\vt' = t_1'^{k'}$ are distinct cover encodings that are both prefixes of $\rT$. Then one is a proper prefix of the other; say $k < k'$, so $\vt$ is a prefix of $t_1'^{k'-1}$. This gives $n \le |\dec(\vt)| \le |\dec(t_1'^{k'-1})| < n$, a contradiction.
+
+Therefore $P(x_1^n) = \Pr(E) = \sum_{\vt\in\cover(x_1^n)} \Pr(E_{\vt}) = \sum_{\vt\in\cover(x_1^n)} P(\vt)$. \hfill$\square$
+
+\textbf{Proof of Proposition~\ref{prop:increment}.}
+Let $\vt = t_1^k \in \cover(x_1^n a)$, and let $i$ be the start position of $t_k$, i.e., $i-1 = |\dec(t_1^{k-1})|$, with $i \le n+1$.
+\emph{Case $i \le n$:} then $\dec(t_1^{k-1})$ is a proper prefix of $x_1^n$, and $\dec(\vt)$ has $x_1^n a$, hence $x_1^n$, as a prefix. So $\vt \in \cover(x_1^n)$, $|\dec(\vt)| > n$ and $\dec(\vt)_{n+1}=a$, i.e., $\vt\in\mathcal{C}_{n+1}(a)$.
+\emph{Case $i = n+1$:} by Lemma~\ref{lem:structure}, $t_1^{k-1} = \enc(x_1^n) = \vtau_n$, and $t_k$ begins with $a$. Since $\vt$ is valid, $\vt \in \bar{\mathcal{C}}_{n+1}(a)$.
+Conversely, each element of $\mathcal{C}_{n+1}(a)$ is valid, has $x_1^n a$ as a prefix of its decoding, and its history decodes to a proper prefix of $x_1^n$, hence of $x_1^n a$. Each element of $\bar{\mathcal{C}}_{n+1}(a)$ is valid, decodes to $x_1^n v$ with $v_1 = a$, and its history decodes to $x_1^n$, a proper prefix of $x_1^n a$. Both sets are thus contained in $\cover(x_1^n a)$. They are disjoint because their last tokens start at different positions. Eq.~(\ref{eq:nextbyte}) follows from Lemma~\ref{lem:representation} and $P(\vtau_n\oplus v) = P(\vtau_n)P(v\mid\vtau_n)$. \hfill$\square$
+
+\section{Additional Implementation Notes}
+\label{app:impl}
+
+\textbf{Pseudocode.} Algorithm~\ref{alg:sample} gives the complete next-byte sampling procedure of Section~\ref{sec:sampling}.
+
+\begin{algorithm}[t]
+\caption{Exact next-byte sampling from a tokenized LM}
+\label{alg:sample}
+\begin{algorithmic}[1]
+\Require prompt $x_1^n$, tokenized LM $P$, number of bytes $m$
+\State $\mathcal{C} \gets$ \textsc{BackwardSearch}$(x_1^n)$ \Comment{Algorithm~\ref{alg:cover}, run once}
+\For{$s = 1, \dots, m$}
+  \State $\vtau \gets \enc(x_1^n)$; compute $P(\cdot\mid\vtau)$ \Comment{one model call; $P(\vtau)$ is stored in $\mathcal{C}$}
+  \For{each $a \in \alphabet$}
+    \State $\mathcal{C}_{n+1}(a) \gets \{(\vt,p)\in\mathcal{C} : |\dec(\vt)|>n,\ \dec(\vt)_{n+1}=a\}$ \Comment{regroup}
+    \State $\bar{\mathcal{C}}_{n+1}(a) \gets \{(\vtau\oplus v,\, P(\vtau)P(v\mid\vtau)) : v_1 = a,\ \vtau\oplus v \text{ valid}\}$ \Comment{extend}
+    \State $w_a \gets \sum_{(\vt,p)\in \mathcal{C}_{n+1}(a)\cup\bar{\mathcal{C}}_{n+1}(a)} p$ \Comment{$= P(x_1^n a)$ by Eq.~(\ref{eq:nextbyte})}
+  \EndFor
+  \State sample $x_{n+1} \sim w_a / \sum_{a'} w_{a'}$ (or take $\arg\max_a w_a$ for greedy decoding)
+  \State $\mathcal{C} \gets \mathcal{C}_{n+1}(x_{n+1}) \cup \bar{\mathcal{C}}_{n+1}(x_{n+1})$; \; $n \gets n+1$
+\EndFor
+\State \Return $x_1^{n}$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Cost per generated byte.} Algorithm~\ref{alg:sample} needs one forward pass of the LM per generated byte, on the context $\enc(x_1^n)$. Consecutive contexts $\enc(x_1^{n})$ and $\enc(x_1^{n+1})$ share all tokens except possibly the last few, so key-value caches can be reused for the common prefix. Validity checks only involve the tokenizer. They can be restricted to candidate tokens $v$ with non-negligible $P(v\mid\vtau_n)$, and since the last token of a cover encoding has length at most $L$, at most $L$ bytes of a token remain pending at any time. The size of the maintained cover set is bounded as in Lemma~\ref{lem:structure}.
+
+\textbf{Ensembles.} For an ensemble of $M$ models, each member runs Algorithm~\ref{alg:sample} with its own tokenizer and cover set. At each step the byte distributions $\{P_m(\cdot\mid x_1^n)\}_{m=1}^M$ are averaged, a byte is chosen from the average, and the sampled byte is fed back to all members, each of which updates its own cover set. Since all members share the same byte history, no alignment between vocabularies is needed.
+
+\textbf{Relation to token healing and alignment.} Token healing removes the last prompt token and constrains the next token to start with its bytes. This corresponds to keeping only the extension group with $i$ equal to the start of the last prompt token in Algorithm~\ref{alg:cover}, without validity checks and without the remaining cover encodings. Token alignment backs off several tokens, and so still conditions on one tokenization of the shortened prompt. Both therefore approximate, but do not compute, the sum in Eq.~(\ref{eq:representation}).
+%%%%%%%%% Appendix %%%%%%%%%
+
+\end{document}

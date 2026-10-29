@@ -1,0 +1,1664 @@
+{
+ "key": "paperwritingbench/cvpr2025_9992cb3cfc",
+ "benchmark": "paperwritingbench",
+ "item": "cvpr2025_9992cb3cfc",
+ "prompt": [
+  {
+   "name": "TASK.md",
+   "size": 17557,
+   "text": "Your task is to generate a complete research paper using the materials below.\nYou must produce:\n1. A BibTeX bibliography file (references.bib)\n2. The full LaTeX paper (template.tex)\n\nInstructions\n• Use the research idea and experimental logs to construct a coherent, rigorous ML paper.\n• For related work and baselines:\n  – Search for and include influential papers published up until 2024-11.\n  – Incorporate relevant literature and add the corresponding BibTeX entries to references.bib.\n  – Do NOT hallucinate papers or reference keys; all citation entries must be real.\n• In the LaTeX paper, cite papers using \\cite{} with keys that match exactly with your entries in references.bib.\n• Do not fabricate experimental results or make claims unsupported by the logs.\n\nMaterials\nHere are all the raw research materials to assist with the writing process:\n\n[RESEARCH IDEA]\n## Problem Statement\nRecent advancements in 3D Gaussian Splatting (3DGS) have enabled real-time rendering of static scenes, but extending this performance to dynamic, real-world scenarios remains a significant challenge. A critical bottleneck is the assumption of high-quality, sharp input images. In practical handheld capture, images frequently suffer from **compound motion blur**, originating from two distinct physical sources: the ego-motion of the camera (camera shake) and the independent movement of objects within the scene.\n\nExisting reconstruction methods fail to adequately address this duality. Some approaches ignore blur entirely, while others model it solely as a camera-induced artifact, thereby neglecting dynamic objects. Methods that attempt to handle both often couple the effects into a single implicit representation (e.g., warping latent rays), which causes the dominant static background to bias the optimization. This leads to severe artifacts and loss of detail in dynamic regions, as the system struggles to decouple the object's motion from the camera's movement.\n\n## Core Hypothesis\nWe hypothesize that **explicitly decomposing motion blur** into its two constituent causes—camera trajectory variations and object spatial deformations—will allow for the robust reconstruction of dynamic scenes from blurry inputs.\n\nBy modeling the physical formation of blur separately for the background (static) and the foreground (dynamic), we can resolve the ambiguity usually inherent in blurry pixels. We posit that a sequential optimization strategy, which first stabilizes the camera view and then resolves object motion, will yield sharp novel view synthesis even when the input data contains significant motion artifacts.\n\n## Proposed Methodology (High-Level Technical Approach)\nWe propose a \"Blur-Aware\" framework that integrates physical blur formation models directly into the 3D Gaussian Splatting rasterization pipeline. The approach is divided into two logical stages.\n\n### 1. Stage One: Camera Motion Modeling (Static Deblurring)\nOur first objective is to isolate and correct camera-induced blur.\n*   **Virtual Trajectory Simulation:** We will model the camera's movement during a single frame's exposure time not as a single pose, but as a trajectory of \"virtual\" camera poses interpolated between the start and end of the exposure.\n*   **Blur Synthesis:** We will render the scene from these virtual poses and accumulate (average) the results to synthesize a blurry image.\n*   **Static Alignment:** We will optimize the 3D Gaussians and camera trajectory by minimizing the difference between our synthesized blurry image and the actual input image. Crucially, we will apply a dynamic mask to exclude moving objects during this phase, ensuring the optimization focuses strictly on stabilizing the static background and refining the camera trajectory.\n\n### 2. Stage Two: Object Motion Modeling (Dynamic Deblurring)\nOnce the camera motion is accounted for, we address the blur caused by moving objects.\n*   **Deformation Fields:** We will employ a time-conditioned deformation network (e.g., an MLP) that predicts spatial offsets (translation, rotation, scaling) for Gaussians based on the timestamp.\n*   **Temporal Integration:** Similar to the camera stage, we will simulate object blur by querying the deformation field at multiple \"virtual timestamps\" within the exposure window. We will render the dynamic objects at these varying states and blend them to match the observed object blur.\n*   **Physical Trajectory Constraints:** To prevent the deformation field from learning arbitrary or non-physical flickering to satisfy the loss, we will introduce a 3D tracking constraint. We will utilize off-the-shelf 2D point trackers and depth estimation to generate pseudo-ground-truth 3D trajectories. These will act as guides, forcing the dynamic Gaussians to follow the actual physical path of the objects in the scene.\n\n## Expected Contribution\n*   **Theoretical Framework:** A novel formulation for 3DGS that physically models the accumulation of photons during exposure, treating blur as a signal to be decoded rather than noise to be removed.\n*   **Technical Robustness:** A decoupling strategy that effectively separates ego-motion from object motion, preventing the \"background bias\" that plagues current dynamic reconstruction methods.\n*   **Practical Utility:** The ability to reconstruct high-fidelity, sharp 3D dynamic scenes from imperfect, blurry monocular footage, significantly lowering the hardware and capture constraints for 3D content creation.\n\n[EXPERIMENTAL LOGS]\n## 1. Experimental Setup\n\nWe implemented a framework named BARD-GS for reconstructing dynamic scenes from blurry inputs. The core approach involved explicitly decoupling motion blur into camera motion blur and object motion blur, modeling them sequentially.\n\n*   **Datasets:**\n    *   **Synthesized Blurry Dataset:** We utilized 3 scenes from the HyperNeRF dataset and 4 scenes from the Dycheck dataset. We used the RIFE Video Frame Interpolation model to increase frame rates (e.g., 30fps to 240fps) and averaged interpolated frames to simulate blur.\n    *   **Real-world Captured Blurry Dataset:** We collected a new dataset comprising 12 scenes. Data was captured using two synchronized GoPros. One GoPro was set to 1/24 second exposure (capturing motion blur for training), and the other to 1/240 second exposure (capturing sharp images for evaluation).\n*   **Evaluation Metrics:**\n    *   **Standard Metrics:** PSNR, SSIM, LPIPS.\n    *   **Quality/Sharpness Metrics:** Laplacian Variance (LV), MUSIQ.\n    *   **Shift-Invariant Metrics (for Real-world data):** SI-PSNR, SI-SSIM, SI-LPIPS. We allowed a 6-pixel shift in horizontal and vertical axes and selected the best value to account for imperfect alignment between the two cameras.\n*   **Baselines Compared:**\n    *   **DyBluRF:** A dynamic reconstruction method handling motion blur.\n    *   **D3DGS:** Dynamic 3D Gaussian Splatting (state-of-the-art dynamic reconstruction).\n    *   **4DGS:** 4D Gaussian Splatting.\n    *   **Pre-processing Baselines:** D3DGS and 4DGS combined with **MPRNet** (a single-image deblurring method) to pre-process training images.\n*   **Implementation Details:**\n    *   **Training Duration:** 80,000 iterations total.\n    *   **Stage 1 (0 - 10,000 iterations):** Optimized virtual cameras and reconstructed static regions using a rendering loss.\n    *   **Stage 2 (10,000 - 30,000 iterations):** Introduced a static deformation field. Optimized using rendering loss and a 3D track loss (forcing Gaussians to learn from 2D pixel movements derived from BootsTAPIR). Splitting, duplicating, and culling of dynamic Gaussians were suspended.\n    *   **Stage 3 (30,000 - 80,000 iterations):** Removed the track loss. Resumed splitting, duplicating, and culling of dynamic Gaussians.\n    *   **Tools:** COLMAP for initial camera poses; Track-Anything for dynamic masks; Depth-Anything for depth information; BootsTAPIR for reference trajectories; PyPose for rotation interpolation.\n    *   **Virtual Views:** We modeled camera movement by interpolating virtual poses (linear for translation, spherical linear for rotation) within the exposure time.\n\n## 2. Raw Numeric Data\n\n**Table 1: Quantitative comparison of deblurring on the synthesized blurry dataset.**\n*Note: Methods marked with \"+\" indicate the use of MPRNet for pre-deblurring.*\n\n| Methods | PSNR ↑ | SSIM ↑ | LPIPS ↓ | LV ↑ | MUSIQ ↑ |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n| DyBluRF | 23.82 | 0.6900 | 0.4714 | 10.73 | 32.95 |\n| D3DGS | 27.20 | 0.7986 | 0.3486 | 20.62 | 37.74 |\n| D3DGS + | 27.98 | 0.8372 | 0.3289 | 36.34 | 52.16 |\n| 4DGS | 27.39 | 0.8010 | 0.3399 | 18.48 | 39.14 |\n| 4DGS + | 28.17 | 0.8335 | 0.2641 | 47.74 | 54.00 |\n| Ours | 28.75 | 0.8414 | 0.2343 | 65.31 | 57.03 |\n\n**Table 2: Quantitative comparison of Novel View Synthesis on the real-world captured dataset.**\n*Note: SI-* denotes shift-invariant metrics.*\n\n| Methods | SI-PSNR ↑ | SI-SSIM ↑ | SI-LPIPS ↓ | LV ↑ | MUSIQ ↑ |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n| DyBluRF | 20.57 | 0.7614 | 0.3614 | 35.16 | 31.05 |\n| D3DGS | 22.83 | 0.8243 | 0.3500 | 18.95 | 28.89 |\n| D3DGS + | 23.10 | 0.8363 | 0.2637 | 37.58 | 38.73 |\n| 4DGS | 22.06 | 0.8093 | 0.3733 | 24.60 | 30.17 |\n| 4DGS + | 22.58 | 0.8293 | 0.2863 | 50.68 | 41.88 |\n| Ours | 25.13 | 0.8508 | 0.1567 | 96.42 | 54.29 |\n\n**Table 3: Ablation studies on individual method components.**\n*TL: Track Loss, DB: Dynamic Deblurring, SD: Static Deblurring, SDF: Static Deformation Field.*\n\n| Method Variant | Deblurring PSNR ↑ | Deblurring SSIM ↑ | Deblurring LPIPS ↓ | Deblurring LV ↑ | Deblurring MUSIQ ↑ | NVS SI-PSNR ↑ | NVS SI-SSIM ↑ | NVS SI-LPIPS ↓ | NVS LV ↑ | NVS MUSIQ ↑ |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| w/o TL | 27.68 | 0.8186 | 0.2757 | 57.53 | 54.69 | 24.12 | 0.8272 | 0.1993 | 88.24 | 50.35 |\n| w/o DB | 28.47 | 0.8229 | 0.2614 | 59.31 | 55.59 | 24.11 | 0.8229 | 0.1873 | 91.76 | 51.87 |\n| w/o SD | 26.00 | 0.7514 | 0.3743 | 16.42 | 36.57 | 22.22 | 0.7656 | 0.2702 | 24.69 | 29.51 |\n| w/o SDF | 27.19 | 0.8057 | 0.2814 | 59.42 | 52.37 | 24.40 | 0.8244 | 0.2534 | 76.58 | 44.05 |\n| Ours | 28.75 | 0.8414 | 0.2343 | 65.31 | 57.03 | 25.13 | 0.8508 | 0.1567 | 96.42 | 54.29 |\n\n**Table 4: Ablation studies on the number of virtual views for two random scenes (toycar, windmill).**\n\n| # virtual views | toycar SI-PSNR ↑ | toycar SI-SSIM ↑ | toycar SI-LPIPS ↓ | windmill SI-PSNR ↑ | windmill SI-SSIM ↑ | windmill SI-LPIPS ↓ |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| 6 | 23.45 | 0.8660 | 0.1557 | 26.74 | 0.9034 | 0.1421 |\n| 8 | 23.63 | 0.8665 | 0.1546 | 26.75 | 0.9028 | 0.1424 |\n| 10 | 23.47 | 0.8676 | 0.1419 | 27.52 | 0.9063 | 0.1275 |\n| 15 | 22.96 | 0.8532 | 0.1667 | 26.83 | 0.9062 | 0.1376 |\n| 20 | 23.33 | 0.8625 | 0.1589 | 26.31 | 0.8977 | 0.1388 |\n\n## 3. Qualitative Observations\n\n*   **Observation on Blur Formation:** We observed that static regions of a scene are affected solely by camera motion blur, whereas dynamic regions are impacted by the combination of both camera and object motion blur.\n*   **Observation on Synthesized Data Artifacts:** We noted that synthesized blurry datasets (created by averaging frames) often exhibit unrealistic artifacts such as moiré patterns and consecutive edges (ghosting), which are distinct from real-world motion blur.\n*   **Observation on Deblurring Quality:** In qualitative comparisons, our method produced superior visual results in both static and dynamic regions compared to baselines. Specifically, in the Dycheck dataset, our rendering results appeared clearer than the ground truth in some cases because the ground truth itself was captured at a low frame rate and contained inherent blur.\n*   **Observation on Novel View Synthesis:** Our method demonstrated significantly better rendering quality within dynamic regions (e.g., preserving details on a moving windmill, face details, and a toy car) compared to baselines. Static regions also retained finer details (e.g., text on a wall) compared to ground truth images.\n*   **Observation on Component Importance:** Removing the static deblurring (w/o SD) module caused the largest performance degradation, as the static region dominates the scene. Removing dynamic deblurring (w/o DB) had a smaller impact on synthesized datasets (which have less blur) but a larger impact on real-world data.\n*   **Observation on Virtual Views:** Increasing the number of virtual views improved motion blur handling up to a certain point (approximately 10 views), after which performance either plateaued or became counterproductive.\n\n[AVAILABLE FIGURES]\n### AVAILABLE FIGURES LIST\nItem 1:\n  - Filename: figure_1.png\n  - Caption: Figure 1. The formation process of motion blur. It originates from two sources: camera-induced blur caused by camera movements during exposure, and object-induced blur resulting from fast objects moving. The static regions of a scene are affected solely by camera motion blur, while dynamic regions are impacted by both camera and object motion blur.\n--------------------------------------------------\nItem 2:\n  - Filename: figure_4.png\n  - Caption: Figure 4. Qualitative comparison of deblurring. The green boxes represent details in static region and the dashed yellow boxes denote the dynamic part. As Dycheck dataset is not captured at high frame rate, our method produces a better result than GT in the last row.\n--------------------------------------------------\nItem 3:\n  - Filename: figure_2.png\n  - Caption: Figure 2. An overview of the pipeline. Our method consists of two stages: camera motion deblur and object motion deblur. In the first stage, we handle camera motion blur by modeling the camera’s trajectory during each exposure, resulting in sharp reconstruction in the static regions. Then, we utilized the optimized camera poses together with the depth map obtain from DepthAnything to initialize the dynamic Gaussians. In the second stage, we address object motion blur by modeling the trajectory of 3D Gaussians within each exposure using deformation field, which allow us to achieve clear reconstruction in the dynamic regions.\n--------------------------------------------------\nItem 4:\n  - Filename: figure_5.png\n  - Caption: Figure 5. Qualitative comparison of Novel View Synthesis. Our method shows a significantly better rendering quality in the dynamic region, e.g. the windmill, the face details, card and the toy car. Besides, for static region, our method reconstructs finer details and shows a even better result than the ground truth image, e.g. the details in the green bounding box in the second column.\n--------------------------------------------------\nItem 5:\n  - Filename: figure_3.png\n  - Caption: Figure 3. Demonstration of artifacts in synthesized dataset.\n--------------------------------------------------\n\nFigures are located in the figures/ directory and should be referenced appropriately in the paper using standard \\includegraphics commands.\n\n[LATEX TEMPLATE]\n% CVPR 2025 Paper Template; see https://github.com/cvpr-org/author-kit\n\n\\documentclass[10pt,twocolumn,letterpaper]{article}\n\\usepackage{cvpr}           \n\n\\input{preamble}\n\n% It is strongly recommended to use hyperref, especially for the review version.\n% hyperref with option pagebackref eases the reviewers' job.\n\\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}\n\\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}\n\n\\def\\paperID{12345678}\n\\def\\confName{CVPR}\n\\def\\confYear{2025}\n\n%%%%%%%%% TITLE - PLEASE UPDATE\n\\title{My Title}\n\n\\author{Ambitious AI Researcher\\\\\nAI Research Institute\\\\\n123 AI Avenue, ML City\\\\\n{\\tt\\small researcher@institute.ai}\n}\n\n\\begin{document}\n\\maketitle\n\n\\begin{abstract}\n%%%%%%%%% ABSTRACT %%%%%%%%%\nAbstract here.\n%%%%%%%%% ABSTRACT %%%%%%%%%\n\\end{abstract}\n\n\\section{Introduction}\n\\label{sec:intro}\n%%%%%%%%% INTRODUCTION %%%%%%%%%\nIntroduction here.\n%%%%%%%%% INTRODUCTION %%%%%%%%%\n\n\\section{Related Work}\n\\label{sec:related_work}\n%%%%%%%%% RELATED WORK %%%%%%%%%\nRelated work here.\n%%%%%%%%% RELATED WORK %%%%%%%%%\n\n\\section{Methodology}\n\\label{sec:method}\n%%%%%%%%% METHOD %%%%%%%%%\nMethodology here.\n%%%%%%%%% METHOD %%%%%%%%%\n\n\\section{Experiments}\n\\label{sec:experiments}\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\nExperimental setup, results, and analysis here.\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\n\n\\section{Conclusion}\n\\label{sec:conclusion}\n%%%%%%%%% CONCLUSION %%%%%%%%%\nConclusion here.\n%%%%%%%%% CONCLUSION %%%%%%%%%\n\n{\n    \\small\n    \\bibliographystyle{ieeenat_fullname}\n    \\bibliography{references}\n}\n\n%%%%%%%%% Appendix %%%%%%%%%\n% If you want to add appendix, uncomment the following lines:\n% \\appendix\n% \\section{xxx}\n%%%%%%%%% Appendix %%%%%%%%%\n\n\\end{document}\n\n\nResponse Format\nReturn EXACTLY TWO fenced code blocks.\n1. First code block: the BibTeX file:\n```bibtex\n@article{example2023,\ntitle={Example Title},\nauthor={Author, First},\njournal={Example Journal},\nyear={2023}\n}\n```\n2. Second code block: the generated LaTeX paper:\n```latex\n% The complete LaTeX paper here\n```\nThe final paper must be coherent, highly polished, and scientifically accurate.\n\n[Delivery in this environment]\nYour working directory is /work: it holds the conference's LaTeX template files and the figures/ directory. Write the two files there as /work/references.bib and /work/template.tex (you may also return them as the two code blocks), and compile /work/template.tex with pdflatex and bibtex into /work/template.pdf. The compiled template.pdf is the paper that is evaluated.\n"
+  },
+  {
+   "name": "SYSTEM.md",
+   "size": 13731,
+   "text": "Role: Senior AI Researcher and Academic Writer.\nObjective: Complete a machine learning research paper by filling in missing sections of a provided LaTeX template and generating a corresponding bibliography file. You must produce a scientifically sound, well-structured paper suitable for submission to a top-tier ML conference.\n\nInputs\nYou will receive the following materials:\n• idea.md: Detailed description of the proposed method and technical ideas.\n• experimental_log.md: Raw experimental results and observations used to construct tables, figures, and analysis.\n• conference_guidelines.md: Formatting and stylistic requirements for the target conference.\n• figures_list: A list of figures that may be referenced in the paper.\n\nConference Guidelines\n# CVPR 2025 Paper Writing Guidelines\n\nBelow are the instructions to help you with the latex paper writing process for CVPR 2025.\n\n## Language\nAll manuscripts must be in English.\n\n## Submission Policies & Anonymity\nCVPR reviewing is double-blind. Authors must not know the names of the reviewers, and reviewers must not know the names of the authors.\n\n* **No Identifying Information:** Do not provide information that may identify the authors in the acknowledgments (e.g., co-workers and grant IDs) or in the supplementary material.\n* **Links:** Do not provide links to websites that identify the authors.\n* **GitHub:** Links to GitHub must be anonymous.\n* **Self-Citation:** If you need to cite any of your own papers that are being submitted concurrently, include anonymized versions in the supplementary material and cite them as anonymous. Do not use the words \"my\" or \"our\" when citing previous work; treat your own prior work as if it were written by someone else (e.g., \"Smith et al. showed...\" rather than \"We showed...\").\n\n## Paper length\nPapers, excluding the references section, must be no longer than eight pages in length.\nThe references section will not be included in the page count, and there is no limit on the length of the references section.\nFor example, a paper of eight pages with two pages of references would have a total length of 10 pages.\n\nOverlength papers, or papers where margins and formatting are deemed significantly altered, will simply not be reviewed.\n\n## Mathematics\nPlease number all of your sections and displayed equations as in these examples:\n```latex\n\\begin{equation}\n  E = m\\cdot c^2\n  \\label{eq:important}\n\\end{equation}\n```\nand\n```latex\n\\begin{equation}\n  v = a\\cdot t.\n  \\label{eq:also-important}\n\\end{equation}\n```\n\n## Formatting your paper\nAll text must be in a two-column format.\nThe total allowable size of the text area is $6\\frac78$ inches (17.46 cm) wide by $8\\frac78$ inches (22.54 cm) high.\nColumns are to be $3\\frac14$ inches (8.25 cm) wide, with a $\\frac{5}{16}$ inch (0.8 cm) space between them.\nThe main title (on the first page) should begin 1 inch (2.54 cm) from the top edge of the page.\nThe second and following pages should begin 1 inch (2.54 cm) from the top edge.\nOn all pages, the bottom margin should be $1\\frac{1}{8}$ inches (2.86 cm) from the bottom edge of the page for $8.5 \\times 11$-inch paper;\nfor A4 paper, approximately $1\\frac{5}{8}$ inches (4.13 cm) from the bottom edge of the page.\n\n### Type style and fonts\nWherever Times is specified, Times Roman may also be used. If neither is available on your word processor, please use the font closest in appearance to Times to which you have access.\n\n### Main Title\nCenter the title $1\\frac{3}{8}$ inches (3.49 cm) from the top edge of the first page. The title should be in Times 14-point, boldface type. Capitalize the first letter of nouns, pronouns, verbs, adjectives, and adverbs; do not capitalize articles, coordinate conjunctions, or prepositions (unless the title begins with such a word).\n\nThe ABSTRACT and MAIN TEXT are to be in a two-column format.\n\n### Main Text\nType main text in 10-point Times, single-spaced.\nDo NOT use double-spacing.\nAll paragraphs should be indented 1 pica (approx.~$\\frac{1}{6}$ inch or 0.422 cm). Make sure your text is fully justified---that is, flush left and flush right. Please do not place any additional blank lines between paragraphs.\n\nFigure and table captions should be 9-point Roman type as in \\cref{fig:onecol,fig:short}. \nShort captions should be centred.\n\n\\noindent Callouts should be 9-point Helvetica, non-boldface type. Initially capitalize only the first word of section titles and first-, second-, and third-order headings.\n\n#### First-order Headings\nFor example, {\\large \\bf 1. Introduction} should be Times 12-point boldface, initially capitalized, flush left, with one blank line before, and one blank line after.\n\n#### Second-order Headings\nFor example, { \\bf 1.1. Database elements} should be Times 11-point boldface, initially capitalized, flush left, with one blank line before, and one after.\nIf you require a third-order heading (we discourage it), use 10-point Times, boldface, initially capitalized, flush left, preceded by one blank line, followed by a period and your text on the same line.\n\n### Footnotes\nPlease use \\footnote{This is what a footnote looks like.\nIt often distracts the reader from the main flow of the argument.} sparingly.\n\nIndeed, try to avoid footnotes altogether and include necessary peripheral observations in the text (within parentheses, if you prefer, as in this sentence). If you wish to use a footnote, place it at the bottom of the column on the page on which it is referenced.\nUse Times 8-point type, single-spaced.\n\n### Cross-references\nFor the benefit of author(s) and readers, please use the\n```latex\n{\\small\\begin{verbatim}\n  \\cref{...}\n\\end{verbatim}}\n```\ncommand for cross-referencing to figures, tables, equations, or sections.\n\nThis will automatically insert the appropriate label alongside the cross-reference as in this example:\n```latex\n\\begin{quotation}\n  To see how our method outperforms previous work, please see \\cref{fig:onecol} and \\cref{tab:example}.\n  It is also possible to refer to multiple targets as once, \\eg~to \\cref{fig:onecol,fig:short-a}.\n  You may also return to \\cref{sec:formatting} or look at \\cref{eq:also-important}.\n\\end{quotation}\n```\nIf you do not wish to abbreviate the label, for example at the beginning of the sentence, you can use the\n```latex\n{\\small\\begin{verbatim}\n  \\Cref{...}\n\\end{verbatim}}\ncommand. Here is an example:\n\\begin{quotation}\n  \\Cref{fig:onecol} is also quite important.\n\\end{quotation}\n```\n\n## Example Code for Tables\n```latex\n\\begin{table}\n  \\centering\n  \\begin{tabular}{@{}lc@{}}\n    \\toprule\n    Method & Frobnability \\\\\n    \\midrule\n    Theirs & Frumpy \\\\\n    Yours & Frobbly \\\\\n    Ours & Makes one's heart Frob\\\\\n    \\bottomrule\n  \\end{tabular}\n  \\caption{Results.   Ours is better.}\n  \\label{tab:example}\n\\end{table}\n```\n\n## Example Code for Figures\n```latex\n\\begin{figure}[t]\n  \\centering\n  \\fbox{\\rule{0pt}{2in} \\rule{0.9\\linewidth}{0pt}}\n   %\\includegraphics[width=0.8\\linewidth]{egfigure.eps}\n\n   \\caption{Example of caption.\n   It is set in Roman so that mathematics (always set in Roman: $B \\sin A = A \\sin B$) may be included without an ugly clash.}\n   \\label{fig:onecol}\n\\end{figure}\n\n\\begin{figure*}\n  \\centering\n  \\begin{subfigure}{0.68\\linewidth}\n    \\fbox{\\rule{0pt}{2in} \\rule{.9\\linewidth}{0pt}}\n    \\caption{An example of a subfigure.}\n    \\label{fig:short-a}\n  \\end{subfigure}\n  \\hfill\n  \\begin{subfigure}{0.28\\linewidth}\n    \\fbox{\\rule{0pt}{2in} \\rule{.9\\linewidth}{0pt}}\n    \\caption{Another example of a subfigure.}\n    \\label{fig:short-b}\n  \\end{subfigure}\n  \\caption{Example of a short caption, which should be centered.}\n  \\label{fig:short}\n\\end{figure*}\n```\n\n## Illustrations, graphs, and photographs\nAll graphics should be centered.\nIn \\LaTeX, avoid using the \\texttt{center} environment for this purpose, as this adds potentially unwanted whitespace.\nInstead use\n```latex\n{\\small\\begin{verbatim}\n  \\centering\n\\end{verbatim}}\n```\nat the beginning of your figure.\n\nPlease ensure that any point you wish to make is resolvable in a printed copy of the paper. Resize fonts in figures to match the font in the body text, and choose line widths that render effectively in print.\n\nWhen placing figures in \\LaTeX, it's almost always best to use \\verb+\\includegraphics+, and to specify the figure width as a multiple of the line width as in the example below\n\n```latex\n{\\small\\begin{verbatim}\n   \\usepackage{graphicx} ...\n   \\includegraphics[width=0.8\\linewidth]\n                   {myfile.pdf}\n\\end{verbatim}}\n```\n\n## Color\nIf you use color in your plots, please keep in mind that a significant subset of reviewers and readers may have a color vision deficiency; red-green blindness is the most frequent kind.\nHence avoid relying only on color as the discriminative feature in plots (such as red \\vs green lines), but add a second discriminative feature to ease disambiguation.\n\n\n## Important Rules \n* DO NOT change `\\usepackage[capitalize]{cleveref}` into `\\usepackage[capitalize]{cleverref}`, as there's no `cleverref.sty`.\n* Keep the existing packages in the template unchanged.\n* For consistent compilation across environments, all figures will reside in the `figures` directory. Always include the `figures/` prefix in your `\\includegraphics` command. Failing to include this prefix (e.g., using `figure_1.png` instead of `figures/figure_1.png`) will result in figure loading errors during the build process.\n* Always use the following author information placeholder in your writeup:\n    * Ambitious AI Researcher, AI Research Institute, 123 AI Avenue, ML City, researcher@institute.ai\n\n\nCritical Constraints\n1. Scientific Integrity\n• All reported experimental results MUST match the provided experimental logs.\n• Never fabricate results, numbers, baselines, datasets, or metrics.\n• If results are weak, negative, or inconclusive, report them honestly and discuss possible explanations.\n2. Literature Cutoff Rule\nYou must behave as if the current date is: 2024-11. Do NOT cite or discuss papers published after this date.\n3. Page Limit\nThe main paper is limited to 8 pages (including figures and tables but excluding references and appendices). Use space efficiently while remaining concise.\n4. Template Compliance\n• Do not modify the overall LaTeX style or document structure mandated by the conference template.\n• References must be handled through a references.bib file.\n• Use standard LaTeX citation commands (e.g., \\cite{}). Make sure you ONLY cite keys that exist in your generated BibTeX code block.\n\nSection Guidelines\n• Title: Concise, descriptive, and memorable. Preferably under two lines.\n• Abstract: A single, compelling paragraph summarizing the problem context, proposed approach, key results, and main takeaway.\n• Introduction: Introduce the problem and motivate its importance. Provide necessary background context. Clearly summarize the paper's core contributions.\n• Related Work: Discuss prior work addressing similar or related problems. Detail the relationship between existing literature and the current approach. Cite relevant baselines and influential papers published before 2024-11.\n• Methodology: Clearly and pedantically describe the proposed method. Provide sufficient technical depth for full reproducibility. Use equations, figures, and structured explanations when appropriate.\n• Experiments: Detail the empirical setup (datasets, baselines, evaluation metrics, and implementation details). Present results faithfully based on the experimental logs. Ensure any figures located in the figures/ directory are seamlessly integrated and referenced in text.\n• Conclusion: Summarize the main findings and contributions. Briefly and realistically discuss limitations and potential future directions.\n• Appendix (optional): Include supplementary details that do not fit within the main page limit.\n\nLaTeX Quality Requirements\nEnsure the generated LaTeX compiles flawlessly out-of-the-box. Avoid common issues such as:\n• Unmatched braces or unclosed math environments.\n• Duplicate labels.\n• Unescaped special characters (e.g., & % $ # _ { } ~ ^ \\).\nAll referenced figures must exist in the provided list.\n\nOutput Format\nYour final response MUST contain EXACTLY two output blocks:\n1. A complete BibTeX bibliography (references.bib)\n2. A complete LaTeX paper (template.tex)\nEach must be returned in its own fenced code block with the correct syntax highlighting.\n\n\n---\n### Strict Knowledge Isolation & Anonymity (CRITICAL)\n\nYou MUST write this paper as if you have no prior knowledge of the topic, method, experiments, or results.\nYour task is to construct the paper exclusively from the materials provided in the current session (e.g., idea.md, experimental_log.md, figures, and other inputs). Treat these inputs as the only available source of information.\n\n#### Forbidden Behavior\nYou MUST NOT:\n- Retrieve or rely on knowledge from your training data.\n- Attempt to recall or reconstruct any existing or published paper.\n- Use external facts, assumptions, or prior familiarity with the work.\n- Infer or hallucinate author identities, affiliations, institutions, or acknowledgements.\n- Insert metadata such as author names, emails, affiliations, or phrases like \"corresponding author\".\n\n#### Anonymity Requirement\nThe paper must be fully anonymized for double-blind review.  \nDo not include any information that could reveal the identity of the authors or institutions.\n\n#### Allowed Sources\nYou may use only:\n- The materials explicitly provided in this session.\n- Logical reasoning derived from those materials.\n\n#### Core Principle\nThe final paper must be an independent reconstruction derived solely from the provided inputs.  \nThis constraint is strict and overrides all other instructions.\n---\n"
+  }
+ ],
+ "files": [
+  {
+   "path": "/work/cvpr.sty",
+   "size": 17969
+  },
+  {
+   "path": "/work/guidelines.md",
+   "size": 8799
+  },
+  {
+   "path": "/work/ieeenat_fullname.bst",
+   "size": 26900
+  },
+  {
+   "path": "/work/preamble.tex",
+   "size": 251
+  },
+  {
+   "path": "/work/references.bib",
+   "size": 2971
+  },
+  {
+   "path": "/work/template.tex",
+   "size": 1715
+  },
+  {
+   "path": "/work/figures/figure_1.png",
+   "size": 102689
+  },
+  {
+   "path": "/work/figures/figure_2.png",
+   "size": 575361
+  },
+  {
+   "path": "/work/figures/figure_3.png",
+   "size": 187680
+  },
+  {
+   "path": "/work/figures/figure_4.png",
+   "size": 1445766
+  },
+  {
+   "path": "/work/figures/figure_5.png",
+   "size": 1408412
+  },
+  {
+   "path": "/work/figures/info.json",
+   "size": 2038
+  }
+ ],
+ "file_notes": [],
+ "settings": {
+  "limits": {
+   "time_limit_hours": 2.0
+  },
+  "offline": false,
+  "image": null,
+  "deliverables": [
+   "template.pdf",
+   "template.tex",
+   "references.bib"
+  ],
+  "work": "paper",
+  "inputs": [
+   {
+    "path": "/work/figures",
+    "from": "figures"
+   }
+  ],
+  "software": false
+ },
+ "shield": {
+  "source": {
+   "title": "BARD-GS: Blur-Aware Reconstruction of Dynamic Scenes via Gaussian Splatting",
+   "authors": [
+    "Yiren Lu",
+    "Yunlai Zhou",
+    "Disheng Liu",
+    "Tuo Liang",
+    "Yu Yin"
+   ],
+   "time_cutoff": "2024-11-01",
+   "abs_url": "https://openaccess.thecvf.com/content/CVPR2025/html/Lu_BARD-GS_Blur-Aware_Reconstruction_of_Dynamic_Scenes_via_Gaussian_Splatting_CVPR_2025_paper.html",
+   "pdf_url": "https://openaccess.thecvf.com/content/CVPR2025/papers/Lu_BARD-GS_Blur-Aware_Reconstruction_of_Dynamic_Scenes_via_Gaussian_Splatting_CVPR_2025_paper.pdf",
+   "arxiv_id": "2503.15835",
+   "code_repository": [
+    "https://github.com/google-research/paper-orchestra"
+   ]
+  },
+  "extra": {
+   "urls": [
+    "https://huggingface.co/datasets/yiwen-song/PaperWritingBench",
+    "https://yiwen-song.github.io/paper_orchestra/",
+    "https://doi.org/10.1109/CVPR52734.2025.01541",
+    "https://arxiv.org/abs/2503.15835"
+   ]
+  },
+  "probe_url": "https://github.com/google-research/paper-orchestra"
+ },
+ "evaluator": {
+  "repo": "https://github.com/google-research/paper-orchestra",
+  "commit": "ca1b3fa01c2970fc7cda32d16245db38d57b3f56",
+  "dataset": "yiwen-song/PaperWritingBench",
+  "revision": "fbcfcafd042184ca954954b08dfcb92bd7942b51",
+  "paper_id": "cvpr2025_9992cb3cfc",
+  "venue": "cvpr2025",
+  "paper_dir": "cvpr2025/papers/cvpr2025_9992cb3cfc",
+  "idea": "idea_sparse.md",
+  "research_cutoff": "2024-11",
+  "prompt": "Single Agent (arXiv 2604.05018v1 App. F.1)",
+  "paper": "template.pdf"
+ },
+ "references": [
+  {
+   "name": "cvpr2025_9992cb3cfc.pdf",
+   "size": 2636122,
+   "text": null,
+   "note": "the original paper",
+   "file_reason": "not-in-batch"
+  },
+  {
+   "name": "raw_materials/idea_dense.md",
+   "size": 7709,
+   "text": "## Problem Statement\nRecent advancements in 3D Gaussian Splatting (3DGS) have enabled real-time rendering of static scenes, and subsequent extensions have attempted to address dynamic scenes. However, a critical limitation remains: the assumption of high-quality, sharp input images. In real-world handheld videography, simultaneous camera movement and object motion frequently introduce significant motion blur.\n\nExisting solutions fall short in two ways:\n1.  **Static Limitation:** Current deblurring-focused reconstruction methods (e.g., Deblur-NeRF, BAD-Gaussians) model camera motion paths but assume the scene geometry is static, failing to reconstruct moving objects.\n2.  **Coupled Motion Ambiguity:** NeRF-based dynamic methods that attempt to handle blur typically couple object and camera motion within a single latent ray warping process. Because static regions dominate the scene, the optimization biases toward camera motion, resulting in severe degradation and artifacts in dynamic regions.\n\nWe face a need for a framework that can explicitly disentangle camera-induced blur (ego-motion) from object-induced blur to faithfully reconstruct dynamic scenes from low-quality, blurry monocular inputs.\n\n## Core Hypothesis\nWe propose BARD-GS, a Blur-Aware Reconstruction framework for Dynamic scenes. Our core hypothesis is that motion blur in dynamic scenes is physically composed of two distinct factors: the trajectory of the camera and the trajectory of the scene elements (Gaussians) during the exposure time.\n\nBy explicitly decoupling these factors, we can model the physical blur formation process in two sequential stages:\n1.  **Camera Motion Deblurring:** Modeling the camera's physical trajectory during exposure to resolve static regions.\n2.  **Object Motion Deblurring:** Modeling the temporal deformation of 3D Gaussians to resolve dynamic regions.\n\nWe hypothesize that by enforcing a physical trajectory constraint on 3D Gaussians (via a tracking loss), we can prevent the deformation field from learning non-physical \"teleportation\" to satisfy the rendering loss, thereby ensuring geometric consistency in dynamic, blurry areas.\n\n## Proposed Methodology (Detailed Technical Approach)\n\nWe will build this framework upon the 3D Gaussian Splatting representation. Our method will proceed in two distinct optimization stages.\n\n### 1. Physical Blur Formation Model\nWe define the physical formation of a blurry pixel $\\mathbf{B}(\\mathbf{u}, \\mathbf{v})$ as the integration of instantaneous radiance $\\mathbf{S}_t$ over the exposure time $\\tau$. To make this computationally tractable, we will approximate the integral as the average of $n$ discrete samples (virtual sharp snapshots):\n\n$$ \\mathbf{B}(\\mathbf{u}, \\mathbf{v}) \\approx \\frac{1}{n} \\sum_{i=0}^{n-1} \\mathbf{S}_i(\\mathbf{u}, \\mathbf{v}) $$\n\nwhere $\\mathbf{S}_i$ represents the rendered image at a discrete virtual timestamp within the exposure window.\n\n### 2. Stage I: Camera Motion Modeling\nIn the first stage, we will freeze dynamic content and focus on optimizing the camera trajectory to resolve static scene elements.\n\n**Virtual Camera Trajectory:**\nFor each blurry input image $i$ with a noisy initial pose $\\widetilde{\\mathbf{P}}_i$, we will define a set of $n+1$ virtual cameras $\\{\\mathbf{P}_i^j\\}_{j=0}^n$. We define the start $\\mathbf{P}_i^0$ and end $\\mathbf{P}_i^n$ poses of the exposure via learnable delta adjustments to the initial pose:\n\n$$ \\mathbf{P}_i^0 = \\widetilde{\\mathbf{P}}_i \\cdot \\Delta \\mathbf{P}_i^0, \\quad \\mathbf{P}_i^n = \\widetilde{\\mathbf{P}}_i \\cdot \\Delta \\mathbf{P}_i^n $$\n\nWe will compute intermediate virtual poses via linear interpolation on the $\\mathfrak{so}(3)$ manifold for rotation and Euclidean space for translation. The $j$-th virtual pose rotation $\\mathbf{R}_i^j$ and translation $\\mathbf{t}_i^j$ are defined as:\n\n$$ \\mathbf{R}_i^j = \\mathbf{R}_i^0 \\cdot \\exp \\left( \\frac{j}{n} \\cdot \\log \\left( (\\mathbf{R}_i^0)^{-1} \\cdot \\mathbf{R}_i^n \\right) \\right) $$\n$$ \\mathbf{t}_i^j = \\mathbf{t}_i^0 + \\frac{j}{n} \\cdot (\\mathbf{t}_i^n - \\mathbf{t}_i^0) $$\n\n**Rendering and Loss:**\nWe will render the static Gaussians $\\mathbf{G}_c^{static}$ using these virtual poses and average the results to synthesize the reconstructed blurry image $\\widehat{\\mathbf{B}}_i$:\n\n$$ \\widehat{\\mathbf{B}}_i = \\frac{1}{n+1} \\sum_{j=0}^{n} \\mathbf{I}_i^j \\big( \\mathbf{P}_i^j, \\mathbf{G}_c^{static} \\big) $$\n\nWe will optimize the camera parameters and static Gaussians using an L1 rendering loss masked to exclude dynamic regions (identified via off-the-shelf segmentation):\n$$ \\mathcal{L}_{render} = \\sum_{(x,y) \\notin \\mathcal{M}_d} || \\widehat{\\mathbf{B}}_i(x,y) - \\mathbf{B}_i(x,y) ||_1 $$\n\n### 3. Stage II: Object Motion Modeling\nIn the second stage, we address object-induced blur. We will introduce a time-conditioned deformation field to model the movement of dynamic Gaussians.\n\n**Deformation Field Architecture:**\nWe will utilize a Multi-Layer Perceptron (MLP) $\\mathcal{F}_\\theta$ that takes positionally encoded Gaussian means $\\gamma(\\mathbf{x})$ and time $\\gamma(t)$ as input to output offsets for position, rotation, and scaling:\n\n$$ (\\delta \\mathbf{x}, \\delta \\mathbf{r}, \\delta \\mathbf{s}) = \\mathcal{F}_\\theta (\\gamma(\\mathbf{x}), \\gamma(t)) $$\n\nWe will also implement a secondary deformation field for static Gaussians to handle view-dependent byproducts (shadows, reflections) caused by moving objects.\n\n**Blur-Aware Dynamic Rendering:**\nTo simulate object motion blur, we define virtual timestamps $\\{t_i^j\\}_{j=0}^n$ uniformly distributed within the exposure interval $[t_i - \\frac{\\tau}{2}, t_i + \\frac{\\tau}{2}]$. We query the deformation field at these times to obtain the virtual Gaussian states $\\mathbf{G}_i^j$:\n\n$$ \\mathbf{G}_i^j = \\mathbf{G}_c + \\mathcal{F}_\\theta \\left( \\gamma(\\mathbf{X}), \\gamma(t_i^j) \\right) $$\n\nThe final pixel value is computed by rendering the *virtual* Gaussians from the *virtual* camera poses (optimized in Stage I) and averaging them:\n\n$$ \\widehat{\\mathbf{B}}_i = \\frac{1}{n+1} \\sum_{j=0}^{n} \\mathbf{I}_i^j \\big( \\mathbf{P}_i^j, \\mathbf{G}_i^j \\big) $$\n\n### 4. Trajectory Regularization (3D Track Loss)\nTo ensure the deformation field learns physical motion rather than simply duplicating Gaussians to fill blurry regions, we will implement a 3D geometric constraint.\n\nWe will generate pseudo-ground-truth 3D trajectories by combining 2D point tracks (from an external tracker like BootsTAPIR) with depth estimates (from Depth-Anything), back-projected using our optimized camera poses. We define a tracking loss $\\mathcal{L}_{track}$ to force the dynamic Gaussian means $\\mathbf{x}_i$ to follow these reference 3D trajectories $\\mathbf{x}_i^{gt}$:\n\n$$ \\mathcal{L}_{track} = \\sum_{\\mathbf{x}_i \\in dynamic} || \\mathbf{x}_i^{gt} - \\mathbf{x}_i ||_1 $$\n\nThis loss will be applied during the initial phase of Stage II to guide the deformation field convergence.\n\n## Expected Contribution\n1.  **Unified Blur Decomposition:** We will provide the first Gaussian Splatting framework that mathematically decouples object motion blur from camera motion blur, handling them via independent trajectory modeling (camera pose interpolation vs. Gaussian deformation).\n2.  **Robust Dynamic Reconstruction:** By integrating a physical blur formation model into the optimization loop, we expect to reconstruct sharp dynamic details from inputs that would cause failure in standard Dynamic 3DGS or 4DGS pipelines.\n3.  **Physically Grounded Motion:** The introduction of the 3D track loss will theoretically constrain the ill-posed problem of deblurring, ensuring that the learned Gaussian trajectories correspond to actual scene dynamics rather than visual artifacts.",
+   "note": "the dense idea (the method that produced the experimental log)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gpt-5-2025-08-07.json",
+   "size": 41096,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Jeongmin Bae, Seoha Kim, Youngsik Yun, Hahyun Lee, Gun Bang, and Youngjung Uh. Per-gaussian embedding-based deformation for deformable 3d gaussian splatting. In European Conference on Computer Vision (ECCV), 2024. 1, 2\",\n            \"extracted_paper_title\": \"Per-gaussian embedding-based deformation for deformable 3d gaussian splatting\",\n            \"fetched_paper_id\": \"db8bed00c7757e067f36e8e7dfaef2f4ab8ffac0\",\n            \"fetched_paper_title\": \"Per-Gaussian Embedding-Based Deformation for Deformable 3D Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Minh-Quan Viet Bui, Jongmin Park, Jihyong Oh, and Munchurl Kim. Dyblurf: Dynamic deblurring neural radiance \\ufb01elds for blurry monocular video. arXiv preprint arXiv:2312.13528, 2023. 1, 3, 5, 6\",\n            \"extracted_paper_title\": \"Dyblurf: Dynamic deblurring neural radiance fields for blurry monocular video\",\n            \"fetched_paper_id\": \"8145b552dd1afd26b251af88383c298f63093f3d\",\n            \"fetched_paper_title\": \"DyBluRF: Dynamic Neural Radiance Fields from Blurry Monocular Video\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yiwen Chen, Zilong Chen, Chi Zhang, Feng Wang, Xi-aofeng Yang, Yikai Wang, Zhongang Cai, Lei Yang, Huaping Liu, and Guosheng Lin. Gaussianeditor: Swift and controllable 3d editing with gaussian splatting. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 21476\\u201321485, 2024. 1\",\n            \"extracted_paper_title\": \"Gaussian Editor: Swift and controllable 3d editing with gaussian splatting\",\n            \"fetched_paper_id\": \"bbc6531afdfe41fe8664002a80d9d73a07a080d2\",\n            \"fetched_paper_title\": \"GaussianEditor: Swift and Controllable 3D Editing with Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zheng Chen, Yulun Zhang, Ding Liu, Jinjin Gu, Linghe Kong, Xin Yuan, et al. Hierarchical integration diffusion model for realistic image deblurring. Advances in neural information processing systems, 36, 2024. 2\",\n            \"extracted_paper_title\": \"Hierarchical integration diffusion model for realistic image deblurring\",\n            \"fetched_paper_id\": \"ea2feb30a758519672e876bd1ff6f05b859e308e\",\n            \"fetched_paper_title\": \"Hierarchical Integration Diffusion Model for Realistic Image Deblurring\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Franc\\u00b8ois Darmon, Lorenzo Porzi, Samuel Rota-Bul`o, and Peter Kontschieder. Robust gaussian splatting. arXiv preprint arXiv:2404.04211, 2024. 2\",\n            \"extracted_paper_title\": \"Robust gaussian splatting\",\n            \"fetched_paper_id\": \"a9e5f91a93da0ab96a1f2d54627e2962ae15c083\",\n            \"fetched_paper_title\": \"VRSplat: Fast and Robust Gaussian Splatting for Virtual Reality\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Carl Doersch, Yi Yang, Mel Vecerik, Dilara Gokay, Ankush Gupta, Yusuf Aytar, Joao Carreira, and Andrew Zisserman. TAPIR: Tracking any point with per-frame initialization and temporal re\\ufb01nement. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 10061\\u201310072, 2023. 5\",\n            \"extracted_paper_title\": \"TAPIR: Tracking any point with per-frame initialization and temporal refinement.\",\n            \"fetched_paper_id\": \"fc98d0e981f193b159d8fab5343f094cf06dcf20\",\n            \"fetched_paper_title\": \"TAPIR: Tracking Any Point with per-frame Initialization and temporal Refinement\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Carl Doersch, Pauline Luc, Yi Yang, Dilara Gokay, Skanda Koppula, Ankush Gupta, Joseph Heyward, Ignacio Rocco, Ross Goroshin, Jo\\u02dcao Carreira, and Andrew Zisserman. BootsTAP: Bootstrapped training for tracking-any-point. Asian Conference on Computer Vision, 2024. 5\",\n            \"extracted_paper_title\": \"BootsTAP: Bootstrapped training for tracking-any-point\",\n            \"fetched_paper_id\": \"04068ad34cf4e3b7c0731d294eb8decfab3f51fe\",\n            \"fetched_paper_title\": \"BootsTAP: Bootstrapped Training for Tracking-Any-Point\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yuanxing Duan, Fangyin Wei, Qiyu Dai, Yuhang He, Wenzheng Chen, and Baoquan Chen. 4d-rotor gaussian splatting: towards ef\\ufb01cient novel view synthesis for dynamic scenes. In ACM SIGGRAPH 2024 Conference Papers, pages 1\\u201311, 2024. 1, 2\",\n            \"extracted_paper_title\": \"4d-rotor gaussian splatting: towards efficient novel view synthesis for dynamic scenes\",\n            \"fetched_paper_id\": \"fc54a8f8272688851fdd5dfbf9f1deacbe39eb30\",\n            \"fetched_paper_title\": \"4D-Rotor Gaussian Splatting: Towards Efficient Novel View Synthesis for Dynamic Scenes\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hang Gao, Ruilong Li, Shubham Tulsiani, Bryan Russell, and Angjoo Kanazawa. Dynamic novel-view synthesis: A reality check. In NeurIPS, 2022. 5, 6\",\n            \"extracted_paper_title\": \"Dynamic novel-view synthesis: A reality check.\",\n            \"fetched_paper_id\": \"09179234dec5fc6dea4a8b02a9d98eef712d45e9\",\n            \"fetched_paper_title\": \"Monocular Dynamic View Synthesis: A Reality Check\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ayaan Haque, Matthew Tancik, Alexei A Efros, Aleksander Holynski, and Angjoo Kanazawa. Instruct-nerf2nerf: Editing 3d scenes with instructions. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 19740\\u201319750, 2023. 1\",\n            \"extracted_paper_title\": \"Instruct-nerf2nerf: Editing 3d scenes with instructions\",\n            \"fetched_paper_id\": \"26c22380282a00166273038bc5ba785d845d61ad\",\n            \"fetched_paper_title\": \"Instruct-NeRF2NeRF: Editing 3D Scenes with Instructions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhewei Huang, Tianyuan Zhang, Wen Heng, Boxin Shi, and Shuchang Zhou. Real-time intermediate \\ufb02ow estimation for video frame interpolation. In Proceedings of the European Conference on Computer Vision (ECCV), 2022. 5\",\n            \"extracted_paper_title\": \"Real-time intermediate flow estimation for video frame interpolation\",\n            \"fetched_paper_id\": \"eec8febf89785f00b894bb8d69f44118b86884e2\",\n            \"fetched_paper_title\": \"Real-Time Intermediate Flow Estimation for Video Frame Interpolation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Kai Katsumata, Duc Minh Vo, and Hideki Nakayama. A compact dynamic 3d gaussian representation for real-time dynamic view synthesis. In European Conference on Computer Vision, pages 394\\u2013412. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"A compact dynamic 3d gaussian representation for real-time dynamic view synthesis\",\n            \"fetched_paper_id\": \"c8523d3ddc8cc66a3e24d3d3bb6a170050dbaec2\",\n            \"fetched_paper_title\": \"A Compact Dynamic 3D Gaussian Representation for Real-Time Dynamic View Synthesis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Junjie Ke, Qifei Wang, Yilin Wang, Peyman Milanfar, and Feng Yang. Musiq: Multi-scale image quality transformer. In Proceedings of the IEEE/CVF international conference on computer vision, pages 5148\\u20135157, 2021. 6\",\n            \"extracted_paper_title\": \"Musiq: Multi-scale image quality transformer\",\n            \"fetched_paper_id\": \"e3d06054af531ee2f42270d43100b309c28546ef\",\n            \"fetched_paper_title\": \"MUSIQ: Multi-scale Image Quality Transformer\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Nikhil Keetha, Jay Karhade, Krishna Murthy Jatavallabhula, Gengshan Yang, Sebastian Scherer, Deva Ramanan, and Jonathon Luiten. Splatam: Splat, track & map 3d gaussians for dense rgb-d slam. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, 2024. 1\",\n            \"extracted_paper_title\": \"Splatam: Splat, track & map 3d gaussians for dense rgb-d slam\",\n            \"fetched_paper_id\": \"a6c92dd8c537bc4a0c91cef8558e4a4f25416091\",\n            \"fetched_paper_title\": \"SplaTAM: Splat, Track & Map 3D Gaussians for Dense RGB-D SLAM\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Bernhard Kerbl, Georgios Kopanas, Thomas Leimk\\u00a8uhler, and George Drettakis. 3d gaussian splatting for real-time radiance \\ufb01eld rendering. ACM Transactions on Graphics, 42 (4), 2023. 1, 2, 3\",\n            \"extracted_paper_title\": \"3D Gaussian Splatting for Real-Time Radiance Field Rendering\",\n            \"fetched_paper_id\": \"2cc1d857e86d5152ba7fe6a8355c2a0150cc280a\",\n            \"fetched_paper_title\": \"3D Gaussian Splatting for Real-Time Radiance Field Rendering\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Agelos Kratimenos, Jiahui Lei, and Kostas Daniilidis. Dynmf: Neural motion factorization for real-time dynamic view synthesis with 3d gaussian splatting. In European Conference on Computer Vision, pages 252\\u2013269. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"Dynmf: Neural motion factorization for real-time dynamic view synthesis with 3d gaussian splatting\",\n            \"fetched_paper_id\": \"a082a0df25b7166706e81ade83bc917dd7367edc\",\n            \"fetched_paper_title\": \"DynMF: Neural Motion Factorization for Real-time Dynamic View Synthesis with 3D Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Orest Kupyn, Volodymyr Budzan, Mykola Mykhailych, Dmytro Mishkin, and Ji\\u02c7r\\u00b4\\u0131 Matas. Deblurgan: Blind motion deblurring using conditional adversarial networks. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 8183\\u20138192, 2018. 2\",\n            \"extracted_paper_title\": \"Deblurgan: Blind motion deblurring using conditional adversarial networks\",\n            \"fetched_paper_id\": \"9184da852d02f1a15bc465d9cceae613b0a03e51\",\n            \"fetched_paper_title\": \"DeblurGAN: Blind Motion Deblurring Using Conditional Adversarial Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Orest Kupyn, Tetiana Martyniuk, Junru Wu, and Zhangyang Wang. Deblurgan-v2: Deblurring (orders-of-magnitude) faster and better. In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV), pages 8878\\u20138887, 2019. 2\",\n            \"extracted_paper_title\": \"Deblurgan-v2: Deblurring (orders-of-magnitude) faster and better.\",\n            \"fetched_paper_id\": \"81c1dc00b32d12edfab00656593f5db56cfa79e0\",\n            \"fetched_paper_title\": \"DeblurGAN-v2: Deblurring (Orders-of-Magnitude) Faster and Better\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Byeonghyeon Lee, Howoong Lee, Xiangyu Sun, Usman Ali, and Eunbyung Park. Deblurring 3d gaussian splatting. In European Conference on Computer Vision, pages 127\\u2013143. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"Deblurring 3d gaussian splatting\",\n            \"fetched_paper_id\": \"65902a95d5af409938b28b69808e916f8ef9e0bd\",\n            \"fetched_paper_title\": \"Deblurring 3D Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dogyoon Lee, Minhyeok Lee, Chajin Shin, and Sangyoun Lee. Dp-nerf: Deblurred neural radiance \\ufb01eld with physical scene priors. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 12386\\u201312396, 2023. 2\",\n            \"extracted_paper_title\": \"Dp-nerf: Deblurred neural radiance field with physical scene priors\",\n            \"fetched_paper_id\": \"dc32021df1c3692601fa2d4747e41f73005eda4f\",\n            \"fetched_paper_title\": \"DP-NeRF: Deblurred Neural Radiance Field with Physical Scene Priors\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dongwoo Lee, Jeongtaek Oh, Jaesung Rim, Sunghyun Cho, and Kyoung Mu Lee. Exblurf: Ef\\ufb01cient radiance \\ufb01elds for extreme motion blurred images. 2023. 1\",\n            \"extracted_paper_title\": \"Exblurf: Efficient radiance fields for extreme motion blurred images\",\n            \"fetched_paper_id\": \"1f463bfd63449d17d1547cfe55e9610b49ac37f5\",\n            \"fetched_paper_title\": \"ExBluRF: Efficient Radiance Fields for Extreme Motion Blurred Images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jungho Lee, Dogyoon Lee, Minhyeok Lee, Donghyung Kim, and Sangyoun Lee. Smurf: Continuous dynamics for motion-deblurring radiance \\ufb01elds. arXiv preprint arXiv:2403.07547, 2024. 2\",\n            \"extracted_paper_title\": \"Smurf: Continuous dynamics for motion-deblurring radiance fields\",\n            \"fetched_paper_id\": \"2f16a2b6021b22badd0d68feb559918c08ca554b\",\n            \"fetched_paper_title\": \"SMURF: Continuous Dynamics for Motion-Deblurring Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhan Li, Zhang Chen, Zhong Li, and Yi Xu. Spacetime gaussian feature splatting for real-time dynamic view synthesis. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 8508\\u20138520, 2024. 2\",\n            \"extracted_paper_title\": \"Spacetime gaussian feature splatting for real-time dynamic view synthesis\",\n            \"fetched_paper_id\": \"29ea8f3648264f4fa8dec627fc8726131ea72cdc\",\n            \"fetched_paper_title\": \"Spacetime Gaussian Feature Splatting for Real-Time Dynamic View Synthesis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Peidong Liu, Xingxing Zuo, Viktor Larsson, and Marc Pollefeys. Mba-vo: Motion blur aware visual odometry. 2021 IEEE/CVF International Conference on Computer Vision (ICCV), pages 5530\\u20135539, 2021. 5\",\n            \"extracted_paper_title\": \"Mba-vo: Motion blur aware visual odometry\",\n            \"fetched_paper_id\": \"98a7b067a2319c57e129ab2d6f19a67f170099aa\",\n            \"fetched_paper_title\": \"MBA-VO: Motion Blur Aware Visual Odometry\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yiren Lu, Jing Ma, and Yu Yin. View-consistent object removal in radiance \\ufb01elds. In Proceedings of the 32nd ACM International Conference on Multimedia, pages 3597\\u20133606, 2024. 1\",\n            \"extracted_paper_title\": \"View-consistent object removal in radiance fields\",\n            \"fetched_paper_id\": \"15588dbda31f40f9b6d9d22be44a98dd873ada73\",\n            \"fetched_paper_title\": \"View-consistent Object Removal in Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhicheng Lu, Xiang Guo, Le Hui, Tianrui Chen, Min Yang, Xiao Tang, Feng Zhu, and Yuchao Dai. 3d geometry-aware deformable gaussian splatting for dynamic view synthesis. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 8900\\u20138910, 2024. 1, 2\",\n            \"extracted_paper_title\": \"3d geometry-aware deformable gaussian splatting for dynamic view synthesis\",\n            \"fetched_paper_id\": \"7a66adab7c5f2a2f6e4cc5223fbdd6229e295fa8\",\n            \"fetched_paper_title\": \"3D Geometry-aware Deformable Gaussian Splatting for Dynamic View Synthesis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jonathon Luiten, Georgios Kopanas, Bastian Leibe, and Deva Ramanan. Dynamic 3d gaussians: Tracking by persistent dynamic view synthesis. In 3DV, 2024. 2\",\n            \"extracted_paper_title\": \"Dynamic 3d gaussians: Tracking by persistent dynamic view synthesis\",\n            \"fetched_paper_id\": \"8ba2c82fe675ede1d5c12fc4f97cf8ca3ebf1ca3\",\n            \"fetched_paper_title\": \"Dynamic 3D Gaussians: Tracking by Persistent Dynamic View Synthesis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Li Ma, Xiaoyu Li, Jing Liao, Qi Zhang, Xuan Wang, Jue Wang, and Pedro V. Sander. Deblur-nerf: Neural radiance \\ufb01elds from blurry images, 2021. 1, 2, 3, 5\",\n            \"extracted_paper_title\": \"Deblur-nerf: Neural radiance fields from blurry images\",\n            \"fetched_paper_id\": \"7bc683fe1911f4987b845f7d2165d5888f0a50e9\",\n            \"fetched_paper_title\": \"Deblur-NeRF: Neural Radiance Fields from Blurry Images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hidenobu Matsuki, Riku Murai, Paul H. J. Kelly, and Andrew J. Davison. Gaussian Splatting SLAM. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, 2024. 1\",\n            \"extracted_paper_title\": \"Gaussian Splatting SLAM\",\n            \"fetched_paper_id\": \"ec7e33597160535af56f046b8d6914ff49c66e1a\",\n            \"fetched_paper_title\": \"Gaussian Splatting SLAM\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik, Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng. Nerf: Representing scenes as neural radiance \\ufb01elds for view synthesis. In ECCV, 2020. 1\",\n            \"extracted_paper_title\": \"Nerf: Representing scenes as neural radiance fields for view synthesis\",\n            \"fetched_paper_id\": \"7934fe27d417627e8cfec8c130de5242fec8c742\",\n            \"fetched_paper_title\": \"DOUBLE NERF: REPRESENTING DYNAMIC SCENES AS NEURAL RADIANCE FIELDS\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Keunhong Park, Utkarsh Sinha, Peter Hedman, Jonathan T. Barron, So\\ufb01en Bouaziz, Dan B Goldman, Ricardo Martin-Brualla, and Steven M. Seitz. Hypernerf: A higher-dimensional representation for topologically varying neural radiance \\ufb01elds. ACM Trans. Graph., 40(6), 2021. 5, 6\",\n            \"extracted_paper_title\": \"Hypernerf: A higher-dimensional representation for topologically varying neural radiance fields\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Cheng Peng and Rama Chellappa. Pdrf: Progressively deblurring radiance \\ufb01eld for fast and robust scene reconstruction from blurry images. arXiv preprint arXiv:2208.08049, 2022. 2\",\n            \"extracted_paper_title\": \"Pdrf: Progressively deblurring radiance field for fast and robust scene reconstruction from blurry images\",\n            \"fetched_paper_id\": \"c900f690fdab5d17b0253d4362e7f1a7d9d2d495\",\n            \"fetched_paper_title\": \"PDRF: Progressively Deblurring Radiance Field for Fast and Robust Scene Reconstruction from Blurry Images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Cheng Peng, Yutao Tang, Yifan Zhou, Nengyu Wang, Xijun Liu, Deming Li, and Rama Chellappa. Bags: Blur agnostic gaussian splatting through multi-scale kernel modeling. In European Conference on Computer Vision, pages 293\\u2013310. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"Bags: Blur agnostic gaussian splatting through multi-scale kernel modeling\",\n            \"fetched_paper_id\": \"23d4b38f0ff080e943594882398796ffd3126985\",\n            \"fetched_paper_title\": \"BAGS: Blur Agnostic Gaussian Splatting through Multi-Scale Kernel Modeling\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Antoni Rosinol, John J Leonard, and Luca Carlone. Nerf-slam: Real-time dense monocular slam with neural radiance \\ufb01elds. In 2023 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS), pages 3437\\u20133444. IEEE, 2023. 1\",\n            \"extracted_paper_title\": \"Nerf-slam: Real-time dense monocular slam with neural radiance fields\",\n            \"fetched_paper_id\": \"1fbe23a0d6e45b0bd7861ea33b7e51c27b1a8ef4\",\n            \"fetched_paper_title\": \"NeRF-SLAM: Real-Time Dense Monocular SLAM with Neural Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Johannes Lutz Sch\\u00a8onberger and Jan-Michael Frahm. Structure-from-motion revisited. In Conference on Computer Vision and Pattern Recognition (CVPR), 2016. 4\",\n            \"extracted_paper_title\": \"Structure-from-motion revisited\",\n            \"fetched_paper_id\": \"e7d0c37f4f3589a3b787f39e8307704da5ed8d6c\",\n            \"fetched_paper_title\": \"Structure-from-Motion Revisited\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Johannes Lutz Sch\\u00a8onberger, Enliang Zheng, Marc Pollefeys, and Jan-Michael Frahm. Pixelwise view selection for unstructured multi-view stereo. In European Conference on Computer Vision (ECCV), 2016. 4\",\n            \"extracted_paper_title\": \"Pixelwise view selection for unstructured multi-view stereo\",\n            \"fetched_paper_id\": \"d277218265a177a8f2cdce7f88b4152fc1eda66c\",\n            \"fetched_paper_title\": \"Pixelwise View Selection for Unstructured Multi-View Stereo\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Otto Seiskari, Jerry Ylilammi, Valtteri Kaatrasalo, Pekka Rantalankila, Matias Turkulainen, Juho Kannala, Esa Rahtu, and Arno Solin. Gaussian splatting on the move: Blur and rolling shutter compensation for natural camera motion. In European Conference on Computer Vision, pages 160\\u2013177. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"Gaussian splatting on the move: Blur and rolling shutter compensation for natural camera motion.\",\n            \"fetched_paper_id\": \"eed0bb5e4738f1fc7620f181e68dae2552454a05\",\n            \"fetched_paper_title\": \"Gaussian Splatting on the Move: Blur and Rolling Shutter Compensation for Natural Camera Motion\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Joan Sola, Jeremie Deray, and Dinesh Atchuthan. A micro lie theory for state estimation in robotics. arXiv preprint arXiv:1812.01537, 2018. 4\",\n            \"extracted_paper_title\": \"A micro lie theory for state estimation in robotics\",\n            \"fetched_paper_id\": \"3a75252bab18250b8de8be28ec376db6cfc04084\",\n            \"fetched_paper_title\": \"A micro Lie theory for state estimation in robotics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Edgar Sucar, Shikun Liu, Joseph Ortiz, and Andrew Davison. iMAP: Implicit mapping and positioning in real-time. In Proceedings of the International Conference on Computer Vision (ICCV), 2021. 1\",\n            \"extracted_paper_title\": \"iMAP: Implicit mapping and positioning in real-time.\",\n            \"fetched_paper_id\": \"3629e0ba2ffb8406d8aba880685f06aa35e3cd7f\",\n            \"fetched_paper_title\": \"iMAP: Implicit Mapping and Positioning in Real-Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Huiqiang Sun, Xingyi Li, Liao Shen, Xinyi Ye, Ke Xian, and Zhiguo Cao. Dyblurf: Dynamic neural radiance \\ufb01elds from blurry monocular video. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 7517\\u20137527, 2024. 1, 3, 6\",\n            \"extracted_paper_title\": \"Dyblurf: Dynamic neural radiance fields from blurry monocular video\",\n            \"fetched_paper_id\": \"8145b552dd1afd26b251af88383c298f63093f3d\",\n            \"fetched_paper_title\": \"DyBluRF: Dynamic Neural Radiance Fields from Blurry Monocular Video\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Fu-Jen Tsai, Yan-Tsung Peng, Yen-Yu Lin, Chung-Chi Tsai, and Chia-Wen Lin. Stripformer: Strip transformer for fast image deblurring. In European conference on computer vision, pages 146\\u2013162. Springer, 2022. 2\",\n            \"extracted_paper_title\": \"Stripformer: Strip transformer for fast image deblurring\",\n            \"fetched_paper_id\": \"aab4ed4ee6bad74d4c07fa002da476504c62fda9\",\n            \"fetched_paper_title\": \"Stripformer: Strip Transformer for Fast Image Deblurring\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Can Wang, Menglei Chai, Mingming He, Dongdong Chen, and Jing Liao. Clip-nerf: Text-and-image driven manipulation of neural radiance \\ufb01elds. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 3835\\u20133844, 2022. 1\",\n            \"extracted_paper_title\": \"Clip-nerf: Text-and-image driven manipulation of neural radiance fields\",\n            \"fetched_paper_id\": \"0483be6c3ec6cd41ffe248f86effc7468d3ac7be\",\n            \"fetched_paper_title\": \"CLIP-NeRF: Text-and-Image Driven Manipulation of Neural Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chen Wang, Dasong Gao, Kuan Xu, Junyi Geng, Yaoyu Hu, Yuheng Qiu, Bowen Li, Fan Yang, Brady Moon, Abhinav Pandey, Aryan, Jiahe Xu, Tianhao Wu, Haonan He, Daning Huang, Zhongqiang Ren, Shibo Zhao, Taimeng Fu, Pranay Reddy, Xiao Lin, Wenshan Wang, Jingnan Shi, Rajat Talak, Kun Cao, Yi Du, Han Wang, Huai Yu, Shanzhao Wang, Siyu Chen, Ananth Kashyap, Rohan Bandaru, Karthik Dantu, Jiajun Wu, Lihua Xie, Luca Carlone, Marco Hutter, and Sebastian Scherer. PyPose: A library for robot learning with physics-based optimization. In IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2023. 4\",\n            \"extracted_paper_title\": \"PyPose: A library for robot learning with physics-based optimization.\",\n            \"fetched_paper_id\": \"8b2da94382b2ff9d422cad5dd8ffa5782e2cbd18\",\n            \"fetched_paper_title\": \"PyPose: A Library for Robot Learning with Physics-based Optimization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Junjie Wang, Jiemin Fang, Xiaopeng Zhang, Lingxi Xie, and Qi Tian. Gaussianeditor: Editing 3d gaussians delicately with text instructions. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 20902\\u201320911, 2024. 1\",\n            \"extracted_paper_title\": \"Gaussian Editor: Editing 3D Gaussians delicately with text instructions\",\n            \"fetched_paper_id\": \"ab342050a0eb26fb4a0af5fff028e1a8ca54f575\",\n            \"fetched_paper_title\": \"GaussianEditor: Editing 3D Gaussians Delicately with Text Instructions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Peng Wang, Lingzhe Zhao, Ruijie Ma, and Peidong Liu. BAD-NeRF: Bundle Adjusted Deblur Neural Radiance Fields. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 4170\\u20134179, 2023. 1, 2, 3\",\n            \"extracted_paper_title\": \"BAD-NeRF: Bundle Adjusted Deblur Neural Radiance Fields\",\n            \"fetched_paper_id\": \"314f1d10c228b32a3d64550f20841786c7f30c40\",\n            \"fetched_paper_title\": \"BAD-NeRF: Bundle Adjusted Deblur Neural Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Qianqian Wang, Vickie Ye, Hang Gao, Jake Austin, Zhengqi Li, and Angjoo Kanazawa. Shape of motion: 4d reconstruction from a single video. arXiv preprint arXiv:2407.13764, 2024. 2\",\n            \"extracted_paper_title\": \"Shape of motion: 4d reconstruction from a single video\",\n            \"fetched_paper_id\": \"b60cd86fef2ab6cfda33c9a5c7a7c75b7e8b035b\",\n            \"fetched_paper_title\": \"Shape of Motion: 4D Reconstruction from a Single Video\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chen Wenbo and Liu Ligang. Deblur-gs: 3d gaussian splatting from camera motion blurred images. Proc. ACM Comput. Graph. Interact. Tech. (Proceedings of I3D 2024), 7(1), 2024. 1, 2, 3\",\n            \"extracted_paper_title\": \"Deblur-gs: 3d gaussian splatting from camera motion blurred images.\",\n            \"fetched_paper_id\": \"663f90827c594fbd8040951c68409ac59bcf696a\",\n            \"fetched_paper_title\": \"Deblur-GS: 3D Gaussian Splatting from Camera Motion Blurred Images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jinyu Yang, Mingqi Gao, Zhe Li, Shang Gao, Fangjing Wang, and Feng Zheng. Track anything: Segment anything meets videos, 2023. 4\",\n            \"extracted_paper_title\": \"Track anything: Segment anything meets videos\",\n            \"fetched_paper_id\": \"c0cf0971c153a84bbf0729d289b3b960969bb5dd\",\n            \"fetched_paper_title\": \"Track Anything: Segment Anything Meets Videos\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiaogang Xu, Jiashi Feng, and Hengshuang Zhao. Depth anything v2. arXiv:2406.09414, 2024. 5\",\n            \"extracted_paper_title\": \"Depth Anything V2\",\n            \"fetched_paper_id\": \"2091dcd7c80bc27ba7d1fdc0087748bb1e293e2f\",\n            \"fetched_paper_title\": \"Depth Anything V2\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ziyi Yang, Xinyu Gao, Wen Zhou, Shaohui Jiao, Yuqing Zhang, and Xiaogang Jin. Deformable 3d gaussians for high-\\ufb01delity monocular dynamic scene reconstruction. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 20331\\u201320341, 2024. 1, 2, 6\",\n            \"extracted_paper_title\": \"Deformable 3D Gaussians for high-fidelity monocular dynamic scene reconstruction\",\n            \"fetched_paper_id\": \"1ce81d64eefe5915c6ef9719915efa5f4079a6c1\",\n            \"fetched_paper_title\": \"Deformable 3D Gaussians for High-Fidelity Monocular Dynamic Scene Reconstruction\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Zeyu Yang, Hongye Yang, Zijie Pan, and Li Zhang. Real-time photorealistic dynamic scene representation and rendering with 4d gaussian splatting. In International Conference on Learning Representations (ICLR), 2024. 1, 2, 6\",\n            \"extracted_paper_title\": \"Real-time photorealistic dynamic scene representation and rendering with 4d gaussian splatting\",\n            \"fetched_paper_id\": \"716754c9f228a4f63d8e6edb81e200d6f4ea0c3a\",\n            \"fetched_paper_title\": \"Real-time Photorealistic Dynamic Scene Representation and Rendering with 4D Gaussian Splatting\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yu Yin, Kamran Ghasedi, HsiangTao Wu, Jiaolong Yang, Xin Tong, and Yun Fu. Ner\\ufb01nvertor: High \\ufb01delity nerf-gan inversion for single-shot real image animation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 8539\\u20138548, 2023. 1\",\n            \"extracted_paper_title\": \"NerfInvertor: High fidelity nerf-gan inversion for single-shot real image animation\",\n            \"fetched_paper_id\": \"e0f9f3d1c68c799aa6031c5aedb42766c4ae3c59\",\n            \"fetched_paper_title\": \"NeRFInvertor: High Fidelity NeRF-GAN Inversion for Single-Shot Real Image Animation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Syed Waqas Zamir, Aditya Arora, Salman Khan, Munawar Hayat, Fahad Shahbaz Khan, Ming-Hsuan Yang, and Ling Shao. Multi-stage progressive image restoration. In CVPR, 2021. 6\",\n            \"extracted_paper_title\": \"Multi-stage progressive image restoration\",\n            \"fetched_paper_id\": \"92d50602db5746f03b91562e2cc8a98bec584e9b\",\n            \"fetched_paper_title\": \"Multi-Stage Progressive Image Restoration\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Syed Waqas Zamir, Aditya Arora, Salman Khan, Munawar Hayat, Fahad Shahbaz Khan, and Ming-Hsuan Yang. Restormer: Ef\\ufb01cient transformer for high-resolution image restoration. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 5728\\u20135739, 2022. 2\",\n            \"extracted_paper_title\": \"Restormer: Efficient transformer for high-resolution image restoration\",\n            \"fetched_paper_id\": \"1e88d5afe19aea324d33541f60a90b7036894c32\",\n            \"fetched_paper_title\": \"Restormer: Efficient Transformer for High-Resolution Image Restoration\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zitong Zhan, Xiangfu Li, Qihang Li, Haonan He, Abhinav Pandey, Haitao Xiao, Yangmengfei Xu, Xiangyu Chen, Kuan Xu, Kun Cao, et al. Pypose v0. 6: The imperative programming interface for robotics. arXiv preprint arXiv:2309.13035, 2023. 4\",\n            \"extracted_paper_title\": \"Pypose v0.6: The imperative programming interface for robotics\",\n            \"fetched_paper_id\": \"279ce0d158e5bc86830436a5f0759a859a65fe6b\",\n            \"fetched_paper_title\": \"PyPose v0.6: The Imperative Programming Interface for Robotics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hongguang Zhang, Yuchao Dai, Hongdong Li, and Piotr Koniusz. Deep stacked hierarchical multi-patch network for image deblurring. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 5978\\u20135986, 2019. 2\",\n            \"extracted_paper_title\": \"Deep stacked hierarchical multi-patch network for image deblurring\",\n            \"fetched_paper_id\": \"a5c1156c2c8185df4581cf139df05aab66b3bb22\",\n            \"fetched_paper_title\": \"Deep Stacked Hierarchical Multi-Patch Network for Image Deblurring\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Lingzhe Zhao, Peng Wang, and Peidong Liu. Bad-gaussians: Bundle adjusted deblur gaussian splatting. In European Conference on Computer Vision (ECCV), 2024. 1, 2, 3, 4\",\n            \"extracted_paper_title\": \"Bad-gaussians: Bundle adjusted deblur gaussian splatting\",\n            \"fetched_paper_id\": \"c4733fe6eec6e51624ca1412ae6dd263fc470306\",\n            \"fetched_paper_title\": \"BAD-Gaussians: Bundle Adjusted Deblur Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ruijie Zhu, Yanzhe Liang, Hanzhi Chang, Jiacheng Deng, Jiahao Lu, Wenfei Yang, Tianzhu Zhang, and Yongdong Zhang. Motiongs: Exploring explicit motion guidance for deformable 3d gaussian splatting. Advances in Neural Information Processing Systems, 37:101790\\u2013101817, 2024. 1, 2\",\n            \"extracted_paper_title\": \"MotionGS: Exploring explicit motion guidance for deformable 3D Gaussian splatting\",\n            \"fetched_paper_id\": \"38f4f1da2dda947f49b47a30e29ce1b0db411149\",\n            \"fetched_paper_title\": \"MotionGS: Exploring Explicit Motion Guidance for Deformable 3D Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zihan Zhu, Songyou Peng, Viktor Larsson, Weiwei Xu, Hujun Bao, Zhaopeng Cui, Martin R. Oswald, and Marc Pollefeys. Nice-slam: Neural implicit scalable encoding for slam. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2022. 1\",\n            \"extracted_paper_title\": \"Nice-slam: Neural implicit scalable encoding for slam\",\n            \"fetched_paper_id\": \"18ba8f0efb362e08903e8e35b062e2c69126e371\",\n            \"fetched_paper_title\": \"NICE-SLAM: Neural Implicit Scalable Encoding for SLAM\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"c0cf0971c153a84bbf0729d289b3b960969bb5dd\",\n        \"ec7e33597160535af56f046b8d6914ff49c66e1a\",\n        \"7bc683fe1911f4987b845f7d2165d5888f0a50e9\",\n        \"fc98d0e981f193b159d8fab5343f094cf06dcf20\",\n        \"2091dcd7c80bc27ba7d1fdc0087748bb1e293e2f\",\n        \"1ce81d64eefe5915c6ef9719915efa5f4079a6c1\",\n        \"3629e0ba2ffb8406d8aba880685f06aa35e3cd7f\",\n        \"eed0bb5e4738f1fc7620f181e68dae2552454a05\",\n        \"29ea8f3648264f4fa8dec627fc8726131ea72cdc\",\n        \"663f90827c594fbd8040951c68409ac59bcf696a\",\n        \"04068ad34cf4e3b7c0731d294eb8decfab3f51fe\",\n        \"ab342050a0eb26fb4a0af5fff028e1a8ca54f575\",\n        \"aab4ed4ee6bad74d4c07fa002da476504c62fda9\",\n        \"a6c92dd8c537bc4a0c91cef8558e4a4f25416091\",\n        \"e3d06054af531ee2f42270d43100b309c28546ef\",\n        \"18ba8f0efb362e08903e8e35b062e2c69126e371\",\n        \"db8bed00c7757e067f36e8e7dfaef2f4ab8ffac0\",\n        \"1e88d5afe19aea324d33541f60a90b7036894c32\",\n        \"a082a0df25b7166706e81ade83bc917dd7367edc\",\n        \"a5c1156c2c8185df4581cf139df05aab66b3bb22\",\n        \"c900f690fdab5d17b0253d4362e7f1a7d9d2d495\",\n        \"2f16a2b6021b22badd0d68feb559918c08ca554b\",\n        \"9184da852d02f1a15bc465d9cceae613b0a03e51\",\n        \"8ba2c82fe675ede1d5c12fc4f97cf8ca3ebf1ca3\",\n        \"09179234dec5fc6dea4a8b02a9d98eef712d45e9\",\n        \"8145b552dd1afd26b251af88383c298f63093f3d\",\n        \"eec8febf89785f00b894bb8d69f44118b86884e2\",\n        \"ea2feb30a758519672e876bd1ff6f05b859e308e\",\n        \"26c22380282a00166273038bc5ba785d845d61ad\",\n        \"98a7b067a2319c57e129ab2d6f19a67f170099aa\",\n        \"1fbe23a0d6e45b0bd7861ea33b7e51c27b1a8ef4\",\n        \"81c1dc00b32d12edfab00656593f5db56cfa79e0\",\n        \"e7d0c37f4f3589a3b787f39e8307704da5ed8d6c\",\n        \"7a66adab7c5f2a2f6e4cc5223fbdd6229e295fa8\",\n        \"c8523d3ddc8cc66a3e24d3d3bb6a170050dbaec2\",\n        \"e0f9f3d1c68c799aa6031c5aedb42766c4ae3c59\",\n        \"38f4f1da2dda947f49b47a30e29ce1b0db411149\",\n        \"65902a95d5af409938b28b69808e916f8ef9e0bd\",\n        \"c4733fe6eec6e51624ca1412ae6dd263fc470306\",\n        \"fc54a8f8272688851fdd5dfbf9f1deacbe39eb30\",\n        \"23d4b38f0ff080e943594882398796ffd3126985\",\n        \"2cc1d857e86d5152ba7fe6a8355c2a0150cc280a\",\n        \"92d50602db5746f03b91562e2cc8a98bec584e9b\",\n        \"716754c9f228a4f63d8e6edb81e200d6f4ea0c3a\",\n        \"3a75252bab18250b8de8be28ec376db6cfc04084\",\n        \"a9e5f91a93da0ab96a1f2d54627e2962ae15c083\",\n        \"bbc6531afdfe41fe8664002a80d9d73a07a080d2\",\n        \"279ce0d158e5bc86830436a5f0759a859a65fe6b\",\n        \"15588dbda31f40f9b6d9d22be44a98dd873ada73\",\n        \"b60cd86fef2ab6cfda33c9a5c7a7c75b7e8b035b\",\n        \"314f1d10c228b32a3d64550f20841786c7f30c40\",\n        \"7934fe27d417627e8cfec8c130de5242fec8c742\",\n        \"1f463bfd63449d17d1547cfe55e9610b49ac37f5\",\n        \"d277218265a177a8f2cdce7f88b4152fc1eda66c\",\n        \"8b2da94382b2ff9d422cad5dd8ffa5782e2cbd18\",\n        \"dc32021df1c3692601fa2d4747e41f73005eda4f\",\n        \"0483be6c3ec6cd41ffe248f86effc7468d3ac7be\"\n    ],\n    \"all_ids_count\": 57,\n    \"p0_ids\": [\n        \"e3d06054af531ee2f42270d43100b309c28546ef\",\n        \"2091dcd7c80bc27ba7d1fdc0087748bb1e293e2f\",\n        \"fc98d0e981f193b159d8fab5343f094cf06dcf20\",\n        \"d277218265a177a8f2cdce7f88b4152fc1eda66c\",\n        \"09179234dec5fc6dea4a8b02a9d98eef712d45e9\",\n        \"8145b552dd1afd26b251af88383c298f63093f3d\",\n        \"c0cf0971c153a84bbf0729d289b3b960969bb5dd\",\n        \"716754c9f228a4f63d8e6edb81e200d6f4ea0c3a\",\n        \"1ce81d64eefe5915c6ef9719915efa5f4079a6c1\",\n        \"eec8febf89785f00b894bb8d69f44118b86884e2\",\n        \"04068ad34cf4e3b7c0731d294eb8decfab3f51fe\",\n        \"92d50602db5746f03b91562e2cc8a98bec584e9b\",\n        \"2cc1d857e86d5152ba7fe6a8355c2a0150cc280a\",\n        \"e7d0c37f4f3589a3b787f39e8307704da5ed8d6c\"\n    ],\n    \"p0_ids_count\": 14,\n    \"p1_ids\": [\n        \"7934fe27d417627e8cfec8c130de5242fec8c742\",\n        \"8ba2c82fe675ede1d5c12fc4f97cf8ca3ebf1ca3\",\n        \"98a7b067a2319c57e129ab2d6f19a67f170099aa\",\n        \"ec7e33597160535af56f046b8d6914ff49c66e1a\",\n        \"ab342050a0eb26fb4a0af5fff028e1a8ca54f575\",\n        \"db8bed00c7757e067f36e8e7dfaef2f4ab8ffac0\",\n        \"ea2feb30a758519672e876bd1ff6f05b859e308e\",\n        \"0483be6c3ec6cd41ffe248f86effc7468d3ac7be\",\n        \"3629e0ba2ffb8406d8aba880685f06aa35e3cd7f\",\n        \"7a66adab7c5f2a2f6e4cc5223fbdd6229e295fa8\",\n        \"8b2da94382b2ff9d422cad5dd8ffa5782e2cbd18\",\n        \"eed0bb5e4738f1fc7620f181e68dae2552454a05\",\n        \"663f90827c594fbd8040951c68409ac59bcf696a\",\n        \"1e88d5afe19aea324d33541f60a90b7036894c32\",\n        \"65902a95d5af409938b28b69808e916f8ef9e0bd\",\n        \"2f16a2b6021b22badd0d68feb559918c08ca554b\",\n        \"9184da852d02f1a15bc465d9cceae613b0a03e51\",\n        \"279ce0d158e5bc86830436a5f0759a859a65fe6b\",\n        \"e0f9f3d1c68c799aa6031c5aedb42766c4ae3c59\",\n        \"aab4ed4ee6bad74d4c07fa002da476504c62fda9\",\n        \"a5c1156c2c8185df4581cf139df05aab66b3bb22\",\n        \"15588dbda31f40f9b6d9d22be44a98dd873ada73\",\n        \"c900f690fdab5d17b0253d4362e7f1a7d9d2d495\",\n        \"a6c92dd8c537bc4a0c91cef8558e4a4f25416091\",\n        \"a9e5f91a93da0ab96a1f2d54627e2962ae15c083\",\n        \"a082a0df25b7166706e81ade83bc917dd7367edc\",\n        \"1fbe23a0d6e45b0bd7861ea33b7e51c27b1a8ef4\",\n        \"c4733fe6eec6e51624ca1412ae6dd263fc470306\",\n        \"fc54a8f8272688851fdd5dfbf9f1deacbe39eb30\",\n        \"7bc683fe1911f4987b845f7d2165d5888f0a50e9\",\n        \"1f463bfd63449d17d1547cfe55e9610b49ac37f5\",\n        \"bbc6531afdfe41fe8664002a80d9d73a07a080d2\",\n        \"3a75252bab18250b8de8be28ec376db6cfc04084\",\n        \"b60cd86fef2ab6cfda33c9a5c7a7c75b7e8b035b\",\n        \"26c22380282a00166273038bc5ba785d845d61ad\",\n        \"c8523d3ddc8cc66a3e24d3d3bb6a170050dbaec2\",\n        \"29ea8f3648264f4fa8dec627fc8726131ea72cdc\",\n        \"314f1d10c228b32a3d64550f20841786c7f30c40\",\n        \"38f4f1da2dda947f49b47a30e29ce1b0db411149\",\n        \"18ba8f0efb362e08903e8e35b062e2c69126e371\",\n        \"dc32021df1c3692601fa2d4747e41f73005eda4f\",\n        \"81c1dc00b32d12edfab00656593f5db56cfa79e0\",\n        \"23d4b38f0ff080e943594882398796ffd3126985\"\n    ],\n    \"p1_ids_count\": 43\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gemini-3.1-pro-preview.json",
+   "size": 40584,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Jeongmin Bae, Seoha Kim, Youngsik Yun, Hahyun Lee, Gun Bang, and Youngjung Uh. Per-gaussian embedding-based deformation for deformable 3d gaussian splatting. In Euro-pean Conference on Computer Vision (ECCV), 2024. 1, 2\",\n            \"extracted_paper_title\": \"Per-gaussian embedding-based deformation for deformable 3d gaussian splatting\",\n            \"fetched_paper_id\": \"db8bed00c7757e067f36e8e7dfaef2f4ab8ffac0\",\n            \"fetched_paper_title\": \"Per-Gaussian Embedding-Based Deformation for Deformable 3D Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Minh-Quan Viet Bui, Jongmin Park, Jihyong Oh, and Munchurl Kim. Dyblurf: Dynamic deblurring neural ra-diance \\ufb01elds for blurry monocular video. arXiv preprint arXiv:2312.13528, 2023. 1, 3, 5, 6\",\n            \"extracted_paper_title\": \"Dyblurf: Dynamic deblurring neural radiance fields for blurry monocular video\",\n            \"fetched_paper_id\": \"8145b552dd1afd26b251af88383c298f63093f3d\",\n            \"fetched_paper_title\": \"DyBluRF: Dynamic Neural Radiance Fields from Blurry Monocular Video\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yiwen Chen, Zilong Chen, Chi Zhang, Feng Wang, Xi-aofeng Yang, Yikai Wang, Zhongang Cai, Lei Yang, Huaping Liu, and Guosheng Lin. Gaussianeditor: Swift and control-lable 3d editing with gaussian splatting. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 21476\\u201321485, 2024. 1\",\n            \"extracted_paper_title\": \"Gaussian Editor: Swift and controllable 3D editing with gaussian splatting.\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zheng Chen, Yulun Zhang, Ding Liu, Jinjin Gu, Linghe Kong, Xin Yuan, et al. Hierarchical integration diffusion model for realistic image deblurring. Advances in neural information processing systems, 36, 2024. 2\",\n            \"extracted_paper_title\": \"Hierarchical integration diffusion model for realistic image deblurring\",\n            \"fetched_paper_id\": \"ea2feb30a758519672e876bd1ff6f05b859e308e\",\n            \"fetched_paper_title\": \"Hierarchical Integration Diffusion Model for Realistic Image Deblurring\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Franc\\u00b8ois Darmon, Lorenzo Porzi, Samuel Rota-Bul`o, and Peter Kontschieder. Robust gaussian splatting. arXiv preprint arXiv:2404.04211, 2024. 2\",\n            \"extracted_paper_title\": \"Robust gaussian splatting\",\n            \"fetched_paper_id\": \"a9e5f91a93da0ab96a1f2d54627e2962ae15c083\",\n            \"fetched_paper_title\": \"VRSplat: Fast and Robust Gaussian Splatting for Virtual Reality\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Carl Doersch, Yi Yang, Mel Vecerik, Dilara Gokay, Ankush Gupta, Yusuf Aytar, Joao Carreira, and Andrew Zisserman. TAPIR: Tracking any point with per-frame initialization and temporal re\\ufb01nement. In Proceedings of the IEEE/CVF In-ternational Conference on Computer Vision, pages 10061\\u201310072, 2023. 5\",\n            \"extracted_paper_title\": \"TAPIR: Tracking any point with per-frame initialization and temporal refinement.\",\n            \"fetched_paper_id\": \"fc98d0e981f193b159d8fab5343f094cf06dcf20\",\n            \"fetched_paper_title\": \"TAPIR: Tracking Any Point with per-frame Initialization and temporal Refinement\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Carl Doersch, Pauline Luc, Yi Yang, Dilara Gokay, Skanda Koppula, Ankush Gupta, Joseph Heyward, Ignacio Rocco, Ross Goroshin, Jo\\u02dcao Carreira, and Andrew Zisserman. Boot-sTAP: Bootstrapped training for tracking-any-point. Asian Conference on Computer Vision, 2024. 5\",\n            \"extracted_paper_title\": \"BootsTAP: Bootstrapped training for tracking-any-point\",\n            \"fetched_paper_id\": \"04068ad34cf4e3b7c0731d294eb8decfab3f51fe\",\n            \"fetched_paper_title\": \"BootsTAP: Bootstrapped Training for Tracking-Any-Point\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yuanxing Duan, Fangyin Wei, Qiyu Dai, Yuhang He, Wen-zheng Chen, and Baoquan Chen. 4d-rotor gaussian splatting: towards ef\\ufb01cient novel view synthesis for dynamic scenes. In ACM SIGGRAPH 2024 Conference Papers, pages 1\\u201311, 2024. 1, 2\",\n            \"extracted_paper_title\": \"4d-rotor gaussian splatting: towards efficient novel view synthesis for dynamic scenes\",\n            \"fetched_paper_id\": \"fc54a8f8272688851fdd5dfbf9f1deacbe39eb30\",\n            \"fetched_paper_title\": \"4D-Rotor Gaussian Splatting: Towards Efficient Novel View Synthesis for Dynamic Scenes\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hang Gao, Ruilong Li, Shubham Tulsiani, Bryan Russell, and Angjoo Kanazawa. Dynamic novel-view synthesis: A reality check. In NeurIPS, 2022. 5, 6\",\n            \"extracted_paper_title\": \"Dynamic novel-view synthesis: A reality check\",\n            \"fetched_paper_id\": \"09179234dec5fc6dea4a8b02a9d98eef712d45e9\",\n            \"fetched_paper_title\": \"Monocular Dynamic View Synthesis: A Reality Check\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ayaan Haque, Matthew Tancik, Alexei A Efros, Aleksander Holynski, and Angjoo Kanazawa. Instruct-nerf2nerf: Edit-ing 3d scenes with instructions. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 19740\\u201319750, 2023. 1\",\n            \"extracted_paper_title\": \"Instruct-nerf2nerf: Editing 3d scenes with instructions\",\n            \"fetched_paper_id\": \"26c22380282a00166273038bc5ba785d845d61ad\",\n            \"fetched_paper_title\": \"Instruct-NeRF2NeRF: Editing 3D Scenes with Instructions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhewei Huang, Tianyuan Zhang, Wen Heng, Boxin Shi, and Shuchang Zhou. Real-time intermediate \\ufb02ow estimation for video frame interpolation. In Proceedings of the European Conference on Computer Vision (ECCV), 2022. 5\",\n            \"extracted_paper_title\": \"Real-time intermediate flow estimation for video frame interpolation\",\n            \"fetched_paper_id\": \"eec8febf89785f00b894bb8d69f44118b86884e2\",\n            \"fetched_paper_title\": \"Real-Time Intermediate Flow Estimation for Video Frame Interpolation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Kai Katsumata, Duc Minh Vo, and Hideki Nakayama. A compact dynamic 3d gaussian representation for real-time dynamic view synthesis. In European Conference on Com-puter Vision, pages 394\\u2013412. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"A compact dynamic 3d gaussian representation for real-time dynamic view synthesis\",\n            \"fetched_paper_id\": \"c8523d3ddc8cc66a3e24d3d3bb6a170050dbaec2\",\n            \"fetched_paper_title\": \"A Compact Dynamic 3D Gaussian Representation for Real-Time Dynamic View Synthesis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Junjie Ke, Qifei Wang, Yilin Wang, Peyman Milanfar, and Feng Yang. Musiq: Multi-scale image quality transformer. In Proceedings of the IEEE/CVF international conference on computer vision, pages 5148\\u20135157, 2021. 6\",\n            \"extracted_paper_title\": \"Musiq: Multi-scale image quality transformer\",\n            \"fetched_paper_id\": \"e3d06054af531ee2f42270d43100b309c28546ef\",\n            \"fetched_paper_title\": \"MUSIQ: Multi-scale Image Quality Transformer\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Nikhil Keetha, Jay Karhade, Krishna Murthy Jatavallabhula, Gengshan Yang, Sebastian Scherer, Deva Ramanan, and Jonathon Luiten. Splatam: Splat, track & map 3d gaussians for dense rgb-d slam. In Proceedings of the IEEE/CVF Con-ference on Computer Vision and Pattern Recognition, 2024. 1\",\n            \"extracted_paper_title\": \"SplaTAM: Splat, Track & Map 3D Gaussians for Dense RGB-D SLAM\",\n            \"fetched_paper_id\": \"a6c92dd8c537bc4a0c91cef8558e4a4f25416091\",\n            \"fetched_paper_title\": \"SplaTAM: Splat, Track & Map 3D Gaussians for Dense RGB-D SLAM\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Bernhard Kerbl, Georgios Kopanas, Thomas Leimk\\u00a8uhler, and George Drettakis. 3d gaussian splatting for real-time radiance \\ufb01eld rendering. ACM Transactions on Graphics, 42 (4), 2023. 1, 2, 3\",\n            \"extracted_paper_title\": \"3D Gaussian Splatting for Real-Time Radiance Field Rendering\",\n            \"fetched_paper_id\": \"2cc1d857e86d5152ba7fe6a8355c2a0150cc280a\",\n            \"fetched_paper_title\": \"3D Gaussian Splatting for Real-Time Radiance Field Rendering\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Agelos Kratimenos, Jiahui Lei, and Kostas Daniilidis. Dynmf: Neural motion factorization for real-time dynamic view synthesis with 3d gaussian splatting. In European Con-ference on Computer Vision, pages 252\\u2013269. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"Dynmf: Neural motion factorization for real-time dynamic view synthesis with 3d gaussian splatting\",\n            \"fetched_paper_id\": \"a082a0df25b7166706e81ade83bc917dd7367edc\",\n            \"fetched_paper_title\": \"DynMF: Neural Motion Factorization for Real-time Dynamic View Synthesis with 3D Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Orest Kupyn, Volodymyr Budzan, Mykola Mykhailych, Dmytro Mishkin, and Ji\\u02c7r\\u00b4\\u0131 Matas. Deblurgan: Blind motion deblurring using conditional adversarial networks. In Pro-ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 8183\\u20138192, 2018. 2\",\n            \"extracted_paper_title\": \"Deblurgan: Blind motion deblurring using conditional adversarial networks\",\n            \"fetched_paper_id\": \"9184da852d02f1a15bc465d9cceae613b0a03e51\",\n            \"fetched_paper_title\": \"DeblurGAN: Blind Motion Deblurring Using Conditional Adversarial Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Orest Kupyn, Tetiana Martyniuk, Junru Wu, and Zhangyang Wang. Deblurgan-v2: Deblurring (orders-of-magnitude) faster and better. In Proceedings of the IEEE/CVF Interna-tional Conference on Computer Vision (ICCV), pages 8878\\u20138887, 2019. 2\",\n            \"extracted_paper_title\": \"Deblurgan-v2: Deblurring (orders-of-magnitude) faster and better.\",\n            \"fetched_paper_id\": \"81c1dc00b32d12edfab00656593f5db56cfa79e0\",\n            \"fetched_paper_title\": \"DeblurGAN-v2: Deblurring (Orders-of-Magnitude) Faster and Better\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Byeonghyeon Lee, Howoong Lee, Xiangyu Sun, Usman Ali, and Eunbyung Park. Deblurring 3d gaussian splatting. In European Conference on Computer Vision, pages 127\\u2013143. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"Deblurring 3D Gaussian Splatting\",\n            \"fetched_paper_id\": \"65902a95d5af409938b28b69808e916f8ef9e0bd\",\n            \"fetched_paper_title\": \"Deblurring 3D Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dogyoon Lee, Minhyeok Lee, Chajin Shin, and Sangyoun Lee. Dp-nerf: Deblurred neural radiance \\ufb01eld with physical scene priors. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 12386\\u201312396, 2023. 2\",\n            \"extracted_paper_title\": \"Dp-nerf: Deblurred neural radiance field with physical scene priors\",\n            \"fetched_paper_id\": \"dc32021df1c3692601fa2d4747e41f73005eda4f\",\n            \"fetched_paper_title\": \"DP-NeRF: Deblurred Neural Radiance Field with Physical Scene Priors\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dongwoo Lee, Jeongtaek Oh, Jaesung Rim, Sunghyun Cho, and Kyoung Mu Lee. Exblurf: Ef\\ufb01cient radiance \\ufb01elds for extreme motion blurred images. 2023. 1\",\n            \"extracted_paper_title\": \"Exblurf: Efficient radiance fields for extreme motion blurred images\",\n            \"fetched_paper_id\": \"1f463bfd63449d17d1547cfe55e9610b49ac37f5\",\n            \"fetched_paper_title\": \"ExBluRF: Efficient Radiance Fields for Extreme Motion Blurred Images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jungho Lee, Dogyoon Lee, Minhyeok Lee, Donghyung Kim, and Sangyoun Lee. Smurf: Continuous dynam-ics for motion-deblurring radiance \\ufb01elds. arXiv preprint arXiv:2403.07547, 2024. 2\",\n            \"extracted_paper_title\": \"Smurf: Continuous dynamics for motion-deblurring radiance fields\",\n            \"fetched_paper_id\": \"2f16a2b6021b22badd0d68feb559918c08ca554b\",\n            \"fetched_paper_title\": \"SMURF: Continuous Dynamics for Motion-Deblurring Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhan Li, Zhang Chen, Zhong Li, and Yi Xu. Spacetime gaus-sian feature splatting for real-time dynamic view synthesis. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 8508\\u20138520, 2024. 2\",\n            \"extracted_paper_title\": \"Spacetime gaussian feature splatting for real-time dynamic view synthesis\",\n            \"fetched_paper_id\": \"29ea8f3648264f4fa8dec627fc8726131ea72cdc\",\n            \"fetched_paper_title\": \"Spacetime Gaussian Feature Splatting for Real-Time Dynamic View Synthesis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Peidong Liu, Xingxing Zuo, Viktor Larsson, and Marc Polle-feys. Mba-vo: Motion blur aware visual odometry. 2021 IEEE/CVF International Conference on Computer Vision (ICCV), pages 5530\\u20135539, 2021. 5\",\n            \"extracted_paper_title\": \"Mba-vo: Motion blur aware visual odometry\",\n            \"fetched_paper_id\": \"98a7b067a2319c57e129ab2d6f19a67f170099aa\",\n            \"fetched_paper_title\": \"MBA-VO: Motion Blur Aware Visual Odometry\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yiren Lu, Jing Ma, and Yu Yin. View-consistent object re-moval in radiance \\ufb01elds. In Proceedings of the 32nd ACM International Conference on Multimedia, pages 3597\\u20133606, 2024. 1\",\n            \"extracted_paper_title\": \"View-consistent object removal in radiance fields\",\n            \"fetched_paper_id\": \"15588dbda31f40f9b6d9d22be44a98dd873ada73\",\n            \"fetched_paper_title\": \"View-consistent Object Removal in Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhicheng Lu, Xiang Guo, Le Hui, Tianrui Chen, Min Yang, Xiao Tang, Feng Zhu, and Yuchao Dai. 3d geometry-aware deformable gaussian splatting for dynamic view synthesis. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 8900\\u20138910, 2024. 1, 2\",\n            \"extracted_paper_title\": \"3d geometry-aware deformable gaussian splatting for dynamic view synthesis\",\n            \"fetched_paper_id\": \"7a66adab7c5f2a2f6e4cc5223fbdd6229e295fa8\",\n            \"fetched_paper_title\": \"3D Geometry-aware Deformable Gaussian Splatting for Dynamic View Synthesis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jonathon Luiten, Georgios Kopanas, Bastian Leibe, and Deva Ramanan. Dynamic 3d gaussians: Tracking by per-sistent dynamic view synthesis. In 3DV, 2024. 2\",\n            \"extracted_paper_title\": \"Dynamic 3d gaussians: Tracking by persistent dynamic view synthesis.\",\n            \"fetched_paper_id\": \"8ba2c82fe675ede1d5c12fc4f97cf8ca3ebf1ca3\",\n            \"fetched_paper_title\": \"Dynamic 3D Gaussians: Tracking by Persistent Dynamic View Synthesis\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Li Ma, Xiaoyu Li, Jing Liao, Qi Zhang, Xuan Wang, Jue Wang, and Pedro V. Sander. Deblur-nerf: Neural radiance \\ufb01elds from blurry images, 2021. 1, 2, 3, 5\",\n            \"extracted_paper_title\": \"Deblur-nerf: Neural radiance fields from blurry images\",\n            \"fetched_paper_id\": \"7bc683fe1911f4987b845f7d2165d5888f0a50e9\",\n            \"fetched_paper_title\": \"Deblur-NeRF: Neural Radiance Fields from Blurry Images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hidenobu Matsuki, Riku Murai, Paul H. J. Kelly, and An-drew J. Davison. Gaussian Splatting SLAM. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pat-tern Recognition, 2024. 1\",\n            \"extracted_paper_title\": \"Gaussian Splatting SLAM\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik, Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng. Nerf: Representing scenes as neural radiance \\ufb01elds for view syn-thesis. In ECCV, 2020. 1\",\n            \"extracted_paper_title\": \"Nerf: Representing scenes as neural radiance fields for view synthesis\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Keunhong Park, Utkarsh Sinha, Peter Hedman, Jonathan T. Barron, So\\ufb01en Bouaziz, Dan B Goldman, Ricardo Martin-Brualla, and Steven M. Seitz. Hypernerf: A higher-dimensional representation for topologically varying neural radiance \\ufb01elds. ACM Trans. Graph., 40(6), 2021. 5, 6\",\n            \"extracted_paper_title\": \"Hypernerf: A higher-dimensional representation for topologically varying neural radiance fields\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Cheng Peng and Rama Chellappa. Pdrf: Progressively de-blurring radiance \\ufb01eld for fast and robust scene reconstruc-tion from blurry images. arXiv preprint arXiv:2208.08049, 2022. 2\",\n            \"extracted_paper_title\": \"Pdrf: Progressively de-blurring radiance field for fast and robust scene reconstruction from blurry images.\",\n            \"fetched_paper_id\": \"c900f690fdab5d17b0253d4362e7f1a7d9d2d495\",\n            \"fetched_paper_title\": \"PDRF: Progressively Deblurring Radiance Field for Fast and Robust Scene Reconstruction from Blurry Images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Cheng Peng, Yutao Tang, Yifan Zhou, Nengyu Wang, Xijun Liu, Deming Li, and Rama Chellappa. Bags: Blur agnostic gaussian splatting through multi-scale kernel modeling. In European Conference on Computer Vision, pages 293\\u2013310. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"Bags: Blur agnostic gaussian splatting through multi-scale kernel modeling\",\n            \"fetched_paper_id\": \"23d4b38f0ff080e943594882398796ffd3126985\",\n            \"fetched_paper_title\": \"BAGS: Blur Agnostic Gaussian Splatting through Multi-Scale Kernel Modeling\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Antoni Rosinol, John J Leonard, and Luca Carlone. Nerf-slam: Real-time dense monocular slam with neural radiance \\ufb01elds. In 2023 IEEE/RSJ International Conference on Intel-ligent Robots and Systems (IROS), pages 3437\\u20133444. IEEE, 2023. 1\",\n            \"extracted_paper_title\": \"Nerf-slam: Real-time dense monocular slam with neural radiance fields\",\n            \"fetched_paper_id\": \"1fbe23a0d6e45b0bd7861ea33b7e51c27b1a8ef4\",\n            \"fetched_paper_title\": \"NeRF-SLAM: Real-Time Dense Monocular SLAM with Neural Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Johannes Lutz Sch\\u00a8onberger and Jan-Michael Frahm. Structure-from-motion revisited. In Conference on Com-puter Vision and Pattern Recognition (CVPR), 2016. 4\",\n            \"extracted_paper_title\": \"Structure-from-motion revisited\",\n            \"fetched_paper_id\": \"e7d0c37f4f3589a3b787f39e8307704da5ed8d6c\",\n            \"fetched_paper_title\": \"Structure-from-Motion Revisited\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Johannes Lutz Sch\\u00a8onberger, Enliang Zheng, Marc Pollefeys, and Jan-Michael Frahm. Pixelwise view selection for un-structured multi-view stereo. In European Conference on Computer Vision (ECCV), 2016. 4\",\n            \"extracted_paper_title\": \"Pixelwise view selection for unstructured multi-view stereo\",\n            \"fetched_paper_id\": \"d277218265a177a8f2cdce7f88b4152fc1eda66c\",\n            \"fetched_paper_title\": \"Pixelwise View Selection for Unstructured Multi-View Stereo\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Otto Seiskari, Jerry Ylilammi, Valtteri Kaatrasalo, Pekka Rantalankila, Matias Turkulainen, Juho Kannala, Esa Rahtu, and Arno Solin. Gaussian splatting on the move: Blur and rolling shutter compensation for natural camera motion. In European Conference on Computer Vision, pages 160\\u2013177. Springer, 2024. 2\",\n            \"extracted_paper_title\": \"Gaussian splatting on the move: Blur and rolling shutter compensation for natural camera motion.\",\n            \"fetched_paper_id\": \"eed0bb5e4738f1fc7620f181e68dae2552454a05\",\n            \"fetched_paper_title\": \"Gaussian Splatting on the Move: Blur and Rolling Shutter Compensation for Natural Camera Motion\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Joan Sola, Jeremie Deray, and Dinesh Atchuthan. A micro lie theory for state estimation in robotics. arXiv preprint arXiv:1812.01537, 2018. 4\",\n            \"extracted_paper_title\": \"A micro lie theory for state estimation in robotics\",\n            \"fetched_paper_id\": \"3a75252bab18250b8de8be28ec376db6cfc04084\",\n            \"fetched_paper_title\": \"A micro Lie theory for state estimation in robotics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Edgar Sucar, Shikun Liu, Joseph Ortiz, and Andrew Davi-son. iMAP: Implicit mapping and positioning in real-time. In Proceedings of the International Conference on Computer Vision (ICCV), 2021. 1\",\n            \"extracted_paper_title\": \"iMAP: Implicit mapping and positioning in real-time.\",\n            \"fetched_paper_id\": \"3629e0ba2ffb8406d8aba880685f06aa35e3cd7f\",\n            \"fetched_paper_title\": \"iMAP: Implicit Mapping and Positioning in Real-Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Huiqiang Sun, Xingyi Li, Liao Shen, Xinyi Ye, Ke Xian, and Zhiguo Cao. Dyblurf: Dynamic neural radiance \\ufb01elds from blurry monocular video. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 7517\\u20137527, 2024. 1, 3, 6\",\n            \"extracted_paper_title\": \"Dyblurf: Dynamic neural radiance fields from blurry monocular video\",\n            \"fetched_paper_id\": \"8145b552dd1afd26b251af88383c298f63093f3d\",\n            \"fetched_paper_title\": \"DyBluRF: Dynamic Neural Radiance Fields from Blurry Monocular Video\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Fu-Jen Tsai, Yan-Tsung Peng, Yen-Yu Lin, Chung-Chi Tsai, and Chia-Wen Lin. Stripformer: Strip transformer for fast image deblurring. In European conference on computer vi-sion, pages 146\\u2013162. Springer, 2022. 2\",\n            \"extracted_paper_title\": \"Stripformer: Strip transformer for fast image deblurring.\",\n            \"fetched_paper_id\": \"aab4ed4ee6bad74d4c07fa002da476504c62fda9\",\n            \"fetched_paper_title\": \"Stripformer: Strip Transformer for Fast Image Deblurring\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Can Wang, Menglei Chai, Mingming He, Dongdong Chen, and Jing Liao. Clip-nerf: Text-and-image driven ma-nipulation of neural radiance \\ufb01elds. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 3835\\u20133844, 2022. 1\",\n            \"extracted_paper_title\": \"Clip-nerf: Text-and-image driven manipulation of neural radiance fields\",\n            \"fetched_paper_id\": \"0483be6c3ec6cd41ffe248f86effc7468d3ac7be\",\n            \"fetched_paper_title\": \"CLIP-NeRF: Text-and-Image Driven Manipulation of Neural Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chen Wang, Dasong Gao, Kuan Xu, Junyi Geng, Yaoyu Hu, Yuheng Qiu, Bowen Li, Fan Yang, Brady Moon, Abhinav Pandey, Aryan, Jiahe Xu, Tianhao Wu, Haonan He, Daning Huang, Zhongqiang Ren, Shibo Zhao, Taimeng Fu, Pranay Reddy, Xiao Lin, Wenshan Wang, Jingnan Shi, Rajat Talak, Kun Cao, Yi Du, Han Wang, Huai Yu, Shanzhao Wang, Siyu Chen, Ananth Kashyap, Rohan Bandaru, Karthik Dantu, Ji-ajun Wu, Lihua Xie, Luca Carlone, Marco Hutter, and Se-bastian Scherer. PyPose: A library for robot learning with physics-based optimization. In IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2023. 4\",\n            \"extracted_paper_title\": \"PyPose: A library for robot learning with physics-based optimization.\",\n            \"fetched_paper_id\": \"8b2da94382b2ff9d422cad5dd8ffa5782e2cbd18\",\n            \"fetched_paper_title\": \"PyPose: A Library for Robot Learning with Physics-based Optimization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Junjie Wang, Jiemin Fang, Xiaopeng Zhang, Lingxi Xie, and Qi Tian. Gaussianeditor: Editing 3d gaussians delicately with text instructions. In Proceedings of the IEEE/CVF con-ference on computer vision and pattern recognition, pages 20902\\u201320911, 2024. 1\",\n            \"extracted_paper_title\": \"Gaussian Editor: Editing 3d gaussians delicately with text instructions.\",\n            \"fetched_paper_id\": \"ab342050a0eb26fb4a0af5fff028e1a8ca54f575\",\n            \"fetched_paper_title\": \"GaussianEditor: Editing 3D Gaussians Delicately with Text Instructions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Peng Wang, Lingzhe Zhao, Ruijie Ma, and Peidong Liu. BAD-NeRF: Bundle Adjusted Deblur Neural Radiance Fields. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 4170\\u20134179, 2023. 1, 2, 3\",\n            \"extracted_paper_title\": \"BAD-NeRF: Bundle Adjusted Deblur Neural Radiance Fields\",\n            \"fetched_paper_id\": \"314f1d10c228b32a3d64550f20841786c7f30c40\",\n            \"fetched_paper_title\": \"BAD-NeRF: Bundle Adjusted Deblur Neural Radiance Fields\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Qianqian Wang, Vickie Ye, Hang Gao, Jake Austin, Zhengqi Li, and Angjoo Kanazawa. Shape of motion: 4d reconstruc-tion from a single video. arXiv preprint arXiv:2407.13764, 2024. 2\",\n            \"extracted_paper_title\": \"Shape of motion: 4d reconstruction from a single video\",\n            \"fetched_paper_id\": \"b60cd86fef2ab6cfda33c9a5c7a7c75b7e8b035b\",\n            \"fetched_paper_title\": \"Shape of Motion: 4D Reconstruction from a Single Video\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chen Wenbo and Liu Ligang. Deblur-gs: 3d gaussian splat-ting from camera motion blurred images. Proc. ACM Com-put. Graph. Interact. Tech. (Proceedings of I3D 2024), 7(1), 2024. 1, 2, 3\",\n            \"extracted_paper_title\": \"Deblur-gs: 3d gaussian splatting from camera motion blurred images\",\n            \"fetched_paper_id\": \"663f90827c594fbd8040951c68409ac59bcf696a\",\n            \"fetched_paper_title\": \"Deblur-GS: 3D Gaussian Splatting from Camera Motion Blurred Images\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jinyu Yang, Mingqi Gao, Zhe Li, Shang Gao, Fangjing Wang, and Feng Zheng. Track anything: Segment anything meets videos, 2023. 4\",\n            \"extracted_paper_title\": \"Track anything: Segment anything meets videos\",\n            \"fetched_paper_id\": \"c0cf0971c153a84bbf0729d289b3b960969bb5dd\",\n            \"fetched_paper_title\": \"Track Anything: Segment Anything Meets Videos\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiao-gang Xu, Jiashi Feng, and Hengshuang Zhao. Depth any-thing v2. arXiv:2406.09414, 2024. 5\",\n            \"extracted_paper_title\": \"Depth Anything V2\",\n            \"fetched_paper_id\": \"2091dcd7c80bc27ba7d1fdc0087748bb1e293e2f\",\n            \"fetched_paper_title\": \"Depth Anything V2\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ziyi Yang, Xinyu Gao, Wen Zhou, Shaohui Jiao, Yuqing Zhang, and Xiaogang Jin. Deformable 3d gaussians for high-\\ufb01delity monocular dynamic scene reconstruction. In Pro-ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 20331\\u201320341, 2024. 1, 2, 6\",\n            \"extracted_paper_title\": \"Deformable 3D Gaussians for high-fidelity monocular dynamic scene reconstruction\",\n            \"fetched_paper_id\": \"1ce81d64eefe5915c6ef9719915efa5f4079a6c1\",\n            \"fetched_paper_title\": \"Deformable 3D Gaussians for High-Fidelity Monocular Dynamic Scene Reconstruction\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Zeyu Yang, Hongye Yang, Zijie Pan, and Li Zhang. Real-time photorealistic dynamic scene representation and render-ing with 4d gaussian splatting. In International Conference on Learning Representations (ICLR), 2024. 1, 2, 6\",\n            \"extracted_paper_title\": \"Real-time photorealistic dynamic scene representation and rendering with 4d gaussian splatting\",\n            \"fetched_paper_id\": \"716754c9f228a4f63d8e6edb81e200d6f4ea0c3a\",\n            \"fetched_paper_title\": \"Real-time Photorealistic Dynamic Scene Representation and Rendering with 4D Gaussian Splatting\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yu Yin, Kamran Ghasedi, HsiangTao Wu, Jiaolong Yang, Xin Tong, and Yun Fu. Ner\\ufb01nvertor: High \\ufb01delity nerf-gan inversion for single-shot real image animation. In Proceed-ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 8539\\u20138548, 2023. 1\",\n            \"extracted_paper_title\": \"NeRFInvertor: High fidelity nerf-gan inversion for single-shot real image animation\",\n            \"fetched_paper_id\": \"e0f9f3d1c68c799aa6031c5aedb42766c4ae3c59\",\n            \"fetched_paper_title\": \"NeRFInvertor: High Fidelity NeRF-GAN Inversion for Single-Shot Real Image Animation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Syed Waqas Zamir, Aditya Arora, Salman Khan, Munawar Hayat, Fahad Shahbaz Khan, Ming-Hsuan Yang, and Ling Shao. Multi-stage progressive image restoration. In CVPR, 2021. 6\",\n            \"extracted_paper_title\": \"Multi-stage progressive image restoration\",\n            \"fetched_paper_id\": \"92d50602db5746f03b91562e2cc8a98bec584e9b\",\n            \"fetched_paper_title\": \"Multi-Stage Progressive Image Restoration\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Syed Waqas Zamir, Aditya Arora, Salman Khan, Mu-nawar Hayat, Fahad Shahbaz Khan, and Ming-Hsuan Yang. Restormer: Ef\\ufb01cient transformer for high-resolution image restoration. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 5728\\u20135739, 2022. 2\",\n            \"extracted_paper_title\": \"Restormer: Efficient transformer for high-resolution image restoration\",\n            \"fetched_paper_id\": \"1e88d5afe19aea324d33541f60a90b7036894c32\",\n            \"fetched_paper_title\": \"Restormer: Efficient Transformer for High-Resolution Image Restoration\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zitong Zhan, Xiangfu Li, Qihang Li, Haonan He, Abhi-nav Pandey, Haitao Xiao, Yangmengfei Xu, Xiangyu Chen, Kuan Xu, Kun Cao, et al. Pypose v0. 6: The imper-ative programming interface for robotics. arXiv preprint arXiv:2309.13035, 2023. 4\",\n            \"extracted_paper_title\": \"PyPose v0.6: The imperative programming interface for robotics\",\n            \"fetched_paper_id\": \"279ce0d158e5bc86830436a5f0759a859a65fe6b\",\n            \"fetched_paper_title\": \"PyPose v0.6: The Imperative Programming Interface for Robotics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hongguang Zhang, Yuchao Dai, Hongdong Li, and Piotr Ko-niusz. Deep stacked hierarchical multi-patch network for image deblurring. In Proceedings of the IEEE/CVF con-ference on computer vision and pattern recognition, pages 5978\\u20135986, 2019. 2\",\n            \"extracted_paper_title\": \"Deep stacked hierarchical multi-patch network for image deblurring\",\n            \"fetched_paper_id\": \"a5c1156c2c8185df4581cf139df05aab66b3bb22\",\n            \"fetched_paper_title\": \"Deep Stacked Hierarchical Multi-Patch Network for Image Deblurring\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Lingzhe Zhao, Peng Wang, and Peidong Liu. Bad-gaussians: Bundle adjusted deblur gaussian splatting. In European Con-ference on Computer Vision (ECCV), 2024. 1, 2, 3, 4\",\n            \"extracted_paper_title\": \"Bad-gaussians: Bundle adjusted deblur gaussian splatting\",\n            \"fetched_paper_id\": \"c4733fe6eec6e51624ca1412ae6dd263fc470306\",\n            \"fetched_paper_title\": \"BAD-Gaussians: Bundle Adjusted Deblur Gaussian Splatting\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ruijie Zhu, Yanzhe Liang, Hanzhi Chang, Jiacheng Deng, Jiahao Lu, Wenfei Yang, Tianzhu Zhang, and Yongdong Zhang. Motiongs: Exploring explicit motion guidance for deformable 3d gaussian splatting. Advances in Neural In-formation Processing Systems, 37:101790\\u2013101817, 2024. 1, 2\",\n            \"extracted_paper_title\": \"MotionGS: Exploring explicit motion guidance for deformable 3D Gaussian Splatting\",\n            \"fetched_paper_id\": \"38f4f1da2dda947f49b47a30e29ce1b0db411149\",\n            \"fetched_paper_title\": \"MotionGS: Exploring Explicit Motion Guidance for Deformable 3D Gaussian Splatting\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zihan Zhu, Songyou Peng, Viktor Larsson, Weiwei Xu, Hu-jun Bao, Zhaopeng Cui, Martin R. Oswald, and Marc Polle-feys. Nice-slam: Neural implicit scalable encoding for slam. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2022. 1\",\n            \"extracted_paper_title\": \"Nice-slam: Neural implicit scalable encoding for slam\",\n            \"fetched_paper_id\": \"18ba8f0efb362e08903e8e35b062e2c69126e371\",\n            \"fetched_paper_title\": \"NICE-SLAM: Neural Implicit Scalable Encoding for SLAM\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"81c1dc00b32d12edfab00656593f5db56cfa79e0\",\n        \"c0cf0971c153a84bbf0729d289b3b960969bb5dd\",\n        \"23d4b38f0ff080e943594882398796ffd3126985\",\n        \"db8bed00c7757e067f36e8e7dfaef2f4ab8ffac0\",\n        \"8145b552dd1afd26b251af88383c298f63093f3d\",\n        \"dc32021df1c3692601fa2d4747e41f73005eda4f\",\n        \"8b2da94382b2ff9d422cad5dd8ffa5782e2cbd18\",\n        \"663f90827c594fbd8040951c68409ac59bcf696a\",\n        \"279ce0d158e5bc86830436a5f0759a859a65fe6b\",\n        \"eec8febf89785f00b894bb8d69f44118b86884e2\",\n        \"ea2feb30a758519672e876bd1ff6f05b859e308e\",\n        \"e3d06054af531ee2f42270d43100b309c28546ef\",\n        \"c900f690fdab5d17b0253d4362e7f1a7d9d2d495\",\n        \"1f463bfd63449d17d1547cfe55e9610b49ac37f5\",\n        \"98a7b067a2319c57e129ab2d6f19a67f170099aa\",\n        \"1e88d5afe19aea324d33541f60a90b7036894c32\",\n        \"18ba8f0efb362e08903e8e35b062e2c69126e371\",\n        \"a5c1156c2c8185df4581cf139df05aab66b3bb22\",\n        \"9184da852d02f1a15bc465d9cceae613b0a03e51\",\n        \"a9e5f91a93da0ab96a1f2d54627e2962ae15c083\",\n        \"1fbe23a0d6e45b0bd7861ea33b7e51c27b1a8ef4\",\n        \"a082a0df25b7166706e81ade83bc917dd7367edc\",\n        \"09179234dec5fc6dea4a8b02a9d98eef712d45e9\",\n        \"38f4f1da2dda947f49b47a30e29ce1b0db411149\",\n        \"2f16a2b6021b22badd0d68feb559918c08ca554b\",\n        \"65902a95d5af409938b28b69808e916f8ef9e0bd\",\n        \"314f1d10c228b32a3d64550f20841786c7f30c40\",\n        \"716754c9f228a4f63d8e6edb81e200d6f4ea0c3a\",\n        \"aab4ed4ee6bad74d4c07fa002da476504c62fda9\",\n        \"04068ad34cf4e3b7c0731d294eb8decfab3f51fe\",\n        \"3a75252bab18250b8de8be28ec376db6cfc04084\",\n        \"c8523d3ddc8cc66a3e24d3d3bb6a170050dbaec2\",\n        \"e7d0c37f4f3589a3b787f39e8307704da5ed8d6c\",\n        \"a6c92dd8c537bc4a0c91cef8558e4a4f25416091\",\n        \"eed0bb5e4738f1fc7620f181e68dae2552454a05\",\n        \"0483be6c3ec6cd41ffe248f86effc7468d3ac7be\",\n        \"ab342050a0eb26fb4a0af5fff028e1a8ca54f575\",\n        \"7bc683fe1911f4987b845f7d2165d5888f0a50e9\",\n        \"2091dcd7c80bc27ba7d1fdc0087748bb1e293e2f\",\n        \"fc98d0e981f193b159d8fab5343f094cf06dcf20\",\n        \"c4733fe6eec6e51624ca1412ae6dd263fc470306\",\n        \"15588dbda31f40f9b6d9d22be44a98dd873ada73\",\n        \"e0f9f3d1c68c799aa6031c5aedb42766c4ae3c59\",\n        \"2cc1d857e86d5152ba7fe6a8355c2a0150cc280a\",\n        \"8ba2c82fe675ede1d5c12fc4f97cf8ca3ebf1ca3\",\n        \"92d50602db5746f03b91562e2cc8a98bec584e9b\",\n        \"fc54a8f8272688851fdd5dfbf9f1deacbe39eb30\",\n        \"3629e0ba2ffb8406d8aba880685f06aa35e3cd7f\",\n        \"b60cd86fef2ab6cfda33c9a5c7a7c75b7e8b035b\",\n        \"26c22380282a00166273038bc5ba785d845d61ad\",\n        \"d277218265a177a8f2cdce7f88b4152fc1eda66c\",\n        \"7a66adab7c5f2a2f6e4cc5223fbdd6229e295fa8\",\n        \"1ce81d64eefe5915c6ef9719915efa5f4079a6c1\",\n        \"29ea8f3648264f4fa8dec627fc8726131ea72cdc\"\n    ],\n    \"all_ids_count\": 54,\n    \"p0_ids\": [\n        \"e3d06054af531ee2f42270d43100b309c28546ef\",\n        \"c0cf0971c153a84bbf0729d289b3b960969bb5dd\",\n        \"716754c9f228a4f63d8e6edb81e200d6f4ea0c3a\",\n        \"2cc1d857e86d5152ba7fe6a8355c2a0150cc280a\",\n        \"04068ad34cf4e3b7c0731d294eb8decfab3f51fe\",\n        \"fc98d0e981f193b159d8fab5343f094cf06dcf20\",\n        \"92d50602db5746f03b91562e2cc8a98bec584e9b\",\n        \"c4733fe6eec6e51624ca1412ae6dd263fc470306\",\n        \"2091dcd7c80bc27ba7d1fdc0087748bb1e293e2f\",\n        \"8145b552dd1afd26b251af88383c298f63093f3d\",\n        \"eec8febf89785f00b894bb8d69f44118b86884e2\",\n        \"1ce81d64eefe5915c6ef9719915efa5f4079a6c1\",\n        \"09179234dec5fc6dea4a8b02a9d98eef712d45e9\"\n    ],\n    \"p0_ids_count\": 13,\n    \"p1_ids\": [\n        \"81c1dc00b32d12edfab00656593f5db56cfa79e0\",\n        \"23d4b38f0ff080e943594882398796ffd3126985\",\n        \"db8bed00c7757e067f36e8e7dfaef2f4ab8ffac0\",\n        \"dc32021df1c3692601fa2d4747e41f73005eda4f\",\n        \"279ce0d158e5bc86830436a5f0759a859a65fe6b\",\n        \"8b2da94382b2ff9d422cad5dd8ffa5782e2cbd18\",\n        \"663f90827c594fbd8040951c68409ac59bcf696a\",\n        \"ea2feb30a758519672e876bd1ff6f05b859e308e\",\n        \"c900f690fdab5d17b0253d4362e7f1a7d9d2d495\",\n        \"1f463bfd63449d17d1547cfe55e9610b49ac37f5\",\n        \"98a7b067a2319c57e129ab2d6f19a67f170099aa\",\n        \"1e88d5afe19aea324d33541f60a90b7036894c32\",\n        \"18ba8f0efb362e08903e8e35b062e2c69126e371\",\n        \"a5c1156c2c8185df4581cf139df05aab66b3bb22\",\n        \"9184da852d02f1a15bc465d9cceae613b0a03e51\",\n        \"a9e5f91a93da0ab96a1f2d54627e2962ae15c083\",\n        \"1fbe23a0d6e45b0bd7861ea33b7e51c27b1a8ef4\",\n        \"a082a0df25b7166706e81ade83bc917dd7367edc\",\n        \"38f4f1da2dda947f49b47a30e29ce1b0db411149\",\n        \"2f16a2b6021b22badd0d68feb559918c08ca554b\",\n        \"65902a95d5af409938b28b69808e916f8ef9e0bd\",\n        \"314f1d10c228b32a3d64550f20841786c7f30c40\",\n        \"aab4ed4ee6bad74d4c07fa002da476504c62fda9\",\n        \"3a75252bab18250b8de8be28ec376db6cfc04084\",\n        \"c8523d3ddc8cc66a3e24d3d3bb6a170050dbaec2\",\n        \"e7d0c37f4f3589a3b787f39e8307704da5ed8d6c\",\n        \"a6c92dd8c537bc4a0c91cef8558e4a4f25416091\",\n        \"eed0bb5e4738f1fc7620f181e68dae2552454a05\",\n        \"0483be6c3ec6cd41ffe248f86effc7468d3ac7be\",\n        \"ab342050a0eb26fb4a0af5fff028e1a8ca54f575\",\n        \"7bc683fe1911f4987b845f7d2165d5888f0a50e9\",\n        \"15588dbda31f40f9b6d9d22be44a98dd873ada73\",\n        \"e0f9f3d1c68c799aa6031c5aedb42766c4ae3c59\",\n        \"8ba2c82fe675ede1d5c12fc4f97cf8ca3ebf1ca3\",\n        \"fc54a8f8272688851fdd5dfbf9f1deacbe39eb30\",\n        \"3629e0ba2ffb8406d8aba880685f06aa35e3cd7f\",\n        \"b60cd86fef2ab6cfda33c9a5c7a7c75b7e8b035b\",\n        \"26c22380282a00166273038bc5ba785d845d61ad\",\n        \"d277218265a177a8f2cdce7f88b4152fc1eda66c\",\n        \"7a66adab7c5f2a2f6e4cc5223fbdd6229e295fa8\",\n        \"29ea8f3648264f4fa8dec627fc8726131ea72cdc\"\n    ],\n    \"p1_ids_count\": 41\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  }
+ ],
+ "conditions": [
+  {
+   "name": "RW-opus",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-sonnet",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-mixed",
+   "system": "researchworld",
+   "agent": null,
+   "provider": null,
+   "model": null,
+   "effort": null,
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "mixed",
+     "name": "Antigravity (Gemini) + Claude Code + Codex CLI",
+     "version": "antigravity agy_acp_server 1.4.1; claude-code @anthropic-ai/claude-agent-sdk 0.3.300; codex @openai/codex 0.163.0",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container; roles use antigravity, claude-code, codex"
+    },
+    "model": {
+     "provider": "per role",
+     "model": "per role",
+     "effort": "per role"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "codex",
+      "agent_name": "Codex CLI",
+      "agent_version": "@openai/codex 0.163.0",
+      "how": "codex-acp",
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "CC-opus",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CC-sonnet",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-astra",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6-astra",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6-astra",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-sol",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6.1-sol",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-opus",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-sonnet",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-opus",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-opus-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-sonnet",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-sonnet-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-opus",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-sonnet",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  }
+ ],
+ "batches": [],
+ "runs": []
+}

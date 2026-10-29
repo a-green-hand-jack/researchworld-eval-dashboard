@@ -1,0 +1,1684 @@
+{
+ "key": "paperwritingbench/iclr2025_3cd33845e3",
+ "benchmark": "paperwritingbench",
+ "item": "iclr2025_3cd33845e3",
+ "prompt": [
+  {
+   "name": "TASK.md",
+   "size": 26433,
+   "text": "Your task is to generate a complete research paper using the materials below.\nYou must produce:\n1. A BibTeX bibliography file (references.bib)\n2. The full LaTeX paper (template.tex)\n\nInstructions\n• Use the research idea and experimental logs to construct a coherent, rigorous ML paper.\n• For related work and baselines:\n  – Search for and include influential papers published up until 2024-10.\n  – Incorporate relevant literature and add the corresponding BibTeX entries to references.bib.\n  – Do NOT hallucinate papers or reference keys; all citation entries must be real.\n• In the LaTeX paper, cite papers using \\cite{} with keys that match exactly with your entries in references.bib.\n• Do not fabricate experimental results or make claims unsupported by the logs.\n\nMaterials\nHere are all the raw research materials to assist with the writing process:\n\n[RESEARCH IDEA]\n## Problem Statement\nTime-varying Counterfactual Prediction (TCP)—estimating outcomes under different sequences of future interventions—is critical for decision-making in domains like healthcare. However, existing approaches face a dual bottleneck. First, current state-of-the-art architectures, such as Causal Transformers, suffer from quadratic computational complexity, making them inefficient for modeling long longitudinal patient histories. Second, standard debiasing techniques (e.g., adversarial balancing) often lead to \"over-balancing.\" By aggressively forcing learned representations to be treatment-invariant, these methods inadvertently discard covariate information that is essential for predicting the outcome, thereby degrading the accuracy of the counterfactual estimates. We need a framework that scales linearly with sequence length while maintaining a delicate balance between bias removal and information preservation.\n\n## Core Hypothesis\nWe hypothesize that **Selective State-Space Models (SSMs)** can address the efficiency bottleneck by modeling long-range dependencies with linear complexity. Furthermore, we propose that time-varying confounding bias can be mitigated more effectively through a **direct decorrelation mechanism** rather than adversarial learning. By explicitly removing the cross-covariance between the *current* treatment assignment and the *accumulated* historical representation within the SSM's hidden state, we can satisfy the sequential ignorability assumption without corrupting the predictive power of the covariates.\n\n## Proposed Methodology (High-Level Technical Approach)\nWe propose to develop a \"Counterfactual Mamba\" framework designed to handle continuous long-sequence data for causal inference.\n\n1.  **Backbone Architecture:**\n    We will utilize a Selective State-Space Model (specifically the Mamba architecture) as the core encoder. This allows the model to compress historical context (covariates, past treatments, and outcomes) into a hidden state that evolves over time. To adapt this language-modeling architecture for causal prediction and prevent overfitting on smaller longitudinal datasets, we will modify the internal block structure, specifically replacing token-mixing convolutional layers with robust regularization layers (e.g., dropout).\n\n2.  **Covariate-based Decorrelation Strategy:**\n    Instead of using a separate discriminator network (adversarial training), we will integrate a bias-correction mechanism directly into the learning objective.\n    *   **Logic:** The confounding bias arises when the historical context dictates the current treatment assignment.\n    *   **Mechanism:** We will design a regularization term that explicitly minimizes the correlation between the **current treatment input** and the **hidden state representation** derived from the history.\n    *   **Selective Parameter Regularization:** Since SSMs rely on \"selective parameters\" to determine how much information to retain or forget, we will apply this decorrelation constraint specifically to these parameters. This ensures that the information flowing through the recurrent state is statistically orthogonal to the treatment assignment at each step.\n\n3.  **Training Objective:**\n    The model will be trained end-to-end using a composite loss function:\n    *   **Factual Prediction Loss:** Standard regression loss to minimize error on observed outcomes.\n    *   **Decorrelation Regularization:** A penalty term that enforces zero covariance between history and treatment, ensuring the learned representations are treated as \"unconfounded\" for the purpose of causal prediction.\n\n## Expected Contribution\n1.  **Scalability:** We expect to achieve linear time complexity with respect to sequence length, significantly outperforming the quadratic scaling of Transformer-based causal models. This opens the door to analyzing much longer patient trajectories.\n2.  **Improved Causal Estimation:** By avoiding the pitfalls of over-balancing, our decorrelation approach aims to yield tighter bounds on counterfactual prediction risk compared to adversarial methods.\n3.  **Architectural Novelty:** This work would represent a pioneering application of modern State-Space Models to the domain of time-varying causal inference, offering a lightweight alternative to heavy attention-based mechanisms.\n\n[EXPERIMENTAL LOGS]\n## 1. Experimental Setup\n\n### Datasets\n*   **Tumor Growth (TG) Simulator (Synthetic):**\n    *   Simulates tumor volume ($Y_{t+1}$) based on binary treatments (radiotherapy, chemotherapy) and time-varying confounding.\n    *   **Confounding:** Controlled by parameter $\\gamma$. Higher $\\gamma$ indicates stronger confounding.\n    *   **Splits:** 10,000 patients (train), 1,000 (validation), 1,000 (testing).\n    *   **Sequence Length:** Limited to 60 time steps.\n*   **Semi-synthetic MIMIC-III:**\n    *   Derived from MIMIC-extract.\n    *   **Features:** 25 time-varying vital signs, 3 static covariates (gender, ethnicity, age). Total dimension: 44.\n    *   **Sample Size:** 1,000 patients.\n    *   **Splits:** 60% train, 20% validation, 20% test.\n    *   **Outcomes:** Generated using simulated endogenous and exogenous dependencies.\n    *   **Treatments:** 3 binary treatments simulated sequentially with confounding parameters.\n*   **Real-world MIMIC-III:**\n    *   **Population:** 5,000 patients with ICU stays $\\ge$ 30 hours.\n    *   **Splits:** 70% train, 15% validation, 15% test.\n    *   **Treatments:** 2 binary treatments (vasopressors, mechanical ventilation).\n    *   **Outcome:** Diastolic blood pressure.\n*   **M5 Forecasting (Real-world):**\n    *   Daily transaction data from Walmart (3 US states).\n    *   **Treatment:** Product pricing.\n    *   **Outcome:** Product sales.\n    *   **Use case:** Factual outcome prediction (due to lack of counterfactuals).\n\n### Evaluation Metrics\n*   **Root Mean Square Error (RMSE):** Used for all prediction tasks (counterfactual and factual).\n*   **Reconstruction Loss (RMSE):** Used for evaluating covariate reconstruction.\n\n### Baselines Compared\n*   **Marginal Structural Models (MSMs):** Linear realization of IPTW.\n*   **Recurrent Marginal Structural Networks (RMSNs):** LSTM-based with IPTW.\n*   **Counterfactual Recurrent Network (CRN):** LSTM-based with adversarial balancing.\n*   **G-Net:** Deep network version of G-computation.\n*   **Causal Transformer (CT):** Transformer-based with domain confusion balancing.\n*   **EDCT:** (Included in tabular results).\n*   **Insite:** ODE-based estimator (compared on TG simulator).\n*   **Mamba-HSIC:** Mamba backbone with Hilbert-Schmidt Independence Criterion balancing.\n*   **Vanilla Mamba / ERM:** Mamba without balancing (implied in ablations/analysis).\n\n### Implementation Details\n*   **Hardware:** 1 $\\times$ NVIDIA GeForce RTX 3090 GPU.\n*   **Proposed Model (Mamba-CDSP):**\n    *   **Architecture:** Mamba block modified by replacing the convolutional layer with a dropout layer to mitigate overfitting.\n    *   **Balancing:** Covariate-based Decorrelation towards Selective Parameters (CDSP).\n    *   **Mamba Blocks:** 1 (TG & Semi-synthetic), 2 (Real-world).\n    *   **Hidden Units (Embedding/Projection):** 32 (TG & Semi-synthetic), 64 (Real-world).\n    *   **Learning Rate:** Tuned over $\\{0.0005, 0.001, 0.01\\}$.\n    *   **Batch Size:** 128 (TG), 64 (Semi-synthetic & Real-world).\n    *   **Dropout Rate:** 0.1.\n    *   **EMA:** 0.99.\n    *   **Decorrelation Parameter ($\\alpha$):** 1 (default), sensitivity tested $[0, 10.0]$.\n\n## 2. Raw Numeric Data\n\n**Data Block 1: Semi-synthetic Data ($\\tau$-step-ahead Prediction)**\n*Metric: RMSE (Mean $\\pm$ Std). $\\tau$ denotes prediction horizon.*\n\n| Methods | T=1 | T=2 | T=3 | T=4 | T=5 | T=6 | T=7 | T=8 | T=9 | T=10 |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| MSMs | 0.37±0.01 | 0.57±0.03 | 0.74±0.06 | 0.88±0.03 | 1.14±0.10 | 1.95±1.48 | 3.44±4.57 | >10.0 | >10.0 | >10.0 |\n| RMSNs | 0.24±0.01 | 0.47±0.01 | 0.60±0.01 | 0.70±0.02 | 0.78±0.04 | 0.84±0.05 | 0.89±0.06 | 0.94±0.08 | 0.97±0.09 | 1.00±0.11 |\n| CRN | 0.30±0.01 | 0.48±0.02 | 0.59±0.02 | 0.65±0.02 | 0.68±0.02 | 0.71±0.01 | 0.72±0.01 | 0.74±0.01 | 0.76±0.01 | 0.78±0.02 |\n| G-Net | 0.34±0.01 | 0.67±0.03 | 0.83±0.04 | 0.94±0.04 | 1.03±0.05 | 1.10±0.05 | 1.16±0.05 | 1.21±0.06 | 1.25±0.06 | 1.29±0.06 |\n| EDCT | 0.29±0.01 | 0.46±0.01 | 0.56±0.01 | 0.62±0.01 | 0.67±0.01 | 0.70±0.01 | 0.72±0.01 | 0.74±0.01 | 0.76±0.01 | 0.78±0.01 |\n| CT | 0.21±0.01 | 0.38±0.01 | 0.46±0.01 | 0.50±0.01 | 0.53±0.01 | 0.54±0.01 | 0.55±0.01 | 0.57±0.01 | 0.58±0.01 | 0.59±0.01 |\n| Mamba-HSIC | 0.25±0.02 | 0.32±0.01 | 0.38±0.01 | 0.43±0.02 | 0.48±0.01 | 0.51±0.01 | 0.54±0.02 | 0.57±0.01 | 0.59±0.02 | 0.60±0.02 |\n| Mamba-CDSP | 0.19±0.01 | 0.25±0.01 | 0.30±0.01 | 0.34±0.01 | 0.37±0.01 | 0.42±0.01 | 0.43±0.01 | 0.44±0.01 | 0.46±0.01 | 0.47±0.01 |\n\n**Data Block 2: Real-world MIMIC-III Data ($\\tau$-step-ahead Prediction)**\n*Metric: RMSE (Mean $\\pm$ Std).*\n\n| Methods | T=1 | T=2 | T=3 | T=4 | T=5 |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n| MSMs | 6.37±0.26 | 9.06±0.41 | 11.89±1.28 | 13.12±1.25 | 14.44±1.12 |\n| RMSNs | 5.20±0.15 | 9.79±0.31 | 10.52±0.39 | 11.09±0.49 | 11.64±0.62 |\n| CRN | 4.84±0.08 | 9.15±0.16 | 9.81±0.17 | 10.15±0.19 | 10.40±0.21 |\n| G-Net | 5.13±0.05 | 11.88±0.20 | 12.91±0.26 | 13.57±0.30 | 14.08±0.31 |\n| CT | 4.60±0.08 | 9.01±0.21 | 9.58±0.19 | 9.89±0.21 | 10.12±0.22 |\n| Mamba-HSIC | 4.72±0.05 | 5.19±0.19 | 7.24±0.25 | 8.30±0.28 | 9.25±0.30 |\n| Mamba-CDSP | 4.41±0.05 | 5.04±0.13 | 5.14±0.15 | 5.20±0.18 | 5.25±0.19 |\n\n**Data Block 3: Ablation Study on Semi-synthetic MIMIC-III Data**\n*Metric: Normalized RMSE.*\n\n| Model Variant | T=1 | T=3 | T=5 | T=7 | T=9 |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n| **Mamba-CDSP (Proposed)** | **0.19** | **0.30** | **0.37** | **0.43** | **0.48** |\n| *Ablation on Model:* | | | | | |\n| w/ convolution layer | -0.01 | +0.01 | +0.01 | +0.04 | +0.11 |\n| w/o dropout | +0.08 | +0.09 | +0.11 | +0.09 | +0.10 |\n| w/ selection mechanism | ±0.05 | +0.07 | +0.12 | +0.16 | +0.19 |\n| w/o RMS-norm | +2.13 | >10 | >10 | >10 | >10 |\n| w/o residual | -0.03 | +0.06 | +0.06 | +0.06 | +0.07 |\n| *Ablation on Loss:* | | | | | |\n| w/o Cov-Reg ($\\alpha=0$) | +0.16 | +0.17 | +0.16 | +0.22 | +0.25 |\n| w/ HSIC-Reg | +0.06 | +0.08 | -0.10 | +0.07 | -0.07 |\n\n**Data Block 4: Real-world M5 Data ($\\tau$-step-ahead Prediction)**\n*Metric: RMSE (Mean $\\pm$ Std).*\n\n| Methods | T=1 | T=2 | T=3 | T=4 | T=5 | T=6 |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| RMSN | 5.19±0.12 | 9.73±0.26 | 10.48±0.34 | 11.07±0.43 | 11.63±0.53 | 12.16±0.65 |\n| CRN | 4.98±0.32 | 9.15±0.17 | 9.79±0.16 | 10.12±0.17 | 10.38±0.19 | 10.59±0.22 |\n| CRN w/o balancing | 4.68±0.06 | 9.05±0.16 | 9.68±0.15 | 10.00±0.16 | 10.26±0.18 | 10.47±0.20 |\n| CT | 4.59±0.08 | 8.99±0.19 | 9.59±0.19 | 9.91±0.23 | 10.15±0.25 | 10.35±0.28 |\n| CT w/o balancing | 4.59±0.09 | 8.98±0.18 | 9.58±0.18 | 9.90±0.20 | 10.13±0.23 | 10.34±0.26 |\n| Mamba-CDSP | 4.08±0.06 | 4.05±0.13 | 4.59±0.15 | 5.87±0.17 | 6.47±0.20 | 8.39±0.28 |\n\n**Data Block 5: Sensitivity Analysis on Confounding Factors (TG Simulator - High $\\gamma$)**\n*Metric: RMSE (Mean $\\pm$ Std). Comparing Mamba-CDSP vs CT under high confounding.*\n\n| $\\gamma$ | Model | T=1 | T=2 | T=3 | T=4 | T=5 |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| **8** | CT | 2.98±0.01 | 3.46±0.01 | 3.56±0.01 | 3.52±0.01 | 3.33±0.01 |\n| | Mamba-CDSP | 2.97±0.01 | 3.36±0.01 | 3.29±0.01 | 3.02±0.01 | 2.69±0.01 |\n| **10** | CT | 10.46±0.01 | 9.38±0.01 | 8.50±0.01 | 7.63±0.01 | 6.83±0.01 |\n| | Mamba-CDSP | 4.25±0.01 | 5.26±0.01 | 5.58±0.01 | 5.55±0.01 | 5.40±0.01 |\n| **16** | CT | 15.93±0.01 | 13.54±0.01 | 15.54±0.01 | 16.40±0.01 | 16.58±0.01 |\n| | Mamba-CDSP | 8.99±0.01 | 9.06±0.01 | 8.09±0.01 | 6.93±0.01 | 5.95±0.01 |\n| **20** | CT | 16.19±0.01 | 15.84±0.01 | 17.09±0.01 | 16.55±0.01 | 18.32±0.01 |\n| | Mamba-CDSP | 14.14±0.01 | 12.73±0.01 | 10.26±0.01 | 8.21±0.01 | 6.52±0.01 |\n\n**Data Block 6: Runtime and Efficiency Analysis (Real-world dataset)**\n*Hardware: 1x NVIDIA GeForce RTX 3090.*\n\n| Methods | Total runtime (min) | Training time (min) | Inference time (min) | ITPS (sec) |\n| :--- | :--- | :--- | :--- | :--- |\n| MSMs | 1.5±0.4 | 1.0±0.1 | 0.5±0.2 | 0.04 |\n| RMSNs | 38±3.9 | 35±0.1 | 3±0.2 | 0.24 |\n| CRN | 109±10.3 | 84±0.1 | 25±0.2 | 2 |\n| G-Net | 89±5.2 | 86±0.1 | 3±0.2 | 0.24 |\n| CT | 156 | 98±0.1 | 58±0.1 | 4.64 |\n| Mamba-CDSP (Ours) | 12±2.3 | 10±0.1 | 2±0.1 | 0.16 |\n\n**Data Block 7: Model Parameters (Total Trainable Parameters)**\n\n| Methods | Syn Data ($\\gamma=0$) | Syn ($\\gamma=1$) | Syn ($\\gamma=2$) | Syn ($\\gamma=3$) | Syn ($\\gamma=4$) | SS data | RW data |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| MSMs | - | - | <100 | - | - | 3K | 1K |\n| RMSNs | 20K | 4K | 23K | 21K | 22K | 477K | 947K |\n| CRN | 4K | 6K | 8K | 7K | 8K | 165K | 219K |\n| G-Net | 3K | 2K | 3K | 4K | 3K | 151K | 310K |\n| CT | 11K | 11K | 10K | 10K | 10K | 45K | 69K |\n| Mamba-CDSP | 12.8K | 12.7K | 12.8K | 12.8K | 12.9K | 26.8K | 27.3K |\n\n**Data Block 8: Performance with varying Confounding Intensity (Lower $\\gamma$ Range)**\n*Metric: RMSE (Mean $\\pm$ Std) on MIMIC-III (Note: likely TG/Semi-synthetic given $\\gamma$ context).*\n\n| T Step | Methods | $\\gamma=0$ | $\\gamma=1$ | $\\gamma=2$ | $\\gamma=3$ | $\\gamma=4$ |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| **T=2** | MSMs | 1.36±0.11 | 1.61±0.17 | 1.94±0.37 | 2.29±0.55 | 2.47±1.06 |\n| | RMSNs | 0.74±0.04 | 0.76±0.05 | 0.83±0.06 | 0.96±0.11 | 1.28±0.24 |\n| | CRN | 0.67±0.07 | 0.67±0.05 | 0.74±0.04 | 1.67±1.18 | 1.15±0.17 |\n| | G-Net | 1.02±0.07 | 1.01±0.09 | 1.27±0.08 | 1.11±0.15 | 1.26±0.23 |\n| | CT | 0.68±0.05 | 0.68±0.04 | 0.71±0.04 | 0.91±0.12 | 1.27±0.37 |\n| | Mamba-HSIC | 0.73±0.04 | 0.76±0.04 | 0.79±0.05 | 0.81±0.59 | 0.84±0.96 |\n| | Mamba-CDSP | 0.53±0.04 | 0.68±0.03 | 0.72±0.04 | 0.78±0.50 | 0.80±0.70 |\n| **T=3** | MSMs | 1.68±0.13 | 1.95±0.21 | 2.30±0.44 | 2.64±0.64 | 2.62±1.13 |\n| | RMSNs | 0.78±0.05 | 0.79±0.05 | 0.89±0.05 | 1.09±0.18 | 1.38±0.29 |\n| | CRN | 0.70±0.08 | 0.69±0.05 | 0.82±0.05 | 1.96±1.03 | 1.36±0.23 |\n| | G-Net | 1.25±0.08 | 1.23±0.10 | 1.61±0.10 | 1.38±0.20 | 1.57±0.33 |\n| | CT | 0.70±0.06 | 0.71±0.04 | 0.77±0.03 | 1.01±0.12 | 1.54±0.45 |\n| | Mamba-HSIC | 0.67±0.05 | 0.68±0.04 | 0.76±0.05 | 0.91±0.08 | 1.26±0.25 |\n| | Mamba-CDSP | 0.68±0.04 | 0.70±0.05 | 0.73±0.03 | 0.78±0.10 | 0.89±0.21 |\n| **T=4** | MSMs | 1.87±0.15 | 2.15±0.23 | 2.49±0.47 | 2.79±0.68 | 2.62±1.14 |\n| | RMSNs | 0.82±0.08 | 0.84±0.06 | 0.96±0.11 | 1.22±0.24 | 1.42±0.30 |\n| | CRN | 0.73±0.09 | 0.72±0.04 | 0.90±0.07 | 2.20±0.97 | 1.57±0.26 |\n| | G-Net | 1.39±0.09 | 1.35±0.11 | 1.82±0.13 | 1.54±0.24 | 1.77±0.41 |\n| | CT | 0.73±0.06 | 0.75±0.04 | 0.82±0.04 | 1.09±0.12 | 1.76±0.52 |\n| | Mamba-HSIC | 0.69±0.04 | 0.76±0.05 | 0.85±0.04 | 1.22±0.11 | 1.92±0.35 |\n| | Mamba-CDSP | 0.70±0.03 | 0.74±0.04 | 0.78±0.05 | 0.85±0.09 | 1.13±0.28 |\n| **T=5** | MSMs | 1.96±0.16 | 2.22±0.23 | 2.55±0.48 | 2.81±0.68 | 2.54±1.12 |\n| | RMSNs | 0.86±0.10 | 0.89±0.07 | 1.03±0.17 | 1.35±0.33 | 1.43±0.30 |\n| | CRN | 0.77±0.09 | 0.76±0.04 | 0.98±0.08 | 2.36±1.00 | 1.73±0.29 |\n| | G-Net | 1.48±0.09 | 1.43±0.12 | 1.96±0.16 | 1.67±0.28 | 1.91±0.47 |\n| | CT | 0.76±0.06 | 0.79±0.04 | 0.87±0.05 | 1.15±0.11 | 1.92±0.57 |\n| | Mamba-HSIC | 0.73±0.04 | 0.76±0.04 | 0.91±0.05 | 1.22±0.18 | 1.78±0.31 |\n| | Mamba-CDSP | 0.72±0.05 | 0.75±0.04 | 0.84±0.06 | 0.91±0.17 | 1.13±0.29 |\n| **T=6** | MSMs | 1.97±0.16 | 2.21±0.23 | 2.51±0.47 | 2.73±0.66 | 2.42±1.08 |\n| | RMSNs | 0.89±0.11 | 0.94±0.09 | 1.08±0.21 | 1.47±0.43 | 1.44±0.29 |\n| | CRN | 0.81±0.10 | 0.79±0.04 | 1.05±0.09 | 2.48±1.08 | 1.83±0.33 |\n| | G-Net | 1.54±0.09 | 1.49±0.12 | 2.06±0.17 | 1.76±0.29 | 1.99±0.50 |\n| | CT | 0.79±0.06 | 0.82±0.03 | 0.91±0.05 | 1.21±0.10 | 2.05±0.61 |\n| | Mamba-HSIC | 0.80±0.05 | 0.85±0.04 | 0.92±0.03 | 1.02±0.12 | 1.65±0.31 |\n| | Mamba-CDSP | 0.77±0.05 | 0.81±0.04 | 0.87±0.05 | 0.95±0.18 | 1.25±0.26 |\n\n**Data Block 9: Comparison with ODE-based Estimator (Insite)**\n*Dataset: Synthetic TG Simulator (Random Trajectory Protocol).*\n\n| T Step | Methods | $\\gamma=0$ | $\\gamma=1$ | $\\gamma=2$ | $\\gamma=3$ | $\\gamma=4$ |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| **T=2** | Insite | 1.02±0.03 | 1.01±0.02 | 1.03±0.07 | 1.15±0.05 | 1.42±0.02 |\n| | Mamba-CDSP | 0.60±0.01 | 0.62±0.02 | 0.63±0.03 | 0.65±0.03 | 0.72±0.10 |\n| **T=3** | Insite | 1.00±0.04 | 1.03±0.04 | 1.03±0.05 | 1.17±0.59 | 1.44±0.96 |\n| | Mamba-CDSP | 0.62±0.01 | 0.64±0.03 | 0.65±0.03 | 0.70±0.04 | 0.96±0.09 |\n| **T=4** | Insite | 1.00±0.04 | 1.04±0.04 | 1.04±0.05 | 1.18±0.06 | 1.48±0.04 |\n| | Mamba-CDSP | 0.64±0.03 | 0.68±0.04 | 0.73±0.05 | 0.79±0.09 | 1.12±0.10 |\n| **T=5** | Insite | 0.99±0.04 | 1.05±0.04 | 1.05±0.05 | 1.21±0.59 | 1.51±0.96 |\n| | Mamba-CDSP | 0.49±0.03 | 0.50±0.04 | 0.67±0.07 | 0.83±0.10 | 0.91±0.15 |\n| **T=6** | Insite | 0.98±0.04 | 1.05±0.04 | 1.05±0.05 | 1.21±0.59 | 1.53±0.96 |\n| | Mamba-CDSP | 0.49±0.03 | 0.50±0.04 | 0.67±0.07 | 0.83±0.10 | 0.91±0.15 |\n\n**Data Block 10: Sensitivity Analysis of De-correlation Parameter ($\\alpha$)**\n*Dataset: Semi-synthetic MIMIC-III.*\n\n| $\\alpha$ | T=1 | T=2 | T=3 | T=4 | T=5 | T=6 | T=7 | T=8 | T=9 | T=10 |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| 0 | 0.32±0.01 | 0.43±0.01 | 0.54±0.01 | 0.65±0.01 | 0.75±0.01 | 0.85±0.01 | 0.93±0.01 | 1.02±0.01 | 1.09±0.01 | 1.17±0.01 |\n| 0.0001 | 0.30±0.01 | 0.37±0.01 | 0.44±0.01 | 0.49±0.01 | 0.53±0.01 | 0.57±0.01 | 0.60±0.01 | 0.62±0.01 | 0.64±0.01 | 0.65±0.01 |\n| 0.001 | 0.27±0.01 | 0.33±0.01 | 0.39±0.01 | 0.43±0.01 | 0.46±0.01 | 0.49±0.01 | 0.52±0.01 | 0.54±0.01 | 0.56±0.01 | 0.58±0.01 |\n| 0.01 | 0.25±0.01 | 0.32±0.01 | 0.35±0.01 | 0.44±0.01 | 0.42±0.01 | 0.46±0.01 | 0.47±0.01 | 0.48±0.01 | 0.53±0.01 | 0.53±0.01 |\n| 0.1 | 0.21±0.01 | 0.28±0.01 | 0.33±0.01 | 0.41±0.01 | 0.39±0.01 | 0.45±0.01 | 0.45±0.01 | 0.45±0.01 | 0.47±0.01 | 0.49±0.01 |\n| 1.0 | 0.19±0.01 | 0.25±0.01 | 0.30±0.01 | 0.34±0.01 | 0.37±0.01 | 0.42±0.01 | 0.43±0.01 | 0.44±0.01 | 0.46±0.01 | 0.47±0.01 |\n| 10.0 | 0.23±0.01 | 0.27±0.01 | 0.34±0.01 | 0.36±0.01 | 0.38±0.01 | 0.44±0.01 | 0.57±0.01 | 0.59±0.01 | 0.52±0.01 | 0.50±0.01 |\n\n**Data Block 11: Extreme Long Sequence Analysis**\n*Dataset: TG Simulator ($\\gamma=3$). Sequence length parameter $a=1000$.*\n\n| Model | T=1 | T=2 | T=3 | T=4 | T=5 | T=6 |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n| CT | 1.82±0.25 | 2.51±0.31 | 2.77±0.33 | 2.89±0.42 | 3.32±0.47 | 3.85±0.76 |\n| Mamba-CDSP | 0.51±0.02 | 0.86±0.06 | 1.05±0.09 | 1.37±0.13 | 1.54±0.18 | 1.93±0.21 |\n\n## 3. Qualitative Observations\n\n*   **Observation 1 (Performance vs Time Steps):** As the prediction time step increases from 0 to 12 on the Tumor simulator dataset, the estimation error of the Causal Transformer (CT) increases dramatically (from less than 10 to over 15), while Mamba-CDSP maintains lower error rates.\n*   **Observation 2 (Runtime Efficiency):** The running time of the Causal Transformer scales with nearly quadratic complexity (from 26 minutes to over 120 minutes) when input sequence length increases from 5 to 200. Mamba-CDSP exhibits significantly more efficient, nearly linear scaling.\n*   **Observation 3 (Confounding Robustness):** On the Tumor-growth simulation, as the confounding parameter $\\gamma$ increases (e.g., from 0 to 4), the Mamba-CDSP model outperforms other baselines by a larger margin, indicating better handling of sequential confounding bias.\n*   **Observation 4 (Real-world Performance):** Mamba-CDSP reduces the RMSE by nearly 50% compared to previous baselines on real-world prediction tasks.\n*   **Observation 5 (Reconstruction Convergence):** When reconstructing covariates, the vanilla Mamba model converges well. The HSIC-based balancing leads to non-convergence at high confounding levels ($\\gamma=8$). Mamba-CDSP achieves convergence comparable to vanilla Mamba while correcting bias.\n*   **Observation 6 (Representation Structure):** T-SNE visualizations show that Mamba-CDSP preserves the historical information of covariates better than HSIC-based methods, which tend to distort representations (over-balancing).\n*   **Observation 7 (Bias Correction Mechanism):** Training curves show that the HSIC term (independence gap) decreases alongside the proposed CDSP regularization term, confirming that minimizing CDSP effectively reduces confounding bias.\n*   **Observation 8 (Overfitting):** The original Mamba architecture (with 1-d convolution) tends to overfit on temporal data. Replacing the convolutional layer with a dropout layer was observed to mitigate this overfitting.\n*   **Observation 9 (Ablation Findings):** Removing the CDSP regularization ($\\alpha=0$) or replacing it with HSIC regularization leads to increased RMSE across all time steps in semi-synthetic experiments.\n\n[AVAILABLE FIGURES]\n### AVAILABLE FIGURES LIST\nItem 1:\n  - Filename: figure_1.png\n  - Caption: Figure 1: Effectiveness and efficiency comparison between Mamba-CDSP and Causal Transformer on the Tumor simulator dataset. The time complexity (right) and the estimation error (left, with sequence length as 60) of CT grows exponentially with sequence length and prediction time steps.\n--------------------------------------------------\nItem 2:\n  - Filename: figure_6.png\n  - Caption: Figure 6: Representation visualizations of Mamba, Mamba with HSIC, and Mamba-CDSP.\n--------------------------------------------------\nItem 3:\n  - Filename: figure_5.png\n  - Caption: Figure 5: Reconstruction loss curves for Mamba with different debiasing techniques.\n--------------------------------------------------\nItem 4:\n  - Filename: figure_2.png\n  - Caption: Figure 2: Causal Structure of the TCP task.\n--------------------------------------------------\nItem 5:\n  - Filename: figure_8.png\n  - Caption: Figure 8: Examination of the Bias Correction on MIMIC-III Dataset.\n--------------------------------------------------\nItem 6:\n  - Filename: figure_7.png\n  - Caption: Figure 7: Representation visualizations of Mamba, Mamba with HSIC, and Mamba-CDSP.\n--------------------------------------------------\nItem 7:\n  - Filename: figure_4.png\n  - Caption: Figure 4: Results for fully synthetic data based on tumor growth simulator, which are reported as the mean performance averaged over five runs with different seeds.\n--------------------------------------------------\nItem 8:\n  - Filename: figure_3.png\n  - Caption: Figure 3: The Step-by-step Framework our proposed Mamba-CDSP.\n--------------------------------------------------\n\nFigures are located in the figures/ directory and should be referenced appropriately in the paper using standard \\includegraphics commands.\n\n[LATEX TEMPLATE]\n\\documentclass{article} % For LaTeX2e\n\\usepackage{iclr2025_conference,times}\n\n% Optional math commands from https://github.com/goodfeli/dlbook_notation.\n\\input{math_commands.tex}\n\n\\usepackage{hyperref}\n\\usepackage{url}\n\n%%%%%%%%% TITLE - PLEASE UPDATE TITLE HERE\n\\title{My Title}\n\n\\author{Ambitious AI Researcher\\\\\nAI Research Institute\\\\\n123 AI Avenue, ML City\\\\\n\\texttt{researcher@institute.ai}\n}\n\n\\newcommand{\\fix}{\\marginpar{FIX}}\n\\newcommand{\\new}{\\marginpar{NEW}}\n\n\\begin{document}\n\n\\maketitle\n\n\\begin{abstract}\n%%%%%%%%% ABSTRACT %%%%%%%%%\nAbstract here.\n%%%%%%%%% ABSTRACT %%%%%%%%%\n\\end{abstract}\n\n\\section{Introduction}\n\\label{sec:intro}\n%%%%%%%%% INTRODUCTION %%%%%%%%%\nIntroduction here.\n%%%%%%%%% INTRODUCTION %%%%%%%%%\n\n\\section{Related Work}\n\\label{sec:related_work}\n%%%%%%%%% RELATED WORK %%%%%%%%%\nRelated work here.\n%%%%%%%%% RELATED WORK %%%%%%%%%\n\n\\section{Methodology}\n\\label{sec:method}\n%%%%%%%%% METHOD %%%%%%%%%\nMethodology here.\n%%%%%%%%% METHOD %%%%%%%%%\n\n\\section{Experiments}\n\\label{sec:experiments}\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\nExperimental setup, results, and analysis here.\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\n\n\\section{Conclusion}\n\\label{sec:conclusion}\n%%%%%%%%% CONCLUSION %%%%%%%%%\nConclusion here.\n%%%%%%%%% CONCLUSION %%%%%%%%%\n\n%%%%%%%%% REFERENCES %%%%%%%%%\n\\bibliography{references}\n\\bibliographystyle{iclr2025_conference}\n%%%%%%%%% REFERENCES %%%%%%%%%\n\n%%%%%%%%% Appendix %%%%%%%%%\n% If you want to add appendix, uncomment the following lines:\n% \\appendix\n% \\section{xxx}\n%%%%%%%%% Appendix %%%%%%%%%\n\n\\end{document}\n\n\nResponse Format\nReturn EXACTLY TWO fenced code blocks.\n1. First code block: the BibTeX file:\n```bibtex\n@article{example2023,\ntitle={Example Title},\nauthor={Author, First},\njournal={Example Journal},\nyear={2023}\n}\n```\n2. Second code block: the generated LaTeX paper:\n```latex\n% The complete LaTeX paper here\n```\nThe final paper must be coherent, highly polished, and scientifically accurate.\n\n[Delivery in this environment]\nYour working directory is /work: it holds the conference's LaTeX template files and the figures/ directory. Write the two files there as /work/references.bib and /work/template.tex (you may also return them as the two code blocks), and compile /work/template.tex with pdflatex and bibtex into /work/template.pdf. The compiled template.pdf is the paper that is evaluated.\n"
+  },
+  {
+   "name": "SYSTEM.md",
+   "size": 9869,
+   "text": "Role: Senior AI Researcher and Academic Writer.\nObjective: Complete a machine learning research paper by filling in missing sections of a provided LaTeX template and generating a corresponding bibliography file. You must produce a scientifically sound, well-structured paper suitable for submission to a top-tier ML conference.\n\nInputs\nYou will receive the following materials:\n• idea.md: Detailed description of the proposed method and technical ideas.\n• experimental_log.md: Raw experimental results and observations used to construct tables, figures, and analysis.\n• conference_guidelines.md: Formatting and stylistic requirements for the target conference.\n• figures_list: A list of figures that may be referenced in the paper.\n\nConference Guidelines\n# ICLR 2025 Paper Writing Guidelines\n\nBelow are the instructions to help you with the LaTeX paper writing process for ICLR 2025.\n\n## General Setup\n* **Document Class:** `\\documentclass{article}`\n* **Required Packages:**\n    ```latex\n    \\usepackage{iclr2025_conference,times}\n    \\usepackage{hyperref}\n    \\usepackage{url}\n    % Optional but recommended for math\n    \\input{math_commands.tex}\n    ```\n* **Style Files:** You must use `iclr2025_conference.sty` and `iclr2025_conference.bst`.\n\n## Anonymity (Crucial)\n* ICLR is double-blind. **Do not** include real author names or affiliations in the submission version, use \"Ambitious AI Researcher\" instead.\n* Use the third person when citing your own prior work (e.g., \"Earlier work by Smalle (2024)...\" instead of \"In our earlier work...\").\n* You may post your paper on arXiv, but do not explicitly refer to the arXiv version in the paper to maintain anonymity.\n\n## Paper Length\n* **Main Text:** Strict upper limit of **10 pages**.\n* **Citations:** Unlimited additional pages.\n* **Ethics & Reproducibility Statements:** Optional. Do not count toward the page limit (max 1 page each).\n* **Acknowledgments:** Do not count toward the page limit.\n\n## Abstract\nThe abstract must be limited to **one paragraph**.\n* **Margins:** Indented 1/2 inch (3 picas) on both left and right-hand margins.\n* **Font:** 10-point type, vertical spacing of 11-points.\n* **Title:** The word `\\textsc{Abstract}` must be centered, in small caps, and in point size 12.\n* **Spacing:** Two line spaces precede the abstract.\n\n## Formatting Your Paper\nThe text must be confined within a rectangle 5.5 inches (33 picas) wide and 9 inches (54 picas) long. The left margin is 1.5 inch (9 picas).\n* **Font:** Times New Roman (via `times` package) is preferred.\n* **Size:** 10-point type with 11-point vertical spacing.\n* **Paragraphs:** Separated by 1/2 line space, with **no indentation**.\n* **Paper Title:** 17-point, small caps, left-aligned.\n\n### Headings\n* **First Level:** Small caps (`\\textsc`), flush left, 12-point. One line space before, 1/2 after.\n* **Second Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n* **Third Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n\n## Citations and References\nUse the `natbib` package (loaded automatically by the style file).\n* **Narrative citation:** Use `\\citet{Gomu2024}` $\\rightarrow$ \"Gomu et al. (2024)\".\n* **Parenthetical citation:** Use `\\citep{Gomu2024}` $\\rightarrow$ \"(Gomu et al., 2024)\".\n* **Bibliography:**\n    ```latex\n    \\bibliography{references}\n    \\bibliographystyle{iclr2025_conference}\n    ```\n\n## Figures and Tables\n* All artwork must be neat, clean, and legible.\n* **Captions:** Lower case (except for first word and proper nouns).\n* **Placement:**\n    * **Figures:** Caption appears **after** (below) the figure.\n    * **Tables:** Caption appears **before** (above) the table.\n\n### Example Code for Figures\n```latex\n\\begin{figure}[h]\n\\begin{center}\n%\\framebox[4.0in]{$\\;$}\n\\fbox{\\rule[-.5cm]{0cm}{4cm} \\rule[-.5cm]{4cm}{0cm}}\n\\end{center}\n\\caption{Sample figure caption.}\n\\end{figure}\n```\n\n### Example Code for Tables\n```latex\n\\begin{table}[t]\n\\caption{Sample table title}\n\\label{sample-table}\n\\begin{center}\n\\begin{tabular}{ll}\n\\multicolumn{1}{c}{\\bf PART}  &\\multicolumn{1}{c}{\\bf DESCRIPTION}\n\\\\ \\hline \\\\\nDendrite         &Input terminal \\\\\nAxon             &Output terminal \\\\\nSoma             &Cell body (contains cell nucleus) \\\\\n\\end{tabular}\n\\end{center}\n\\end{table}\n```\n\n## Math Notation\n* ICLR encourages standardized notation using `\\input{math_commands.tex}` (based on the Deep Learning book notation).\n* Variables: Italics ($a$, $\\va$, $\\mA$).\n* Random Variables: Roman ($P(\\ra)$).\n* Sets: Blackboard bold ($\\R$, $\\sA$).\n* Functions: Standard LaTeX ($f(\\vx)$).\n\n## Optional Statements\nThese should appear at the end of the main text, before references.\n1.  **Ethics Statement:** (Optional, max 1 page) Address potential concerns (human subjects, sensitive data, bias, etc.).\n2.  **Reproducibility Statement:** (Optional, max 1 page) Reference code, proofs, or data processing steps to ensure reproducibility.\n\n## Important Rules\n* **Formatting:** Do not modify the width or length of the text rectangle or font sizes.\n* **Line Numbers:** Do not refer to line numbers in your text (the style file adds them automatically for review).\n* **Appendix:** You may include an appendix at the very end of the main PDF (after references). Use `\\appendix` to start this section.\n* **Figures Directory:** For consistent compilation, all figures will reside in the `figures` directory. Always include the `figures/` prefix in your `\\includegraphics` command (e.g., `figures/figure_1.pdf`).\n* **Author Information:** Always use the following author information placeholder in your writeup:\n    * Ambitious AI Researcher, AI Research Institute, 123 AI Avenue, ML City, researcher@institute.ai\n\nCritical Constraints\n1. Scientific Integrity\n• All reported experimental results MUST match the provided experimental logs.\n• Never fabricate results, numbers, baselines, datasets, or metrics.\n• If results are weak, negative, or inconclusive, report them honestly and discuss possible explanations.\n2. Literature Cutoff Rule\nYou must behave as if the current date is: 2024-10. Do NOT cite or discuss papers published after this date.\n3. Page Limit\nThe main paper is limited to 10 pages (including figures and tables but excluding references and appendices). Use space efficiently while remaining concise.\n4. Template Compliance\n• Do not modify the overall LaTeX style or document structure mandated by the conference template.\n• References must be handled through a references.bib file.\n• Use standard LaTeX citation commands (e.g., \\cite{}). Make sure you ONLY cite keys that exist in your generated BibTeX code block.\n\nSection Guidelines\n• Title: Concise, descriptive, and memorable. Preferably under two lines.\n• Abstract: A single, compelling paragraph summarizing the problem context, proposed approach, key results, and main takeaway.\n• Introduction: Introduce the problem and motivate its importance. Provide necessary background context. Clearly summarize the paper's core contributions.\n• Related Work: Discuss prior work addressing similar or related problems. Detail the relationship between existing literature and the current approach. Cite relevant baselines and influential papers published before 2024-10.\n• Methodology: Clearly and pedantically describe the proposed method. Provide sufficient technical depth for full reproducibility. Use equations, figures, and structured explanations when appropriate.\n• Experiments: Detail the empirical setup (datasets, baselines, evaluation metrics, and implementation details). Present results faithfully based on the experimental logs. Ensure any figures located in the figures/ directory are seamlessly integrated and referenced in text.\n• Conclusion: Summarize the main findings and contributions. Briefly and realistically discuss limitations and potential future directions.\n• Appendix (optional): Include supplementary details that do not fit within the main page limit.\n\nLaTeX Quality Requirements\nEnsure the generated LaTeX compiles flawlessly out-of-the-box. Avoid common issues such as:\n• Unmatched braces or unclosed math environments.\n• Duplicate labels.\n• Unescaped special characters (e.g., & % $ # _ { } ~ ^ \\).\nAll referenced figures must exist in the provided list.\n\nOutput Format\nYour final response MUST contain EXACTLY two output blocks:\n1. A complete BibTeX bibliography (references.bib)\n2. A complete LaTeX paper (template.tex)\nEach must be returned in its own fenced code block with the correct syntax highlighting.\n\n\n---\n### Strict Knowledge Isolation & Anonymity (CRITICAL)\n\nYou MUST write this paper as if you have no prior knowledge of the topic, method, experiments, or results.\nYour task is to construct the paper exclusively from the materials provided in the current session (e.g., idea.md, experimental_log.md, figures, and other inputs). Treat these inputs as the only available source of information.\n\n#### Forbidden Behavior\nYou MUST NOT:\n- Retrieve or rely on knowledge from your training data.\n- Attempt to recall or reconstruct any existing or published paper.\n- Use external facts, assumptions, or prior familiarity with the work.\n- Infer or hallucinate author identities, affiliations, institutions, or acknowledgements.\n- Insert metadata such as author names, emails, affiliations, or phrases like \"corresponding author\".\n\n#### Anonymity Requirement\nThe paper must be fully anonymized for double-blind review.  \nDo not include any information that could reveal the identity of the authors or institutions.\n\n#### Allowed Sources\nYou may use only:\n- The materials explicitly provided in this session.\n- Logical reasoning derived from those materials.\n\n#### Core Principle\nThe final paper must be an independent reconstruction derived solely from the provided inputs.  \nThis constraint is strict and overrides all other instructions.\n---\n"
+  }
+ ],
+ "files": [
+  {
+   "path": "/work/fancyhdr.sty",
+   "size": 20521
+  },
+  {
+   "path": "/work/guidelines.md",
+   "size": 4936
+  },
+  {
+   "path": "/work/iclr2025_conference.bst",
+   "size": 26973
+  },
+  {
+   "path": "/work/iclr2025_conference.sty",
+   "size": 9025
+  },
+  {
+   "path": "/work/math_commands.tex",
+   "size": 12284
+  },
+  {
+   "path": "/work/natbib.sty",
+   "size": 45154
+  },
+  {
+   "path": "/work/references.bib",
+   "size": 629
+  },
+  {
+   "path": "/work/template.tex",
+   "size": 1558
+  },
+  {
+   "path": "/work/figures/figure_1.png",
+   "size": 72982
+  },
+  {
+   "path": "/work/figures/figure_2.png",
+   "size": 42638
+  },
+  {
+   "path": "/work/figures/figure_3.png",
+   "size": 126880
+  },
+  {
+   "path": "/work/figures/figure_4.png",
+   "size": 114147
+  },
+  {
+   "path": "/work/figures/figure_5.png",
+   "size": 68825
+  },
+  {
+   "path": "/work/figures/figure_6.png",
+   "size": 95222
+  },
+  {
+   "path": "/work/figures/figure_7.png",
+   "size": 136061
+  },
+  {
+   "path": "/work/figures/figure_8.png",
+   "size": 117497
+  },
+  {
+   "path": "/work/figures/info.json",
+   "size": 1404
+  }
+ ],
+ "file_notes": [],
+ "settings": {
+  "limits": {
+   "time_limit_hours": 2.0
+  },
+  "offline": false,
+  "image": null,
+  "deliverables": [
+   "template.pdf",
+   "template.tex",
+   "references.bib"
+  ],
+  "work": "paper",
+  "inputs": [
+   {
+    "path": "/work/figures",
+    "from": "figures"
+   }
+  ],
+  "software": false
+ },
+ "shield": {
+  "source": {
+   "title": "Effective and Efficient Time-Varying Counterfactual Prediction with State-Space Models",
+   "authors": [
+    "Haotian Wang",
+    "Haoxuan Li",
+    "Hao Zou",
+    "Haoang Chi",
+    "Long Lan",
+    "Wanrong Huang",
+    "Wenjing Yang"
+   ],
+   "time_cutoff": "2024-10-01",
+   "abs_url": "https://openreview.net/forum?id=yheQRc5xWB",
+   "pdf_url": "https://openreview.net/pdf?id=yheQRc5xWB",
+   "openreview_forum": "yheQRc5xWB",
+   "code_repository": [
+    "https://github.com/google-research/paper-orchestra"
+   ]
+  },
+  "extra": {
+   "urls": [
+    "https://huggingface.co/datasets/yiwen-song/PaperWritingBench",
+    "https://yiwen-song.github.io/paper_orchestra/"
+   ]
+  },
+  "probe_url": "https://github.com/google-research/paper-orchestra"
+ },
+ "evaluator": {
+  "repo": "https://github.com/google-research/paper-orchestra",
+  "commit": "ca1b3fa01c2970fc7cda32d16245db38d57b3f56",
+  "dataset": "yiwen-song/PaperWritingBench",
+  "revision": "fbcfcafd042184ca954954b08dfcb92bd7942b51",
+  "paper_id": "iclr2025_3cd33845e3",
+  "venue": "iclr2025",
+  "paper_dir": "iclr2025/papers/iclr2025_3cd33845e3",
+  "idea": "idea_sparse.md",
+  "research_cutoff": "2024-10",
+  "prompt": "Single Agent (arXiv 2604.05018v1 App. F.1)",
+  "paper": "template.pdf"
+ },
+ "references": [
+  {
+   "name": "iclr2025_3cd33845e3.pdf",
+   "size": 9079897,
+   "text": null,
+   "note": "the original paper",
+   "file_reason": "not-in-batch"
+  },
+  {
+   "name": "raw_materials/idea_dense.md",
+   "size": 7752,
+   "text": "## Problem Statement\nTime-varying counterfactual prediction (TCP) is essential for determining optimal sequential treatment assignments in domains such as healthcare. However, existing approaches face two critical limitations that hinder their scalability and accuracy in dynamic regimes.\n\nFirst, current state-of-the-art methods rely heavily on Transformer or RNN backbones. Transformers, while powerful, suffer from quadratic computational complexity regarding sequence length due to the attention mechanism. This makes modeling long-range dependencies and historical interactions computationally prohibitive and inefficient.\n\nSecond, addressing the \"time-varying confounding bias\" remains an unresolved challenge. Existing solutions typically employ domain-adversarial training to balance representations across treatment groups. We identify that this approach frequently leads to \"over-balancing,\" where the erasure of treatment-predictive information inadvertently corrupts the representation of covariates necessary for accurate outcome prediction. Furthermore, these methods often correct bias only at the final time step, ignoring the accumulation of confounding bias throughout the sequence history. We aim to address the need for a model that is both computationally efficient for long sequences and capable of precise, step-by-step bias correction without information loss.\n\n## Core Hypothesis\nWe propose a novel framework, **Mamba-CDSP** (Counterfactual Mamba with Covariate-based Decorrelation towards Selective Parameters), which leverages the linear scaling properties of State-Space Models (SSMs) to solve the TCP task.\n\nOur central hypothesis is twofold:\n1.  **Architecture:** By adapting the Mamba architecture—specifically a selective state-space model—we can capture long-range temporal dependencies with near-linear computational complexity, significantly outperforming Transformer efficiency.\n2.  **Debiasing:** We hypothesize that confounding bias can be mitigated more effectively via a **Covariate-based Decorrelation** mechanism applied directly to the selective parameters of the Mamba model. Unlike adversarial balancing, we propose that removing the cross-covariance between current treatments and the history representation at each time step will eliminate bias while preserving essential covariate information, thereby avoiding the over-balancing pitfall.\n\n## Proposed Methodology (Detailed Technical Approach)\n\nWe will construct a comprehensive framework designated as Mamba-CDSP. This framework will integrate a modified Mamba backbone with a custom regularization objective for sequential debiasing.\n\n### 1. Problem Formulation and Notation\nWe define the historical information at time step $t$ as $\\mathbf{\\overline{H}}_t = \\{\\mathbf{\\overline{X}}_t, \\mathbf{\\overline{A}}_{t-1}, \\mathbf{\\overline{Y}}_t, \\mathbf{V}\\}$, where $\\mathbf{X}_t$ are time-varying covariates, $\\mathbf{A}_t$ are treatments, $\\mathbf{Y}_t$ are outcomes, and $\\mathbf{V}$ are static features.\n\nOur goal is to estimate the potential outcome $\\mathbb{E}(\\mathbf{y}_{t+\\tau}[\\mathbf{\\overline{a}}_{t:t+\\tau-1}] \\mid \\mathbf{\\overline{H}}_t)$. We operate under the standard assumptions of Consistency, Sequential Overlap, and Sequential Ignorability.\n\n### 2. Architecture: Counterfactual Mamba (C-MAMBA)\nWe will utilize the continuous signal mapping principles of SSMs. The core transition dynamics will follow the discrete approximation of the differential equation:\n$$ h_t = \\overline{\\mathbf{C}} h_{t-1} + \\overline{\\mathbf{B}} x_t, \\quad y_t = \\mathbf{R} h_t $$\nwhere $\\overline{\\mathbf{C}}$ and $\\overline{\\mathbf{B}}$ are discretized evolution and projection parameters derived via the selective mechanism of Mamba.\n\n**Architectural Modifications:**\nTo adapt Mamba for the specific challenges of TCP, we will modify the standard block structure:\n*   **Input Embedding:** We will embed the combined history $\\mathbf{\\overline{H}}_t$ into a latent representation space $\\tilde{X}$ followed by RMS-Norm.\n*   **Dual Branch Design:** The input will split into two branches.\n    *   *Left Branch:* Standard projection and SiLU activation.\n    *   *Right (Main) Branch:* We will replace the standard 1D convolutional layer found in the original Mamba architecture with a **Dropout layer**. We posit that the token-mixing nature of the convolution contributes to overfitting in counterfactual tasks; replacing it with dropout will regularize the temporal interactions.\n*   **Fusion:** The branches will be fused via element-wise multiplication and a final projection layer.\n\n### 3. Covariate-based Decorrelation towards Selective Parameters (CDSP)\nWe will introduce a regularization mechanism to eliminate the correlation between the current treatment $a_t$ and the historical hidden state $h_{t-1}$.\n\nFirst, we expand the covariance term based on the accumulated transition parameters. We define the accumulated operator $K_i$ as:\n$$ K_i = \\overline{\\mathbf{B}}_i \\Pi_{j=i}^{t-1} \\overline{\\mathbf{C}}_j $$\nWe derive the relationship for the covariance norm:\n$$ \\| Cov(h_{t-1}, a_t) \\|_2^2 \\leq \\sum_{i=1}^{t-1} \\| K_i \\Sigma_{\\tilde{X}_i^h, a_t} \\|_2^2 $$\nwhere $\\Sigma_{\\tilde{X}_i^h, a_t}$ denotes the cross-covariance $Cov(\\tilde{X}_i^h, a_t)$.\n\nTo minimize the confounding bias, we will enforce a constraint that minimizes this covariance. Based on the proposition that minimizing the squared norm is equivalent to minimizing the product of the operator and the covariance matrices, we formulate the **CDSP Regularization Loss**:\n$$ \\mathcal{L}_{\\mathrm{CDSP}}(\\overline{C}, \\overline{B}) = \\sum_{i=1}^{t-1} \\left\\| \\overline{\\mathbf{B}}_i \\left( \\prod_{j=i}^{t-1} \\overline{\\mathbf{C}}_j \\right) \\Sigma_{\\tilde{X}_i^h, a_t} \\Sigma_{\\tilde{X}_i^h, a_t}^T \\right\\|^2 $$\nCrucially, the term $\\Sigma_{\\tilde{X}_i^h, a_t} \\Sigma_{\\tilde{X}_i^h, a_t}^T$ relies only on the representations of variables and can be pre-computed per batch, ensuring efficiency.\n\n### 4. Training Objective\nThe model will be trained end-to-end using a composite objective function. We will minimize the factual prediction error using Mean Squared Error (MSE) while simultaneously minimizing the CDSP regularization term.\n\nThe factual loss for the next outcome prediction is:\n$$ \\mathcal{L}_{\\mathrm{MSE}} = \\| \\hat{\\mathbf{Y}}_{t+1} - \\boldsymbol{\\Phi}_Y(\\mathbf{h}_t) \\|^2 $$\nwhere $\\Phi_Y$ represents the projection head parameters.\n\nThe total objective function will be:\n$$ \\mathcal{L}_{total} = \\mathcal{L}_{\\mathrm{MSE}} + \\alpha \\mathcal{L}_{\\mathrm{CDSP}} $$\nwhere $\\alpha$ is a hyperparameter balancing prediction accuracy and bias correction. Note that $\\mathcal{L}_{\\mathrm{CDSP}}$ will specifically update the selective parameters $\\overline{\\mathbf{C}}$ and $\\overline{\\mathbf{B}}$.\n\n## Expected Contribution\n1.  **Algorithmic Novelty:** We will establish the first Mamba-based architecture tailored for counterfactual prediction, proving that State-Space Models are a viable and superior alternative to Transformers for causal inference.\n2.  **Theoretical Efficiency:** By replacing adversarial discriminators with our CDSP mechanism, we expect to reduce the computational complexity of the debiasing module from cubic/quadratic dependencies (typical in adversarial methods) to a form that capitalizes on Mamba's linear scalability.\n3.  **Improved Generalization Bounds:** We anticipate proving that the CDSP mechanism provides a tighter upper bound on the counterfactual prediction risk compared to adversarial balancing. Specifically, we aim to show that by matching first-order moments (via decorrelation) rather than forcing full distributional invariance, we avoid over-balancing and preserve critical predictive information within the covariates.",
+   "note": "the dense idea (the method that produced the experimental log)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gpt-5-2025-08-07.json",
+   "size": 35507,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Ahmed Alaa and Mihaela Schaar. Limits of estimating heterogeneous treatment effects: Guidelines for practical algorithm design. In International Conference on Machine Learning, pp. 129\\u2013138. PMLR, 2018.\",\n            \"extracted_paper_title\": \"Limits of estimating heterogeneous treatment effects: Guidelines for practical algorithm design.\",\n            \"fetched_paper_id\": \"f2ce04b0811dd2271ffb44c2ec3830d7d5d7fae7\",\n            \"fetched_paper_title\": \"Limits of Estimating Heterogeneous Treatment Effects: Guidelines for Practical Algorithm Design\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ahmed Allam, Stefan Feuerriegel, Michael Rebhan, and Michael Krauthammer. Analyzing patient trajectories with artificial intelligence. Journal of medical internet research, 23(12):e29812, 2021.\",\n            \"extracted_paper_title\": \"Analyzing patient trajectories with artificial intelligence\",\n            \"fetched_paper_id\": \"b56c0fc79691a660d34dea564bf9308996e9d77e\",\n            \"fetched_paper_title\": \"Analyzing Patient Trajectories With Artificial Intelligence\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"David Arbour, Eli Ben-Michael, Avi Feller, Alex Franks, and Steven Raphael. Using multitask gaussian processes to estimate the effect of a targeted effort to remove firearms. arXiv preprint arXiv:2110.07006, 2021.\",\n            \"extracted_paper_title\": \"Using multitask gaussian processes to estimate the effect of a targeted effort to remove firearms\",\n            \"fetched_paper_id\": \"99a3585ec96f0394a596731eb5a5db3b428d328a\",\n            \"fetched_paper_title\": \"Using Multitask Gaussian Processes to estimate the effect of a targeted effort to remove firearms\\u2217\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Susan Athey, Guido W Imbens, and Stefan Wager. Approximate residual balancing: debiased inference of average treatment effects in high dimensions. Journal of the Royal Statistical Society: Series B (Statistical Methodology), 80(4):597\\u2013623, 2018.\",\n            \"extracted_paper_title\": \"Approximate residual balancing: debiased inference of average treatment effects in high dimensions.\",\n            \"fetched_paper_id\": \"f1a626bee8bb1d0cb9f9647bb15143911cf5d166\",\n            \"fetched_paper_title\": \"Approximate residual balancing: debiased inference of average treatment effects in high dimensions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Peter C Austin, Muhammad M Mamdani, Carl Van Walraven, and Jack V Tu. Quantifying the impact of survivor treatment bias in observational studies. Journal of evaluation in clinical practice, 12 (6):601\\u2013612, 2006.\",\n            \"extracted_paper_title\": \"Quantifying the impact of survivor treatment bias in observational studies\",\n            \"fetched_paper_id\": \"792d72405f1e78b72577d745bb9d16b18fda9059\",\n            \"fetched_paper_title\": \"Quantifying the impact of survivor treatment bias in observational studies.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jeroen Berrevoets, Alicia Curth, Ioana Bica, Eoin McKinney, and Mihaela van der Schaar. Disen- tangled counterfactual recurrent networks for treatment effect inference over time. arXiv preprint arXiv:2112.03811, 2021.\",\n            \"extracted_paper_title\": \"Disentangled counterfactual recurrent networks for treatment effect inference over time\",\n            \"fetched_paper_id\": \"0b63e137fdc73af908e192a250e7270cc4dac1f7\",\n            \"fetched_paper_title\": \"Disentangled Counterfactual Recurrent Networks for Treatment Effect Inference over Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ioana Bica, Ahmed M Alaa, James Jordon, and Mihaela van der Schaar. Estimating counterfactual treatment outcomes over time through adversarially balanced representations. arXiv preprint arXiv:2002.04083, 2020.\",\n            \"extracted_paper_title\": \"Estimating counterfactual treatment outcomes over time through adversarially balanced representations\",\n            \"fetched_paper_id\": \"f0cdd98cfdd9fa4b7fa4dd67b561cbac6654d0cb\",\n            \"fetched_paper_title\": \"Estimating Counterfactual Treatment Outcomes over Time Through Adversarially Balanced Representations\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yehu Chen, Annamaria Prati, Jacob Montgomery, and Roman Garnett. A multi-task gaussian process model for inferring time-varying treatment effects in panel data. In International Conference on Artificial Intelligence and Statistics, pp. 4068\\u20134088. PMLR, 2023.\",\n            \"extracted_paper_title\": \"A multi-task gaussian process model for inferring time-varying treatment effects in panel data\",\n            \"fetched_paper_id\": \"e37d61b53f4352fe114f5c5489a103d025b54516\",\n            \"fetched_paper_title\": \"A Multi-Task Gaussian Process Model for Inferring Time-Varying Treatment Effects in Panel Data\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Victor Chernozhukov, Iv\\u00b4an Fern\\u00b4andez-Val, and Blaise Melly. Inference on counterfactual distributions. Econometrica, 81(6):2205\\u20132268, 2013.\",\n            \"extracted_paper_title\": \"Inference on counterfactual distributions\",\n            \"fetched_paper_id\": \"dcfc6750ae9b8354f60bc460f83a030a6bbfd5d5\",\n            \"fetched_paper_title\": \"Inference on counterfactual distributions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dennis Frauen, Tobias Hatt, Valentyn Melnychuk, and Stefan Feuerriegel. Estimating average causal effects from patient trajectories. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 37, pp. 7586\\u20137594, 2023.\",\n            \"extracted_paper_title\": \"Estimating average causal effects from patient trajectories.\",\n            \"fetched_paper_id\": \"fae41e2dded7f20f110a57c61dd0d1dbdd4c6a24\",\n            \"fetched_paper_title\": \"Estimating average causal effects from patient trajectories\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Changran Geng, Harald Paganetti, and Clemens Grassberger. Prediction of treatment response for combined chemo-and radiation therapy for non-small cell lung cancer patients using a bio- mathematical model. Scientific reports, 7(1):13542, 2017.\",\n            \"extracted_paper_title\": \"Prediction of treatment response for combined chemo- and radiation therapy for non-small cell lung cancer patients using a biomathematical model\",\n            \"fetched_paper_id\": \"c38c9c3754e0ecbbed2d191ab45c50b03d84ccff\",\n            \"fetched_paper_title\": \"Prediction of Treatment Response for Combined Chemo- and Radiation Therapy for Non-Small Cell Lung Cancer Patients Using a Bio-Mathematical Model\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Arthur Gretton, Olivier Bousquet, Alex Smola, and Bernhard Sch\\u00a8olkopf. Measuring statistical dependence with hilbert-schmidt norms. In International conference on algorithmic learning theory, pp. 63\\u201377. Springer, 2005.\",\n            \"extracted_paper_title\": \"Measuring statistical dependence with hilbert-schmidt norms\",\n            \"fetched_paper_id\": \"397306cada03c29ab9c3d5a7991a343cae92f2e3\",\n            \"fetched_paper_title\": \"Measuring Statistical Dependence with Hilbert-Schmidt Norms\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Arthur Gretton, Kenji Fukumizu, Choon Teo, Le Song, Bernhard Sch\\u00a8olkopf, and Alex Smola. A kernel statistical test of independence. Advances in neural information processing systems, 20, 2007.\",\n            \"extracted_paper_title\": \"A kernel statistical test of independence\",\n            \"fetched_paper_id\": \"0d86fbca1fbdb7c8e5a10c2d2c5a0ff3e07eea15\",\n            \"fetched_paper_title\": \"A Kernel Statistical Test of Independence\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Albert Gu and Tri Dao. Mamba: Linear-time sequence modeling with selective state spaces. arXiv preprint arXiv:2312.00752, 2023.\",\n            \"extracted_paper_title\": \"Mamba: Linear-time sequence modeling with selective state spaces.\",\n            \"fetched_paper_id\": \"7bbc7595196a0606a07506c4fb1473e5e87f6082\",\n            \"fetched_paper_title\": \"Mamba: Linear-Time Sequence Modeling with Selective State Spaces\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Albert Gu, Karan Goel, and Christopher R\\u00b4e. Efficiently modeling long sequences with structured state spaces. arXiv preprint arXiv:2111.00396, 2021a.\",\n            \"extracted_paper_title\": \"Efficiently modeling long sequences with structured state spaces\",\n            \"fetched_paper_id\": \"ac2618b2ce5cdcf86f9371bcca98bc5e37e46f51\",\n            \"fetched_paper_title\": \"Efficiently Modeling Long Sequences with Structured State Spaces\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Albert Gu, Isys Johnson, Karan Goel, Khaled Saab, Tri Dao, Atri Rudra, and Christopher R\\u00b4e. Combining recurrent, convolutional, and continuous-time models with linear state space layers. Advances in neural information processing systems, 34:572\\u2013585, 2021b.\",\n            \"extracted_paper_title\": \"Combining recurrent, convolutional, and continuous-time models with linear state space layers\",\n            \"fetched_paper_id\": \"ca9047c78d48b606c4e4f0c456b1dda550de28b2\",\n            \"fetched_paper_title\": \"Combining Recurrent, Convolutional, and Continuous-time Models with Linear State-Space Layers\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hoda Heidari and Andreas Krause. Preventing disparate treatment in sequential decision making. In IJCAI, pp. 2248\\u20132254, 2018.\",\n            \"extracted_paper_title\": \"Preventing disparate treatment in sequential decision making\",\n            \"fetched_paper_id\": \"641d2c9a0acd2f529dcc1165e70dcb2200c180d7\",\n            \"fetched_paper_title\": \"Preventing Disparate Treatment in Sequential Decision Making\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Samuel Holt, Jeroen Berrevoets, Krzysztof Kacprzyk, Zhaozhi Qian, and Mihaela van der Schaar. Ode discovery for longitudinal heterogeneous treatment effects inference. In The Twelfth International Conference on Learning Representations, 2024.\",\n            \"extracted_paper_title\": \"Ode discovery for longitudinal heterogeneous treatment effects inference\",\n            \"fetched_paper_id\": \"1d589ac52d55b2b79805f57999d200bd9f7b3f2b\",\n            \"fetched_paper_title\": \"ODE Discovery for Longitudinal Heterogeneous Treatment Effects Inference\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Qiang Huang, Chuizheng Meng, Defu Cao, Biwei Huang, Yi Chang, and Yan Liu. An empirical examination of balancing strategy for counterfactual estimation on time series. In Forty-first International Conference on Machine Learning, 2024.\",\n            \"extracted_paper_title\": \"An empirical examination of balancing strategy for counterfactual estimation on time series.\",\n            \"fetched_paper_id\": \"c11575b69424770336add6ee1def3c63c8724411\",\n            \"fetched_paper_title\": \"An Empirical Examination of Balancing Strategy for Counterfactual Estimation on Time Series\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Alistair EW Johnson, Tom J Pollard, Lu Shen, Li-wei H Lehman, Mengling Feng, Mohammad Ghassemi, Benjamin Moody, Peter Szolovits, Leo Anthony Celi, and Roger G Mark. Mimic-iii, a freely accessible critical care database. Scientific data, 3(1):1\\u20139, 2016.\",\n            \"extracted_paper_title\": \"Mimic-iii, a freely accessible critical care database\",\n            \"fetched_paper_id\": \"95cd83603a0d2b6918a8e34a5637a8f382da96f5\",\n            \"fetched_paper_title\": \"MIMIC-III, a freely accessible critical care database\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Edward H Kennedy, Sivaraman Balakrishnan, and LA Wasserman. Semiparametric counterfactual density estimation. Biometrika, 110(4):875\\u2013896, 2023.\",\n            \"extracted_paper_title\": \"Semiparametric counterfactual density estimation\",\n            \"fetched_paper_id\": \"2aa94464c6f38fdffc51e2877e3f08c13ea40dfb\",\n            \"fetched_paper_title\": \"Semiparametric Counterfactual Density Estimation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Kun Kuang, Peng Cui, Hao Zou, Bo Li, Jianrong Tao, Fei Wu, and Shiqiang Yang. Data-driven variable decomposition for treatment effect estimation. IEEE Transactions on Knowledge and Data Engineering, 2020.\",\n            \"extracted_paper_title\": \"Data-driven variable decomposition for treatment effect estimation\",\n            \"fetched_paper_id\": \"ac0d24726f4cb0257a5341167435124afcd099bd\",\n            \"fetched_paper_title\": \"Data-Driven Variable Decomposition for Treatment Effect Estimation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Rui Li, Zach Shahn, Jun Li, Mingyu Lu, Prithwish Chakraborty, Daby Sow, Mohamed Ghalwash, and Li-wei H Lehman. G-net: a deep learning approach to g-computation for counterfactual outcome prediction under dynamic treatment regimes. arXiv preprint arXiv:2003.10551, 2020.\",\n            \"extracted_paper_title\": \"G-net: a deep learning approach to g-computation for counterfactual outcome prediction under dynamic treatment regimes.\",\n            \"fetched_paper_id\": \"0af0637decd1b6052a5beff9c335099f340a0c6f\",\n            \"fetched_paper_title\": \"G-Net: A Deep Learning Approach to G-computation for Counterfactual Outcome Prediction Under Dynamic Treatment Regimes\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Rui Li, Stephanie Hu, Mingyu Lu, Yuria Utsumi, Prithwish Chakraborty, Daby M Sow, Piyush Madan, Jun Li, Mohamed Ghalwash, Zach Shahn, et al. G-net: a recurrent network approach to g-computation for counterfactual prediction under a dynamic treatment regime. In Machine Learning for Health, pp. 282\\u2013299. PMLR, 2021.\",\n            \"extracted_paper_title\": \"G-net: a recurrent network approach to g-computation for counterfactual prediction under a dynamic treatment regime\",\n            \"fetched_paper_id\": \"31d33af0b36bdf11bba1c10f57b174d6ef4cbdc2\",\n            \"fetched_paper_title\": \"G-Net: a Recurrent Network Approach to G-Computation for Counterfactual Prediction Under a Dynamic Treatment Regime\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Bryan Lim. Forecasting treatment responses over time using recurrent marginal structural networks. advances in neural information processing systems, 31, 2018.\",\n            \"extracted_paper_title\": \"Forecasting treatment responses over time using recurrent marginal structural networks\",\n            \"fetched_paper_id\": \"5e7c4b544e5908b923e434e04a84a4df898686f1\",\n            \"fetched_paper_title\": \"Forecasting Treatment Responses Over Time Using Recurrent Marginal Structural Networks\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Andreas Maurer, Massimiliano Pontil, and Bernardino Romera-Paredes. The benefit of multitask representation learning. Journal of Machine Learning Research, 17(81):1\\u201332, 2016.\",\n            \"extracted_paper_title\": \"The benefit of multitask representation learning\",\n            \"fetched_paper_id\": \"a122dbde40c9cd976badd99fdc820156908b7ee8\",\n            \"fetched_paper_title\": \"The Benefit of Multitask Representation Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Harsh Mehta, Ankit Gupta, Ashok Cutkosky, and Behnam Neyshabur. Long range language modeling via gated state spaces. arXiv preprint arXiv:2206.13947, 2022.\",\n            \"extracted_paper_title\": \"Long range language modeling via gated state spaces\",\n            \"fetched_paper_id\": \"eaef083b9d661f42cc0d89d9d8156218f33a91d9\",\n            \"fetched_paper_title\": \"Long Range Language Modeling via Gated State Spaces\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Valentyn Melnychuk, Dennis Frauen, and Stefan Feuerriegel. Causal transformer for estimating counterfactual outcomes. In International Conference on Machine Learning, pp. 15293\\u201315329. PMLR, 2022.\",\n            \"extracted_paper_title\": \"Causal transformer for estimating counterfactual outcomes\",\n            \"fetched_paper_id\": \"2e03ee15c00561a891eaf197515da720d1566411\",\n            \"fetched_paper_title\": \"Causal Transformer for Estimating Counterfactual Outcomes\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"James Robins. A new approach to causal inference in mortality studies with a sustained exposure period\\u2014application to control of the healthy worker survivor effect. Mathematical modelling, 7 (9-12):1393\\u20131512, 1986.\",\n            \"extracted_paper_title\": \"A new approach to causal inference in mortality studies with a sustained exposure period\\u2014application to control of the healthy worker survivor effect\",\n            \"fetched_paper_id\": \"4d508675ee414f4a8041a7270f63f3307ce50476\",\n            \"fetched_paper_title\": \"A new approach to causal inference in mortality studies with a sustained exposure period\\u2014application to control of the healthy worker survivor effect\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"James Robins and Miguel Hernan. Estimation of the causal effects of time-varying exposures. Chapman & Hall/CRC Handbooks of Modern Statistical Methods, pp. 553\\u2013599, 2008.\",\n            \"extracted_paper_title\": \"Estimation of the causal effects of time-varying exposures\",\n            \"fetched_paper_id\": \"bd211f20dd72bc6e94b3d8db284c22588dc6767b\",\n            \"fetched_paper_title\": \"Estimation of the causal effects of time-varying exposures\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"James M Robins. Association, causation, and marginal structural models. Synthese, 121(1/2): 151\\u2013179, 1999.\",\n            \"extracted_paper_title\": \"Association, causation, and marginal structural models\",\n            \"fetched_paper_id\": \"ded13118adb4e97b16c4d8d9630d186c4dfbebff\",\n            \"fetched_paper_title\": \"Association, Causation, And Marginal Structural Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"James M Robins, Miguel Angel Hernan, and Babette Brumback. Marginal structural models and causal inference in epidemiology, 2000.\",\n            \"extracted_paper_title\": \"Marginal structural models and causal inference in epidemiology\",\n            \"fetched_paper_id\": \"126a25352db3bd310b7e48df9604e26b2b8d3e2a\",\n            \"fetched_paper_title\": \"Marginal Structural Models and Causal Inference in Epidemiology\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jason Roy, Kirsten J Lum, and Michael J Daniels. A bayesian nonparametric approach to marginal structural models for point treatments and a continuous or survival outcome. Biostatistics, 18(1): 32\\u201347, 2017.\",\n            \"extracted_paper_title\": \"A bayesian nonparametric approach to marginal structural models for point treatments and a continuous or survival outcome.\",\n            \"fetched_paper_id\": \"45bdc268cc1418172ddf3843362130fea29fd53d\",\n            \"fetched_paper_title\": \"A Bayesian nonparametric approach to marginal structural models for point treatments and a continuous or survival outcome.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Amelie Royer, Tijmen Blankevoort, and Babak Ehteshami Bejnordi. Scalarization for multi-task and multi-domain learning at scale. Advances in Neural Information Processing Systems, 36, 2024.\",\n            \"extracted_paper_title\": \"Scalarization for multi-task and multi-domain learning at scale\",\n            \"fetched_paper_id\": \"611bd91e0050185319513493ad9a135a639438bd\",\n            \"fetched_paper_title\": \"Scalarization for Multi-Task and Multi-Domain Learning at Scale\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Donald B Rubin. Bayesian inference for causal effects: The role of randomization. The Annals of statistics, pp. 34\\u201358, 1978.\",\n            \"extracted_paper_title\": \"Bayesian inference for causal effects: The role of randomization\",\n            \"fetched_paper_id\": \"5bbbcb2988e0ef5171fadda83160db23bfe5829e\",\n            \"fetched_paper_title\": \"Bayesian Inference for Causal Effects: The Role of Randomization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Peter Schulam and Suchi Saria. Reliable decision support using counterfactual models. Advances in neural information processing systems, 30, 2017.\",\n            \"extracted_paper_title\": \"Reliable decision support using counterfactual models\",\n            \"fetched_paper_id\": \"0af8d24b14614499393b50f71070d68cf299d52c\",\n            \"fetched_paper_title\": \"Reliable Decision Support using Counterfactual Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Uri Shalit, Fredrik D Johansson, and David Sontag. Estimating individual treatment effect: general- ization bounds and algorithms. In International Conference on Machine Learning, pp. 3076\\u20133085. PMLR, 2017.\",\n            \"extracted_paper_title\": \"Estimating individual treatment effect: generalization bounds and algorithms.\",\n            \"fetched_paper_id\": \"17409ae85c237983dc22a5e4750d8054e4b6edc9\",\n            \"fetched_paper_title\": \"Estimating individual treatment effect: generalization bounds and algorithms\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"JQ Shi, B Wang, EJ Will, and RM West. Mixed-effects gaussian process functional regression models with application to dose\\u2013response curve prediction. Statistics in medicine, 31(26):3165\\u20133177, 2012.\",\n            \"extracted_paper_title\": \"Mixed-effects gaussian process functional regression models with application to dose\\u2013response curve prediction\",\n            \"fetched_paper_id\": \"d0053d8c15d24b4b374752ac3e689bb19bf90233\",\n            \"fetched_paper_title\": \"Mixed\\u2010effects Gaussian process functional regression models with application to dose\\u2013response curve prediction\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jimmy TH Smith, Andrew Warrington, and Scott W Linderman. Simplified state space layers for sequence modeling. arXiv preprint arXiv:2208.04933, 2022.\",\n            \"extracted_paper_title\": \"Simplified state space layers for sequence modeling\",\n            \"fetched_paper_id\": \"6d7d141c75af752ffc0d8a6184cca3f9323d6c74\",\n            \"fetched_paper_title\": \"Simplified State Space Layers for Sequence Modeling\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jerzy Splawa-Neyman, Dorota M Dabrowska, and Terrence P Speed. On the application of probability theory to agricultural experiments. essay on principles. section 9. Statistical Science, pp. 465\\u2013472, 1990.\",\n            \"extracted_paper_title\": \"On the application of probability theory to agricultural experiments. essay on principles. section 9.\",\n            \"fetched_paper_id\": \"5e85cd9baebc529281a66e0bbeaaa7f44c92c9d6\",\n            \"fetched_paper_title\": \"On the Application of Probability Theory to Agricultural Experiments. Essay on Principles. Section 9\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Elizabeth A Stuart. Matching methods for causal inference: A review and a look forward. Statistical science: a review journal of the Institute of Mathematical Statistics, 25(1):1, 2010.\",\n            \"extracted_paper_title\": \"Matching methods for causal inference: A review and a look forward.\",\n            \"fetched_paper_id\": \"c104df9aabcd2e38345cbf5387b1bb4acc38ccc0\",\n            \"fetched_paper_title\": \"Matching methods for causal inference: A review and a look forward.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wilbert Van der Klaauw. Estimating the effect of financial aid offers on college enrollment: A regression\\u2013discontinuity approach. International Economic Review, 43(4):1249\\u20131287, 2002.\",\n            \"extracted_paper_title\": \"Estimating the effect of financial aid offers on college enrollment: A regression\\u2013discontinuity approach.\",\n            \"fetched_paper_id\": \"2ec801fd27970638f6ee64c59aa630838d6fa9b4\",\n            \"fetched_paper_title\": \"Estimating the Effect of Financial Aid Offers on College Enrollment: A Regression-Discontinuity Approach\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Laurens Van der Maaten and Geoffrey Hinton. Visualizing data using t-sne. Journal of machine learning research, 9(11), 2008.\",\n            \"extracted_paper_title\": \"Visualizing data using t-sne\",\n            \"fetched_paper_id\": \"1c46943103bd7b7a2c7be86859995a4144d1938b\",\n            \"fetched_paper_title\": \"Visualizing Data using t-SNE\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Johannes Von Oswald, Eyvind Niklasson, Ettore Randazzo, Jo\\u02dcao Sacramento, Alexander Mordvintsev, Andrey Zhmoginov, and Max Vladymyrov. Transformers learn in-context by gradient descent. In International Conference on Machine Learning, pp. 35151\\u201335174. PMLR, 2023.\",\n            \"extracted_paper_title\": \"Transformers learn in-context by gradient descent.\",\n            \"fetched_paper_id\": \"525d93a382f6e7873b5d8a2e0713eb3dff7fb250\",\n            \"fetched_paper_title\": \"Transformers learn in-context by gradient descent\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Lan Wang, Yu Zhou, Rui Song, and Ben Sherwood. Quantile-optimal treatment regimes. Journal of the American Statistical Association, 113(523):1243\\u20131254, 2018.\",\n            \"extracted_paper_title\": \"Quantile-optimal treatment regimes\",\n            \"fetched_paper_id\": \"29dd1f2daaa7929e597a25b9e73ba7233262fe30\",\n            \"fetched_paper_title\": \"Quantile-Optimal Treatment Regimes\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shirly Wang, Matthew BA McDermott, Geeticka Chauhan, Marzyeh Ghassemi, Michael C Hughes, and Tristan Naumann. Mimic-extract: A data extraction, preprocessing, and representation pipeline for mimic-iii. In Proceedings of the ACM conference on health, inference, and learning, pp. 222\\u2013235, 2020.\",\n            \"extracted_paper_title\": \"Mimic-extract: A data extraction, preprocessing, and representation pipeline for mimic-iii\",\n            \"fetched_paper_id\": \"ee1ddb3fe85bdc1650c4d32a00e5051d57e71ebb\",\n            \"fetched_paper_title\": \"MIMIC-Extract: a data extraction, preprocessing, and representation pipeline for MIMIC-III\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Xin Wang, Shengfei Lyu, Lishan Yang, Yibing Zhan, and Huanhuan Chen. A dual-module framework for counterfactual estimation over time. In Forty-first International Conference on Machine Learning, 2024a.\",\n            \"extracted_paper_title\": \"A dual-module framework for counterfactual estimation over time\",\n            \"fetched_paper_id\": \"0ff5df869d0e7e7fcadc36685c5b6eaa9238a5dc\",\n            \"fetched_paper_title\": \"A Dual-module Framework for Counterfactual Estimation over Time\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Zihan Wang, Fanheng Kong, Shi Feng, Ming Wang, Han Zhao, Daling Wang, and Yifei Zhang. Is mamba effective for time series forecasting? arXiv preprint arXiv:2403.11144, 2024b.\",\n            \"extracted_paper_title\": \"Is mamba effective for time series forecasting?\",\n            \"fetched_paper_id\": \"dba88f9a59ad816ce14d93b2c8bfda5917adc196\",\n            \"fetched_paper_title\": \"Is Mamba Effective for Time Series Forecasting?\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shenghao Wu, Wenbin Zhou, Minshuo Chen, and Shixiang Zhu. Counterfactual generative models for time-varying treatments. In Proceedings of the 30th ACM SIGKDD Conference on Knowledge Discovery and Data Mining, pp. 3402\\u20133413, 2024.\",\n            \"extracted_paper_title\": \"Counterfactual generative models for time-varying treatments\",\n            \"fetched_paper_id\": \"0cc6987c3bb4a027f967fab592fb7ac663b6edbb\",\n            \"fetched_paper_title\": \"Counterfactual Generative Models for Time-Varying Treatments\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yanbo Xu, Yanxun Xu, and Suchi Saria. A bayesian nonparametric approach for estimating individu- alized treatment-response curves. In Machine learning for healthcare conference, pp. 282\\u2013300. PMLR, 2016.\",\n            \"extracted_paper_title\": \"A bayesian nonparametric approach for estimating individualized treatment-response curves\",\n            \"fetched_paper_id\": \"69c9b145ffb25c98ffb10c7e2eab9906dddb2b80\",\n            \"fetched_paper_title\": \"A Bayesian Nonparametric Approach for Estimating Individualized Treatment-Response Curves\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Michael Zhang, Khaled K Saab, Michael Poli, Tri Dao, Karan Goel, and Christopher R\\u00b4e. Effectively modeling time series with simple discrete state spaces. arXiv preprint arXiv:2303.09489, 2023.\",\n            \"extracted_paper_title\": \"Effectively modeling time series with simple discrete state spaces\",\n            \"fetched_paper_id\": \"a7d68b1702af08ce4dbbf2cd0b083e744ae5c6be\",\n            \"fetched_paper_title\": \"Effectively Modeling Time Series with Simple Discrete State Spaces\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"611bd91e0050185319513493ad9a135a639438bd\",\n        \"e37d61b53f4352fe114f5c5489a103d025b54516\",\n        \"b56c0fc79691a660d34dea564bf9308996e9d77e\",\n        \"bd211f20dd72bc6e94b3d8db284c22588dc6767b\",\n        \"5e85cd9baebc529281a66e0bbeaaa7f44c92c9d6\",\n        \"0af0637decd1b6052a5beff9c335099f340a0c6f\",\n        \"641d2c9a0acd2f529dcc1165e70dcb2200c180d7\",\n        \"f0cdd98cfdd9fa4b7fa4dd67b561cbac6654d0cb\",\n        \"ac0d24726f4cb0257a5341167435124afcd099bd\",\n        \"2ec801fd27970638f6ee64c59aa630838d6fa9b4\",\n        \"dcfc6750ae9b8354f60bc460f83a030a6bbfd5d5\",\n        \"0b63e137fdc73af908e192a250e7270cc4dac1f7\",\n        \"397306cada03c29ab9c3d5a7991a343cae92f2e3\",\n        \"f2ce04b0811dd2271ffb44c2ec3830d7d5d7fae7\",\n        \"a122dbde40c9cd976badd99fdc820156908b7ee8\",\n        \"69c9b145ffb25c98ffb10c7e2eab9906dddb2b80\",\n        \"0d86fbca1fbdb7c8e5a10c2d2c5a0ff3e07eea15\",\n        \"ac2618b2ce5cdcf86f9371bcca98bc5e37e46f51\",\n        \"5bbbcb2988e0ef5171fadda83160db23bfe5829e\",\n        \"17409ae85c237983dc22a5e4750d8054e4b6edc9\",\n        \"c104df9aabcd2e38345cbf5387b1bb4acc38ccc0\",\n        \"c38c9c3754e0ecbbed2d191ab45c50b03d84ccff\",\n        \"525d93a382f6e7873b5d8a2e0713eb3dff7fb250\",\n        \"ee1ddb3fe85bdc1650c4d32a00e5051d57e71ebb\",\n        \"eaef083b9d661f42cc0d89d9d8156218f33a91d9\",\n        \"4d508675ee414f4a8041a7270f63f3307ce50476\",\n        \"ded13118adb4e97b16c4d8d9630d186c4dfbebff\",\n        \"0af8d24b14614499393b50f71070d68cf299d52c\",\n        \"1c46943103bd7b7a2c7be86859995a4144d1938b\",\n        \"a7d68b1702af08ce4dbbf2cd0b083e744ae5c6be\",\n        \"ca9047c78d48b606c4e4f0c456b1dda550de28b2\",\n        \"d0053d8c15d24b4b374752ac3e689bb19bf90233\",\n        \"29dd1f2daaa7929e597a25b9e73ba7233262fe30\",\n        \"f1a626bee8bb1d0cb9f9647bb15143911cf5d166\",\n        \"31d33af0b36bdf11bba1c10f57b174d6ef4cbdc2\",\n        \"c11575b69424770336add6ee1def3c63c8724411\",\n        \"fae41e2dded7f20f110a57c61dd0d1dbdd4c6a24\",\n        \"0cc6987c3bb4a027f967fab592fb7ac663b6edbb\",\n        \"1d589ac52d55b2b79805f57999d200bd9f7b3f2b\",\n        \"7bbc7595196a0606a07506c4fb1473e5e87f6082\",\n        \"95cd83603a0d2b6918a8e34a5637a8f382da96f5\",\n        \"126a25352db3bd310b7e48df9604e26b2b8d3e2a\",\n        \"45bdc268cc1418172ddf3843362130fea29fd53d\",\n        \"5e7c4b544e5908b923e434e04a84a4df898686f1\",\n        \"6d7d141c75af752ffc0d8a6184cca3f9323d6c74\",\n        \"0ff5df869d0e7e7fcadc36685c5b6eaa9238a5dc\",\n        \"dba88f9a59ad816ce14d93b2c8bfda5917adc196\",\n        \"792d72405f1e78b72577d745bb9d16b18fda9059\",\n        \"2aa94464c6f38fdffc51e2877e3f08c13ea40dfb\",\n        \"99a3585ec96f0394a596731eb5a5db3b428d328a\",\n        \"2e03ee15c00561a891eaf197515da720d1566411\"\n    ],\n    \"all_ids_count\": 51,\n    \"p0_ids\": [\n        \"c38c9c3754e0ecbbed2d191ab45c50b03d84ccff\",\n        \"0af0637decd1b6052a5beff9c335099f340a0c6f\",\n        \"31d33af0b36bdf11bba1c10f57b174d6ef4cbdc2\",\n        \"7bbc7595196a0606a07506c4fb1473e5e87f6082\",\n        \"0af8d24b14614499393b50f71070d68cf299d52c\",\n        \"17409ae85c237983dc22a5e4750d8054e4b6edc9\",\n        \"ee1ddb3fe85bdc1650c4d32a00e5051d57e71ebb\",\n        \"ac2618b2ce5cdcf86f9371bcca98bc5e37e46f51\",\n        \"5e7c4b544e5908b923e434e04a84a4df898686f1\",\n        \"2e03ee15c00561a891eaf197515da720d1566411\",\n        \"0ff5df869d0e7e7fcadc36685c5b6eaa9238a5dc\",\n        \"1d589ac52d55b2b79805f57999d200bd9f7b3f2b\",\n        \"f0cdd98cfdd9fa4b7fa4dd67b561cbac6654d0cb\",\n        \"126a25352db3bd310b7e48df9604e26b2b8d3e2a\",\n        \"95cd83603a0d2b6918a8e34a5637a8f382da96f5\"\n    ],\n    \"p0_ids_count\": 15,\n    \"p1_ids\": [\n        \"e37d61b53f4352fe114f5c5489a103d025b54516\",\n        \"a122dbde40c9cd976badd99fdc820156908b7ee8\",\n        \"5e85cd9baebc529281a66e0bbeaaa7f44c92c9d6\",\n        \"ac0d24726f4cb0257a5341167435124afcd099bd\",\n        \"6d7d141c75af752ffc0d8a6184cca3f9323d6c74\",\n        \"ded13118adb4e97b16c4d8d9630d186c4dfbebff\",\n        \"0cc6987c3bb4a027f967fab592fb7ac663b6edbb\",\n        \"c104df9aabcd2e38345cbf5387b1bb4acc38ccc0\",\n        \"ca9047c78d48b606c4e4f0c456b1dda550de28b2\",\n        \"b56c0fc79691a660d34dea564bf9308996e9d77e\",\n        \"eaef083b9d661f42cc0d89d9d8156218f33a91d9\",\n        \"f1a626bee8bb1d0cb9f9647bb15143911cf5d166\",\n        \"fae41e2dded7f20f110a57c61dd0d1dbdd4c6a24\",\n        \"5bbbcb2988e0ef5171fadda83160db23bfe5829e\",\n        \"2ec801fd27970638f6ee64c59aa630838d6fa9b4\",\n        \"397306cada03c29ab9c3d5a7991a343cae92f2e3\",\n        \"45bdc268cc1418172ddf3843362130fea29fd53d\",\n        \"525d93a382f6e7873b5d8a2e0713eb3dff7fb250\",\n        \"0b63e137fdc73af908e192a250e7270cc4dac1f7\",\n        \"69c9b145ffb25c98ffb10c7e2eab9906dddb2b80\",\n        \"1c46943103bd7b7a2c7be86859995a4144d1938b\",\n        \"dba88f9a59ad816ce14d93b2c8bfda5917adc196\",\n        \"0d86fbca1fbdb7c8e5a10c2d2c5a0ff3e07eea15\",\n        \"dcfc6750ae9b8354f60bc460f83a030a6bbfd5d5\",\n        \"4d508675ee414f4a8041a7270f63f3307ce50476\",\n        \"99a3585ec96f0394a596731eb5a5db3b428d328a\",\n        \"792d72405f1e78b72577d745bb9d16b18fda9059\",\n        \"641d2c9a0acd2f529dcc1165e70dcb2200c180d7\",\n        \"29dd1f2daaa7929e597a25b9e73ba7233262fe30\",\n        \"d0053d8c15d24b4b374752ac3e689bb19bf90233\",\n        \"2aa94464c6f38fdffc51e2877e3f08c13ea40dfb\",\n        \"bd211f20dd72bc6e94b3d8db284c22588dc6767b\",\n        \"a7d68b1702af08ce4dbbf2cd0b083e744ae5c6be\",\n        \"f2ce04b0811dd2271ffb44c2ec3830d7d5d7fae7\",\n        \"611bd91e0050185319513493ad9a135a639438bd\",\n        \"c11575b69424770336add6ee1def3c63c8724411\"\n    ],\n    \"p1_ids_count\": 36\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gemini-3.1-pro-preview.json",
+   "size": 34855,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Ahmed Alaa and Mihaela Schaar. Limits of estimating heterogeneous treatment effects: Guidelines for practical algorithm design. In International Conference on Machine Learning, pp. 129\\u2013138. PMLR, 2018.\",\n            \"extracted_paper_title\": \"Limits of estimating heterogeneous treatment effects: Guidelines for practical algorithm design\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ahmed Allam, Stefan Feuerriegel, Michael Rebhan, and Michael Krauthammer. Analyzing patient trajectories with artificial intelligence. Journal of medical internet research, 23(12):e29812, 2021.\",\n            \"extracted_paper_title\": \"Analyzing patient trajectories with artificial intelligence\",\n            \"fetched_paper_id\": \"b56c0fc79691a660d34dea564bf9308996e9d77e\",\n            \"fetched_paper_title\": \"Analyzing Patient Trajectories With Artificial Intelligence\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"David Arbour, Eli Ben-Michael, Avi Feller, Alex Franks, and Steven Raphael. Using multitask gaussian processes to estimate the effect of a targeted effort to remove firearms. arXiv preprint arXiv:2110.07006, 2021.\",\n            \"extracted_paper_title\": \"Using multitask gaussian processes to estimate the effect of a targeted effort to remove firearms\",\n            \"fetched_paper_id\": \"99a3585ec96f0394a596731eb5a5db3b428d328a\",\n            \"fetched_paper_title\": \"Using Multitask Gaussian Processes to estimate the effect of a targeted effort to remove firearms\\u2217\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Susan Athey, Guido W Imbens, and Stefan Wager. Approximate residual balancing: debiased inference of average treatment effects in high dimensions. Journal of the Royal Statistical Society: Series B (Statistical Methodology), 80(4):597\\u2013623, 2018.\",\n            \"extracted_paper_title\": \"Approximate residual balancing: debiased inference of average treatment effects in high dimensions.\",\n            \"fetched_paper_id\": \"f1a626bee8bb1d0cb9f9647bb15143911cf5d166\",\n            \"fetched_paper_title\": \"Approximate residual balancing: debiased inference of average treatment effects in high dimensions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Peter C Austin, Muhammad M Mamdani, Carl Van Walraven, and Jack V Tu. Quantifying the impact of survivor treatment bias in observational studies. Journal of evaluation in clinical practice, 12 (6):601\\u2013612, 2006.\",\n            \"extracted_paper_title\": \"Quantifying the impact of survivor treatment bias in observational studies.\",\n            \"fetched_paper_id\": \"792d72405f1e78b72577d745bb9d16b18fda9059\",\n            \"fetched_paper_title\": \"Quantifying the impact of survivor treatment bias in observational studies.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jeroen Berrevoets, Alicia Curth, Ioana Bica, Eoin McKinney, and Mihaela van der Schaar. Disentangled counterfactual recurrent networks for treatment effect inference over time. arXiv preprint arXiv:2112.03811, 2021.\",\n            \"extracted_paper_title\": \"Disentangled counterfactual recurrent networks for treatment effect inference over time\",\n            \"fetched_paper_id\": \"0b63e137fdc73af908e192a250e7270cc4dac1f7\",\n            \"fetched_paper_title\": \"Disentangled Counterfactual Recurrent Networks for Treatment Effect Inference over Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ioana Bica, Ahmed M Alaa, James Jordon, and Mihaela van der Schaar. Estimating counterfactual treatment outcomes over time through adversarially balanced representations. arXiv preprint arXiv:2002.04083, 2020.\",\n            \"extracted_paper_title\": \"Estimating counterfactual treatment outcomes over time through adversarially balanced representations.\",\n            \"fetched_paper_id\": \"f0cdd98cfdd9fa4b7fa4dd67b561cbac6654d0cb\",\n            \"fetched_paper_title\": \"Estimating Counterfactual Treatment Outcomes over Time Through Adversarially Balanced Representations\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Yehu Chen, Annamaria Prati, Jacob Montgomery, and Roman Garnett. A multi-task gaussian process model for inferring time-varying treatment effects in panel data. In International Conference on Artificial Intelligence and Statistics, pp. 4068\\u20134088. PMLR, 2023.\",\n            \"extracted_paper_title\": \"A multi-task gaussian process model for inferring time-varying treatment effects in panel data\",\n            \"fetched_paper_id\": \"e37d61b53f4352fe114f5c5489a103d025b54516\",\n            \"fetched_paper_title\": \"A Multi-Task Gaussian Process Model for Inferring Time-Varying Treatment Effects in Panel Data\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Victor Chernozhukov, Iv\\u00b4an Fern\\u00b4andez-Val, and Blaise Melly. Inference on counterfactual distributions. Econometrica, 81(6):2205\\u20132268, 2013.\",\n            \"extracted_paper_title\": \"Inference on counterfactual distributions\",\n            \"fetched_paper_id\": \"dcfc6750ae9b8354f60bc460f83a030a6bbfd5d5\",\n            \"fetched_paper_title\": \"Inference on counterfactual distributions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dennis Frauen, Tobias Hatt, Valentyn Melnychuk, and Stefan Feuerriegel. Estimating average causal effects from patient trajectories. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 37, pp. 7586\\u20137594, 2023.\",\n            \"extracted_paper_title\": \"Estimating average causal effects from patient trajectories.\",\n            \"fetched_paper_id\": \"fae41e2dded7f20f110a57c61dd0d1dbdd4c6a24\",\n            \"fetched_paper_title\": \"Estimating average causal effects from patient trajectories\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Changran Geng, Harald Paganetti, and Clemens Grassberger. Prediction of treatment response for combined chemo-and radiation therapy for non-small cell lung cancer patients using a bio-mathematical model. Scientific reports, 7(1):13542, 2017.\",\n            \"extracted_paper_title\": \"Prediction of treatment response for combined chemo- and radiation therapy for non-small cell lung cancer patients using a bio-mathematical model\",\n            \"fetched_paper_id\": \"c38c9c3754e0ecbbed2d191ab45c50b03d84ccff\",\n            \"fetched_paper_title\": \"Prediction of Treatment Response for Combined Chemo- and Radiation Therapy for Non-Small Cell Lung Cancer Patients Using a Bio-Mathematical Model\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Arthur Gretton, Olivier Bousquet, Alex Smola, and Bernhard Sch\\u00a8olkopf. Measuring statistical dependence with hilbert-schmidt norms. In International conference on algorithmic learning theory, pp. 63\\u201377. Springer, 2005.\",\n            \"extracted_paper_title\": \"Measuring statistical dependence with hilbert-schmidt norms\",\n            \"fetched_paper_id\": \"397306cada03c29ab9c3d5a7991a343cae92f2e3\",\n            \"fetched_paper_title\": \"Measuring Statistical Dependence with Hilbert-Schmidt Norms\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Arthur Gretton, Kenji Fukumizu, Choon Teo, Le Song, Bernhard Sch\\u00a8olkopf, and Alex Smola. A kernel statistical test of independence. Advances in neural information processing systems, 20, 2007.\",\n            \"extracted_paper_title\": \"A kernel statistical test of independence\",\n            \"fetched_paper_id\": \"0d86fbca1fbdb7c8e5a10c2d2c5a0ff3e07eea15\",\n            \"fetched_paper_title\": \"A Kernel Statistical Test of Independence\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Albert Gu and Tri Dao. Mamba: Linear-time sequence modeling with selective state spaces. arXiv preprint arXiv:2312.00752, 2023.\",\n            \"extracted_paper_title\": \"Mamba: Linear-time sequence modeling with selective state spaces\",\n            \"fetched_paper_id\": \"7bbc7595196a0606a07506c4fb1473e5e87f6082\",\n            \"fetched_paper_title\": \"Mamba: Linear-Time Sequence Modeling with Selective State Spaces\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Albert Gu, Karan Goel, and Christopher R\\u00b4e. Efficiently modeling long sequences with structured state spaces. arXiv preprint arXiv:2111.00396, 2021a.\",\n            \"extracted_paper_title\": \"Efficiently modeling long sequences with structured state spaces\",\n            \"fetched_paper_id\": \"ac2618b2ce5cdcf86f9371bcca98bc5e37e46f51\",\n            \"fetched_paper_title\": \"Efficiently Modeling Long Sequences with Structured State Spaces\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Albert Gu, Isys Johnson, Karan Goel, Khaled Saab, Tri Dao, Atri Rudra, and Christopher R\\u00b4e. Combining recurrent, convolutional, and continuous-time models with linear state space layers. Advances in neural information processing systems, 34:572\\u2013585, 2021b.\",\n            \"extracted_paper_title\": \"Combining recurrent, convolutional, and continuous-time models with linear state space layers.\",\n            \"fetched_paper_id\": \"ca9047c78d48b606c4e4f0c456b1dda550de28b2\",\n            \"fetched_paper_title\": \"Combining Recurrent, Convolutional, and Continuous-time Models with Linear State-Space Layers\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hoda Heidari and Andreas Krause. Preventing disparate treatment in sequential decision making. In IJCAI, pp. 2248\\u20132254, 2018.\",\n            \"extracted_paper_title\": \"Preventing disparate treatment in sequential decision making\",\n            \"fetched_paper_id\": \"641d2c9a0acd2f529dcc1165e70dcb2200c180d7\",\n            \"fetched_paper_title\": \"Preventing Disparate Treatment in Sequential Decision Making\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Samuel Holt, Jeroen Berrevoets, Krzysztof Kacprzyk, Zhaozhi Qian, and Mihaela van der Schaar. Ode discovery for longitudinal heterogeneous treatment effects inference. In The Twelfth International Conference on Learning Representations, 2024.\",\n            \"extracted_paper_title\": \"Ode discovery for longitudinal heterogeneous treatment effects inference\",\n            \"fetched_paper_id\": \"1d589ac52d55b2b79805f57999d200bd9f7b3f2b\",\n            \"fetched_paper_title\": \"ODE Discovery for Longitudinal Heterogeneous Treatment Effects Inference\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Qiang Huang, Chuizheng Meng, Defu Cao, Biwei Huang, Yi Chang, and Yan Liu. An empirical examination of balancing strategy for counterfactual estimation on time series. In Forty-first International Conference on Machine Learning, 2024.\",\n            \"extracted_paper_title\": \"An empirical examination of balancing strategy for counterfactual estimation on time series.\",\n            \"fetched_paper_id\": \"c11575b69424770336add6ee1def3c63c8724411\",\n            \"fetched_paper_title\": \"An Empirical Examination of Balancing Strategy for Counterfactual Estimation on Time Series\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Alistair EW Johnson, Tom J Pollard, Lu Shen, Li-wei H Lehman, Mengling Feng, Mohammad Ghassemi, Benjamin Moody, Peter Szolovits, Leo Anthony Celi, and Roger G Mark. Mimic-iii, a freely accessible critical care database. Scientific data, 3(1):1\\u20139, 2016.\",\n            \"extracted_paper_title\": \"Mimic-iii, a freely accessible critical care database\",\n            \"fetched_paper_id\": \"95cd83603a0d2b6918a8e34a5637a8f382da96f5\",\n            \"fetched_paper_title\": \"MIMIC-III, a freely accessible critical care database\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Edward H Kennedy, Sivaraman Balakrishnan, and LA Wasserman. Semiparametric counterfactual density estimation. Biometrika, 110(4):875\\u2013896, 2023.\",\n            \"extracted_paper_title\": \"Semiparametric counterfactual density estimation\",\n            \"fetched_paper_id\": \"2aa94464c6f38fdffc51e2877e3f08c13ea40dfb\",\n            \"fetched_paper_title\": \"Semiparametric Counterfactual Density Estimation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Kun Kuang, Peng Cui, Hao Zou, Bo Li, Jianrong Tao, Fei Wu, and Shiqiang Yang. Data-driven variable decomposition for treatment effect estimation. IEEE Transactions on Knowledge and Data Engineering, 2020.\",\n            \"extracted_paper_title\": \"Data-driven variable decomposition for treatment effect estimation\",\n            \"fetched_paper_id\": \"ac0d24726f4cb0257a5341167435124afcd099bd\",\n            \"fetched_paper_title\": \"Data-Driven Variable Decomposition for Treatment Effect Estimation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Rui Li, Zach Shahn, Jun Li, Mingyu Lu, Prithwish Chakraborty, Daby Sow, Mohamed Ghalwash, and Li-wei H Lehman. G-net: a deep learning approach to g-computation for counterfactual outcome prediction under dynamic treatment regimes. arXiv preprint arXiv:2003.10551, 2020.\",\n            \"extracted_paper_title\": \"G-net: a deep learning approach to g-computation for counterfactual outcome prediction under dynamic treatment regimes\",\n            \"fetched_paper_id\": \"0af0637decd1b6052a5beff9c335099f340a0c6f\",\n            \"fetched_paper_title\": \"G-Net: A Deep Learning Approach to G-computation for Counterfactual Outcome Prediction Under Dynamic Treatment Regimes\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Rui Li, Stephanie Hu, Mingyu Lu, Yuria Utsumi, Prithwish Chakraborty, Daby M Sow, Piyush Madan, Jun Li, Mohamed Ghalwash, Zach Shahn, et al. G-net: a recurrent network approach to g-computation for counterfactual prediction under a dynamic treatment regime. In Machine Learning for Health, pp. 282\\u2013299. PMLR, 2021.\",\n            \"extracted_paper_title\": \"G-net: a recurrent network approach to g-computation for counterfactual prediction under a dynamic treatment regime.\",\n            \"fetched_paper_id\": \"31d33af0b36bdf11bba1c10f57b174d6ef4cbdc2\",\n            \"fetched_paper_title\": \"G-Net: a Recurrent Network Approach to G-Computation for Counterfactual Prediction Under a Dynamic Treatment Regime\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Bryan Lim. Forecasting treatment responses over time using recurrent marginal structural networks. advances in neural information processing systems, 31, 2018.\",\n            \"extracted_paper_title\": \"Forecasting treatment responses over time using recurrent marginal structural networks\",\n            \"fetched_paper_id\": \"5e7c4b544e5908b923e434e04a84a4df898686f1\",\n            \"fetched_paper_title\": \"Forecasting Treatment Responses Over Time Using Recurrent Marginal Structural Networks\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Andreas Maurer, Massimiliano Pontil, and Bernardino Romera-Paredes. The benefit of multitask representation learning. Journal of Machine Learning Research, 17(81):1\\u201332, 2016.\",\n            \"extracted_paper_title\": \"The benefit of multitask representation learning\",\n            \"fetched_paper_id\": \"a122dbde40c9cd976badd99fdc820156908b7ee8\",\n            \"fetched_paper_title\": \"The Benefit of Multitask Representation Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Harsh Mehta, Ankit Gupta, Ashok Cutkosky, and Behnam Neyshabur. Long range language modeling via gated state spaces. arXiv preprint arXiv:2206.13947, 2022.\",\n            \"extracted_paper_title\": \"Long range language modeling via gated state spaces\",\n            \"fetched_paper_id\": \"eaef083b9d661f42cc0d89d9d8156218f33a91d9\",\n            \"fetched_paper_title\": \"Long Range Language Modeling via Gated State Spaces\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Valentyn Melnychuk, Dennis Frauen, and Stefan Feuerriegel. Causal transformer for estimating counterfactual outcomes. In International Conference on Machine Learning, pp. 15293\\u201315329. PMLR, 2022.\",\n            \"extracted_paper_title\": \"Causal transformer for estimating counterfactual outcomes\",\n            \"fetched_paper_id\": \"2e03ee15c00561a891eaf197515da720d1566411\",\n            \"fetched_paper_title\": \"Causal Transformer for Estimating Counterfactual Outcomes\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"James Robins. A new approach to causal inference in mortality studies with a sustained exposure period\\u2014application to control of the healthy worker survivor effect. Mathematical modelling, 7 (9-12):1393\\u20131512, 1986.\",\n            \"extracted_paper_title\": \"A new approach to causal inference in mortality studies with a sustained exposure period\\u2014application to control of the healthy worker survivor effect\",\n            \"fetched_paper_id\": \"4d508675ee414f4a8041a7270f63f3307ce50476\",\n            \"fetched_paper_title\": \"A new approach to causal inference in mortality studies with a sustained exposure period\\u2014application to control of the healthy worker survivor effect\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"James Robins and Miguel Hernan. Estimation of the causal effects of time-varying exposures. Chapman & Hall/CRC Handbooks of Modern Statistical Methods, pp. 553\\u2013599, 2008.\",\n            \"extracted_paper_title\": \"Estimation of the causal effects of time-varying exposures\",\n            \"fetched_paper_id\": \"bd211f20dd72bc6e94b3d8db284c22588dc6767b\",\n            \"fetched_paper_title\": \"Estimation of the causal effects of time-varying exposures\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"James M Robins. Association, causation, and marginal structural models. Synthese, 121(1/2): 151\\u2013179, 1999.\",\n            \"extracted_paper_title\": \"Association, causation, and marginal structural models\",\n            \"fetched_paper_id\": \"ded13118adb4e97b16c4d8d9630d186c4dfbebff\",\n            \"fetched_paper_title\": \"Association, Causation, And Marginal Structural Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"James M Robins, Miguel Angel Hernan, and Babette Brumback. Marginal structural models and causal inference in epidemiology, 2000.\",\n            \"extracted_paper_title\": \"Marginal structural models and causal inference in epidemiology\",\n            \"fetched_paper_id\": \"126a25352db3bd310b7e48df9604e26b2b8d3e2a\",\n            \"fetched_paper_title\": \"Marginal Structural Models and Causal Inference in Epidemiology\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Jason Roy, Kirsten J Lum, and Michael J Daniels. A bayesian nonparametric approach to marginal structural models for point treatments and a continuous or survival outcome. Biostatistics, 18(1): 32\\u201347, 2017.\",\n            \"extracted_paper_title\": \"A bayesian nonparametric approach to marginal structural models for point treatments and a continuous or survival outcome\",\n            \"fetched_paper_id\": \"45bdc268cc1418172ddf3843362130fea29fd53d\",\n            \"fetched_paper_title\": \"A Bayesian nonparametric approach to marginal structural models for point treatments and a continuous or survival outcome.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Amelie Royer, Tijmen Blankevoort, and Babak Ehteshami Bejnordi. Scalarization for multi-task and multi-domain learning at scale. Advances in Neural Information Processing Systems, 36, 2024.\",\n            \"extracted_paper_title\": \"Scalarization for multi-task and multi-domain learning at scale\",\n            \"fetched_paper_id\": \"611bd91e0050185319513493ad9a135a639438bd\",\n            \"fetched_paper_title\": \"Scalarization for Multi-Task and Multi-Domain Learning at Scale\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Donald B Rubin. Bayesian inference for causal effects: The role of randomization. The Annals of statistics, pp. 34\\u201358, 1978.\",\n            \"extracted_paper_title\": \"Bayesian inference for causal effects: The role of randomization.\",\n            \"fetched_paper_id\": \"5bbbcb2988e0ef5171fadda83160db23bfe5829e\",\n            \"fetched_paper_title\": \"Bayesian Inference for Causal Effects: The Role of Randomization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Peter Schulam and Suchi Saria. Reliable decision support using counterfactual models. Advances in neural information processing systems, 30, 2017.\",\n            \"extracted_paper_title\": \"Reliable decision support using counterfactual models\",\n            \"fetched_paper_id\": \"0af8d24b14614499393b50f71070d68cf299d52c\",\n            \"fetched_paper_title\": \"Reliable Decision Support using Counterfactual Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Uri Shalit, Fredrik D Johansson, and David Sontag. Estimating individual treatment effect: generalization bounds and algorithms. In International Conference on Machine Learning, pp. 3076\\u20133085. PMLR, 2017.\",\n            \"extracted_paper_title\": \"Estimating individual treatment effect: generalization bounds and algorithms\",\n            \"fetched_paper_id\": \"17409ae85c237983dc22a5e4750d8054e4b6edc9\",\n            \"fetched_paper_title\": \"Estimating individual treatment effect: generalization bounds and algorithms\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"JQ Shi, B Wang, EJ Will, and RM West. Mixed-effects gaussian process functional regression models with application to dose\\u2013response curve prediction. Statistics in medicine, 31(26):3165\\u20133177, 2012.\",\n            \"extracted_paper_title\": \"Mixed-effects gaussian process functional regression models with application to dose\\u2013response curve prediction\",\n            \"fetched_paper_id\": \"d0053d8c15d24b4b374752ac3e689bb19bf90233\",\n            \"fetched_paper_title\": \"Mixed\\u2010effects Gaussian process functional regression models with application to dose\\u2013response curve prediction\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jimmy TH Smith, Andrew Warrington, and Scott W Linderman. Simplified state space layers for sequence modeling. arXiv preprint arXiv:2208.04933, 2022.\",\n            \"extracted_paper_title\": \"Simplified state space layers for sequence modeling\",\n            \"fetched_paper_id\": \"6d7d141c75af752ffc0d8a6184cca3f9323d6c74\",\n            \"fetched_paper_title\": \"Simplified State Space Layers for Sequence Modeling\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Jerzy Splawa-Neyman, Dorota M Dabrowska, and Terrence P Speed. On the application of probability theory to agricultural experiments. essay on principles. section 9. Statistical Science, pp. 465\\u2013472, 1990.\",\n            \"extracted_paper_title\": \"On the application of probability theory to agricultural experiments. essay on principles. section 9.\",\n            \"fetched_paper_id\": \"5e85cd9baebc529281a66e0bbeaaa7f44c92c9d6\",\n            \"fetched_paper_title\": \"On the Application of Probability Theory to Agricultural Experiments. Essay on Principles. Section 9\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Elizabeth A Stuart. Matching methods for causal inference: A review and a look forward. Statistical science: a review journal of the Institute of Mathematical Statistics, 25(1):1, 2010.\",\n            \"extracted_paper_title\": \"Matching methods for causal inference: A review and a look forward.\",\n            \"fetched_paper_id\": \"c104df9aabcd2e38345cbf5387b1bb4acc38ccc0\",\n            \"fetched_paper_title\": \"Matching methods for causal inference: A review and a look forward.\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wilbert Van der Klaauw. Estimating the effect of financial aid offers on college enrollment: A regression\\u2013discontinuity approach. International Economic Review, 43(4):1249\\u20131287, 2002.\",\n            \"extracted_paper_title\": \"Estimating the effect of financial aid offers on college enrollment: A regression\\u2013discontinuity approach\",\n            \"fetched_paper_id\": \"2ec801fd27970638f6ee64c59aa630838d6fa9b4\",\n            \"fetched_paper_title\": \"Estimating the Effect of Financial Aid Offers on College Enrollment: A Regression-Discontinuity Approach\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Laurens Van der Maaten and Geoffrey Hinton. Visualizing data using t-sne. Journal of machine learning research, 9(11), 2008.\",\n            \"extracted_paper_title\": \"Visualizing data using t-sne\",\n            \"fetched_paper_id\": \"1c46943103bd7b7a2c7be86859995a4144d1938b\",\n            \"fetched_paper_title\": \"Visualizing Data using t-SNE\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Johannes Von Oswald, Eyvind Niklasson, Ettore Randazzo, Jo\\u02dcao Sacramento, Alexander Mordvintsev, Andrey Zhmoginov, and Max Vladymyrov. Transformers learn in-context by gradient descent. In International Conference on Machine Learning, pp. 35151\\u201335174. PMLR, 2023.\",\n            \"extracted_paper_title\": \"Transformers learn in-context by gradient descent\",\n            \"fetched_paper_id\": \"525d93a382f6e7873b5d8a2e0713eb3dff7fb250\",\n            \"fetched_paper_title\": \"Transformers learn in-context by gradient descent\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Lan Wang, Yu Zhou, Rui Song, and Ben Sherwood. Quantile-optimal treatment regimes. Journal of the American Statistical Association, 113(523):1243\\u20131254, 2018.\",\n            \"extracted_paper_title\": \"Quantile-optimal treatment regimes\",\n            \"fetched_paper_id\": \"29dd1f2daaa7929e597a25b9e73ba7233262fe30\",\n            \"fetched_paper_title\": \"Quantile-Optimal Treatment Regimes\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shirly Wang, Matthew BA McDermott, Geeticka Chauhan, Marzyeh Ghassemi, Michael C Hughes, and Tristan Naumann. Mimic-extract: A data extraction, preprocessing, and representation pipeline for mimic-iii. In Proceedings of the ACM conference on health, inference, and learning, pp. 222\\u2013235, 2020.\",\n            \"extracted_paper_title\": \"Mimic-extract: A data extraction, preprocessing, and representation pipeline for mimic-iii\",\n            \"fetched_paper_id\": \"ee1ddb3fe85bdc1650c4d32a00e5051d57e71ebb\",\n            \"fetched_paper_title\": \"MIMIC-Extract: a data extraction, preprocessing, and representation pipeline for MIMIC-III\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Xin Wang, Shengfei Lyu, Lishan Yang, Yibing Zhan, and Huanhuan Chen. A dual-module framework for counterfactual estimation over time. In Forty-first International Conference on Machine Learning, 2024a.\",\n            \"extracted_paper_title\": \"A dual-module framework for counterfactual estimation over time.\",\n            \"fetched_paper_id\": \"0ff5df869d0e7e7fcadc36685c5b6eaa9238a5dc\",\n            \"fetched_paper_title\": \"A Dual-module Framework for Counterfactual Estimation over Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zihan Wang, Fanheng Kong, Shi Feng, Ming Wang, Han Zhao, Daling Wang, and Yifei Zhang. Is mamba effective for time series forecasting? arXiv preprint arXiv:2403.11144, 2024b.\",\n            \"extracted_paper_title\": \"Is mamba effective for time series forecasting?\",\n            \"fetched_paper_id\": \"dba88f9a59ad816ce14d93b2c8bfda5917adc196\",\n            \"fetched_paper_title\": \"Is Mamba Effective for Time Series Forecasting?\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Shenghao Wu, Wenbin Zhou, Minshuo Chen, and Shixiang Zhu. Counterfactual generative models for time-varying treatments. In Proceedings of the 30th ACM SIGKDD Conference on Knowledge Discovery and Data Mining, pp. 3402\\u20133413, 2024.\",\n            \"extracted_paper_title\": \"Counterfactual generative models for time-varying treatments.\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yanbo Xu, Yanxun Xu, and Suchi Saria. A bayesian nonparametric approach for estimating individualized treatment-response curves. In Machine learning for healthcare conference, pp. 282\\u2013300. PMLR, 2016.\",\n            \"extracted_paper_title\": \"A bayesian nonparametric approach for estimating individualized treatment-response curves\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Michael Zhang, Khaled K Saab, Michael Poli, Tri Dao, Karan Goel, and Christopher R\\u00b4e. Effectively modeling time series with simple discrete state spaces. arXiv preprint arXiv:2303.09489, 2023.\",\n            \"extracted_paper_title\": \"Effectively modeling time series with simple discrete state spaces\",\n            \"fetched_paper_id\": \"a7d68b1702af08ce4dbbf2cd0b083e744ae5c6be\",\n            \"fetched_paper_title\": \"Effectively Modeling Time Series with Simple Discrete State Spaces\",\n            \"priority\": \"P1\"\n        }\n    ],\n    \"all_ids\": [\n        \"397306cada03c29ab9c3d5a7991a343cae92f2e3\",\n        \"c38c9c3754e0ecbbed2d191ab45c50b03d84ccff\",\n        \"2aa94464c6f38fdffc51e2877e3f08c13ea40dfb\",\n        \"0af8d24b14614499393b50f71070d68cf299d52c\",\n        \"a7d68b1702af08ce4dbbf2cd0b083e744ae5c6be\",\n        \"ac0d24726f4cb0257a5341167435124afcd099bd\",\n        \"a122dbde40c9cd976badd99fdc820156908b7ee8\",\n        \"1c46943103bd7b7a2c7be86859995a4144d1938b\",\n        \"641d2c9a0acd2f529dcc1165e70dcb2200c180d7\",\n        \"2ec801fd27970638f6ee64c59aa630838d6fa9b4\",\n        \"ee1ddb3fe85bdc1650c4d32a00e5051d57e71ebb\",\n        \"525d93a382f6e7873b5d8a2e0713eb3dff7fb250\",\n        \"ca9047c78d48b606c4e4f0c456b1dda550de28b2\",\n        \"17409ae85c237983dc22a5e4750d8054e4b6edc9\",\n        \"1d589ac52d55b2b79805f57999d200bd9f7b3f2b\",\n        \"dba88f9a59ad816ce14d93b2c8bfda5917adc196\",\n        \"99a3585ec96f0394a596731eb5a5db3b428d328a\",\n        \"2e03ee15c00561a891eaf197515da720d1566411\",\n        \"611bd91e0050185319513493ad9a135a639438bd\",\n        \"5e85cd9baebc529281a66e0bbeaaa7f44c92c9d6\",\n        \"e37d61b53f4352fe114f5c5489a103d025b54516\",\n        \"7bbc7595196a0606a07506c4fb1473e5e87f6082\",\n        \"fae41e2dded7f20f110a57c61dd0d1dbdd4c6a24\",\n        \"bd211f20dd72bc6e94b3d8db284c22588dc6767b\",\n        \"6d7d141c75af752ffc0d8a6184cca3f9323d6c74\",\n        \"f1a626bee8bb1d0cb9f9647bb15143911cf5d166\",\n        \"ded13118adb4e97b16c4d8d9630d186c4dfbebff\",\n        \"c104df9aabcd2e38345cbf5387b1bb4acc38ccc0\",\n        \"eaef083b9d661f42cc0d89d9d8156218f33a91d9\",\n        \"0b63e137fdc73af908e192a250e7270cc4dac1f7\",\n        \"dcfc6750ae9b8354f60bc460f83a030a6bbfd5d5\",\n        \"b56c0fc79691a660d34dea564bf9308996e9d77e\",\n        \"f0cdd98cfdd9fa4b7fa4dd67b561cbac6654d0cb\",\n        \"0af0637decd1b6052a5beff9c335099f340a0c6f\",\n        \"95cd83603a0d2b6918a8e34a5637a8f382da96f5\",\n        \"5e7c4b544e5908b923e434e04a84a4df898686f1\",\n        \"792d72405f1e78b72577d745bb9d16b18fda9059\",\n        \"0d86fbca1fbdb7c8e5a10c2d2c5a0ff3e07eea15\",\n        \"4d508675ee414f4a8041a7270f63f3307ce50476\",\n        \"5bbbcb2988e0ef5171fadda83160db23bfe5829e\",\n        \"29dd1f2daaa7929e597a25b9e73ba7233262fe30\",\n        \"126a25352db3bd310b7e48df9604e26b2b8d3e2a\",\n        \"c11575b69424770336add6ee1def3c63c8724411\",\n        \"45bdc268cc1418172ddf3843362130fea29fd53d\",\n        \"0ff5df869d0e7e7fcadc36685c5b6eaa9238a5dc\",\n        \"31d33af0b36bdf11bba1c10f57b174d6ef4cbdc2\",\n        \"d0053d8c15d24b4b374752ac3e689bb19bf90233\",\n        \"ac2618b2ce5cdcf86f9371bcca98bc5e37e46f51\"\n    ],\n    \"all_ids_count\": 48,\n    \"p0_ids\": [\n        \"7bbc7595196a0606a07506c4fb1473e5e87f6082\",\n        \"397306cada03c29ab9c3d5a7991a343cae92f2e3\",\n        \"c38c9c3754e0ecbbed2d191ab45c50b03d84ccff\",\n        \"0af8d24b14614499393b50f71070d68cf299d52c\",\n        \"126a25352db3bd310b7e48df9604e26b2b8d3e2a\",\n        \"ee1ddb3fe85bdc1650c4d32a00e5051d57e71ebb\",\n        \"17409ae85c237983dc22a5e4750d8054e4b6edc9\",\n        \"1d589ac52d55b2b79805f57999d200bd9f7b3f2b\",\n        \"c11575b69424770336add6ee1def3c63c8724411\",\n        \"dba88f9a59ad816ce14d93b2c8bfda5917adc196\",\n        \"31d33af0b36bdf11bba1c10f57b174d6ef4cbdc2\",\n        \"f0cdd98cfdd9fa4b7fa4dd67b561cbac6654d0cb\",\n        \"2e03ee15c00561a891eaf197515da720d1566411\",\n        \"0af0637decd1b6052a5beff9c335099f340a0c6f\",\n        \"95cd83603a0d2b6918a8e34a5637a8f382da96f5\",\n        \"5e7c4b544e5908b923e434e04a84a4df898686f1\"\n    ],\n    \"p0_ids_count\": 16,\n    \"p1_ids\": [\n        \"2aa94464c6f38fdffc51e2877e3f08c13ea40dfb\",\n        \"a7d68b1702af08ce4dbbf2cd0b083e744ae5c6be\",\n        \"ac0d24726f4cb0257a5341167435124afcd099bd\",\n        \"a122dbde40c9cd976badd99fdc820156908b7ee8\",\n        \"1c46943103bd7b7a2c7be86859995a4144d1938b\",\n        \"641d2c9a0acd2f529dcc1165e70dcb2200c180d7\",\n        \"2ec801fd27970638f6ee64c59aa630838d6fa9b4\",\n        \"525d93a382f6e7873b5d8a2e0713eb3dff7fb250\",\n        \"ca9047c78d48b606c4e4f0c456b1dda550de28b2\",\n        \"99a3585ec96f0394a596731eb5a5db3b428d328a\",\n        \"611bd91e0050185319513493ad9a135a639438bd\",\n        \"5e85cd9baebc529281a66e0bbeaaa7f44c92c9d6\",\n        \"e37d61b53f4352fe114f5c5489a103d025b54516\",\n        \"bd211f20dd72bc6e94b3d8db284c22588dc6767b\",\n        \"fae41e2dded7f20f110a57c61dd0d1dbdd4c6a24\",\n        \"6d7d141c75af752ffc0d8a6184cca3f9323d6c74\",\n        \"f1a626bee8bb1d0cb9f9647bb15143911cf5d166\",\n        \"ded13118adb4e97b16c4d8d9630d186c4dfbebff\",\n        \"c104df9aabcd2e38345cbf5387b1bb4acc38ccc0\",\n        \"eaef083b9d661f42cc0d89d9d8156218f33a91d9\",\n        \"0b63e137fdc73af908e192a250e7270cc4dac1f7\",\n        \"dcfc6750ae9b8354f60bc460f83a030a6bbfd5d5\",\n        \"b56c0fc79691a660d34dea564bf9308996e9d77e\",\n        \"4d508675ee414f4a8041a7270f63f3307ce50476\",\n        \"792d72405f1e78b72577d745bb9d16b18fda9059\",\n        \"0d86fbca1fbdb7c8e5a10c2d2c5a0ff3e07eea15\",\n        \"5bbbcb2988e0ef5171fadda83160db23bfe5829e\",\n        \"29dd1f2daaa7929e597a25b9e73ba7233262fe30\",\n        \"45bdc268cc1418172ddf3843362130fea29fd53d\",\n        \"0ff5df869d0e7e7fcadc36685c5b6eaa9238a5dc\",\n        \"d0053d8c15d24b4b374752ac3e689bb19bf90233\",\n        \"ac2618b2ce5cdcf86f9371bcca98bc5e37e46f51\"\n    ],\n    \"p1_ids_count\": 32\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  }
+ ],
+ "conditions": [
+  {
+   "name": "RW-opus",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-sonnet",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-mixed",
+   "system": "researchworld",
+   "agent": null,
+   "provider": null,
+   "model": null,
+   "effort": null,
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "mixed",
+     "name": "Antigravity (Gemini) + Claude Code + Codex CLI",
+     "version": "antigravity agy_acp_server 1.4.1; claude-code @anthropic-ai/claude-agent-sdk 0.3.300; codex @openai/codex 0.163.0",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container; roles use antigravity, claude-code, codex"
+    },
+    "model": {
+     "provider": "per role",
+     "model": "per role",
+     "effort": "per role"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "codex",
+      "agent_name": "Codex CLI",
+      "agent_version": "@openai/codex 0.163.0",
+      "how": "codex-acp",
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "CC-opus",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CC-sonnet",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-astra",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6-astra",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6-astra",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-sol",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6.1-sol",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-opus",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-sonnet",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-opus",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-opus-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-sonnet",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-sonnet-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-opus",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-sonnet",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  }
+ ],
+ "batches": [],
+ "runs": []
+}

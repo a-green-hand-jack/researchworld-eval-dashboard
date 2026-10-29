@@ -1,0 +1,1674 @@
+{
+ "key": "paperwritingbench/iclr2025_5d6bf7a5df",
+ "benchmark": "paperwritingbench",
+ "item": "iclr2025_5d6bf7a5df",
+ "prompt": [
+  {
+   "name": "TASK.md",
+   "size": 20082,
+   "text": "Your task is to generate a complete research paper using the materials below.\nYou must produce:\n1. A BibTeX bibliography file (references.bib)\n2. The full LaTeX paper (template.tex)\n\nInstructions\n• Use the research idea and experimental logs to construct a coherent, rigorous ML paper.\n• For related work and baselines:\n  – Search for and include influential papers published up until 2024-10.\n  – Incorporate relevant literature and add the corresponding BibTeX entries to references.bib.\n  – Do NOT hallucinate papers or reference keys; all citation entries must be real.\n• In the LaTeX paper, cite papers using \\cite{} with keys that match exactly with your entries in references.bib.\n• Do not fabricate experimental results or make claims unsupported by the logs.\n\nMaterials\nHere are all the raw research materials to assist with the writing process:\n\n[RESEARCH IDEA]\n## Problem Statement\nCurrent large-scale diffusion models are highly capable, but integrating new, arbitrary conditional controls (such as aesthetic score or compressibility) after pre-training remains a significant challenge. Existing solutions generally fall into two flawed categories: inference-time guidance and fine-tuning. Inference-time methods (like classifier guidance) suffer from error accumulation because they require training classifiers on noisy, intermediate latent states, which is often inaccurate. Conversely, standard fine-tuning methods (like classifier-free guidance) are sample-inefficient and impose strict data requirements: they necessitate datasets containing triplets of {original prompt, image, new label}. Obtaining such fully annotated datasets is often impractical. We lack a robust framework that allows for the addition of new controls using sparse, offline data without degrading the generative quality of the pre-trained model.\n\n## Core Hypothesis\nWe hypothesize that the process of conditional generation can be formally framed as a Reinforcement Learning (RL) problem within a Markov Decision Process (MDP). Specifically, we propose that the denoising trajectory of a diffusion model can be viewed as a policy, and the consistency of the final generated image with a target label can be viewed as a reward signal.\n\nBy optimizing this policy to maximize the reward (defined by a classifier trained on clean data) subject to a constraint that penalizes deviation from the pre-trained model's distribution (KL divergence), we can derive a \"soft-optimal\" policy. This approach should allow us to inject new controls by fine-tuning on simple pairs of {image, new label} rather than complex triplets, leveraging the conditional independence between the original prompts and the new control signals.\n\n## Proposed Methodology (High-Level Technical Approach)\n\nWe propose a three-stage pipeline to transform a pre-trained diffusion model into one that accepts an additional control variable:\n\n1.  **Reward Model Learning (Offline Classifier):**\n    Instead of training classifiers on noisy latent states (as required by classifier guidance), we will train a standard classifier on offline data to estimate the probability of the new control label given a clean input. This classifier will serve as the reward function for our RL framework. Crucially, if the new control is independent of the original text prompt (e.g., an image's compressibility depends only on the image, not the caption), we only need pairs of data, significantly simplifying data collection.\n\n2.  **Architecture Augmentation:**\n    We will modify the pre-trained diffusion architecture to accept the new control signal. This will involve introducing a lightweight set of augmented parameters (such as an embedding layer) that projects the new label into the model's feature space. These will be the primary trainable parameters, while the bulk of the pre-trained weights can remain frozen or be fine-tuned via low-rank adaptation to preserve original knowledge.\n\n3.  **RL-Based Fine-Tuning (Planning):**\n    We will fine-tune the augmented diffusion model using an RL objective. The training loop will function as follows:\n    *   **Sampling:** The model generates a trajectory from noise to data, conditioned on the new control label.\n    *   **Reward Calculation:** The generated data is evaluated by the Reward Model (classifier) to calculate a \"control consistency\" score.\n    *   **Optimization:** We will update the augmented parameters to maximize this reward. To prevent \"reward hacking\" (where the image satisfies the classifier but looks unrealistic) and catastrophic forgetting, we will include a regularization term based on the KL divergence between the fine-tuned policy and the original pre-trained policy. This ensures the model remains grounded in the original data distribution while adhering to the new control.\n\n## Expected Contribution\n*   **Theoretical Framework:** A formal unification of conditional diffusion sampling and reinforcement learning, demonstrating that optimal control policies correspond to specific target conditional distributions.\n*   **Sample Efficiency:** A method that significantly reduces the data requirements for fine-tuning by leveraging conditional independence. This eliminates the need for complex triplet datasets required by classifier-free guidance.\n*   **Stability:** A robust alternative to classifier guidance that avoids the instability of calculating gradients through noisy intermediate states, as our reward signal is derived only from the clean data distribution.\n\n[EXPERIMENTAL LOGS]\n## 1. Experimental Setup\n\nWe conducted experiments to validate the proposed method (CTRL) for adding conditional controls to pre-trained diffusion models via reinforcement learning. The experiments focused on single-task conditioning (compressibility) and multi-task conditioning (compressibility and aesthetic score).\n\n### Hardware and Models\n*   **Pre-trained Model:** Stable Diffusion v1.5.\n*   **Hardware:** 4 A100 GPUs.\n*   **Optimizer:** AdamW ($\\beta_1 = 0.9, \\beta_2 = 0.999$, weight decay 0.1).\n*   **Sampler:** DDIM sampler with 50 diffusion steps.\n\n### Datasets and Classifiers\n*   **Training Prompts:** Uniformly sampled from 50 common animals (e.g., \"cat\", \"dog\").\n*   **Compressibility Classifier Data:** A subset of 10,000 images from the AVA dataset, labeled using JPEG compression sizes. The classifier was a 3-layer CNN with residual connections.\n*   **Aesthetic Score Classifier Data:** The full AVA dataset (>250k human evaluations). The classifier was an MLP trained on top of CLIP embeddings.\n*   **Offline Data Usage:** We utilized offline datasets consisting of pairs $(x, y)$ or triplets $(x, y_1, y_2)$ rather than full triplets involving prompts $(c, x, y)$, leveraging conditional independence $y \\perp c | x$.\n\n### Task Definitions\n*   **Task 1: Compressibility (CP)**\n    We defined 4 labels ($Y \\in \\{0, 1, 2, 3\\}$) based on compressibility scores (CP):\n    *   $Y=0$: $CP < -110.0$\n    *   $Y=1$: $-110.0 \\le CP < -85.0$\n    *   $Y=2$: $-85.0 \\le CP < -60.0$\n    *   $Y=3$: $CP \\ge -60.0$ (High compressibility, rare in pre-trained model)\n\n*   **Task 2: Multi-Task (Compressibility + Aesthetic Score)**\n    We conditioned on both Compressibility (CP) and Aesthetic Score (AS). We defined 4 composite labels ($Y \\in \\{0, 1, 2, 3\\}$):\n    *   $Y=0$: $AS < 5.7$ AND $CP < -70$\n    *   $Y=1$: $AS < 5.7$ AND $CP \\ge -70$\n    *   $Y=2$: $AS \\ge 5.7$ AND $CP < -70$\n    *   $Y=3$: $AS \\ge 5.7$ AND $CP \\ge -70$ (Highly aesthetic yet compressible, very rare/challenging)\n\n### Evaluation Metrics\n*   **Alignment/Control:** Classification Accuracy, Macro F1 score.\n*   **Image Quality:** BRISQUE (Lower is better).\n*   **Text-Image Alignment:** CLIP Score (Higher is better).\n\n### Baselines Compared\n1.  **Classifier-Free Guidance:** Using data augmentation to generate pseudo-triplets.\n2.  **Reconstruction Guidance:** Inference-time method approximating $p(y|x_t)$.\n3.  **SMC (Sequential Monte Carlo):** Training-free resampling technique (particle filtering).\n4.  **SVDD:** Decoding-based method using value-based decoding.\n5.  **MPGD (Manifold Preserving Guided Diffusion):** Inference-time optimization of predicted clean data.\n\n### Implementation Details\n*   **Architecture Modification:** Added a linear embedding layer to the score prediction network mapping $|V|+1$ class labels to embeddings.\n*   **Memory Optimization:** We employed Low-Rank Adaptation (LoRA) fine-tuning and gradient checkpointing. We employed truncated back-propagation (randomly truncating gradient flow).\n*   **Guidance Strength:** Fixed $\\gamma = 10$ for fine-tuning.\n\n## 2. Raw Numeric Data\n\n**Table 1: Methodological Comparison (Feature Matrix)**\n| Methods | Fine-tuning | Need to learn $x_t \\to y$ | Leveraging conditional independence |\n| :--- | :--- | :--- | :--- |\n| Classifier guidance | No | Yes | Yes |\n| Reconstruction guidance | No | No | Yes |\n| Classifier-free guidance | Yes | No | No |\n| **CTRL (Ours)** | **Yes** | **No** | **Yes** |\n\n**Table 2: Training Hyperparameters**\n| Hyperparameter | Compressibility (Task 1) | Multi-task (Task 2) |\n| :--- | :--- | :--- |\n| Classifier-free guidance weight on prompts ($c$) | 7.5 | 7.5 |\n| $\\gamma$ (strength of additional guidance on $y$) | 10 | 10 |\n| DDIM steps | 50 | 50 |\n| Truncated back-propagation step | $K \\sim \\text{Uniform}(0, 50)$ | $K \\sim \\text{Uniform}(0, 50)$ |\n| Learning rate for LoRA modules | $1e^{-3}$ | $3e^{-4}$ |\n| Learning rate for linear embeddings | $1e^{-2}$ | $1e^{-2}$ |\n| Batch size (per gradient update) | 256 | 512 |\n| Number of gradient updates per epoch | 2 | 2 |\n| Epochs | 15 | 60 |\n\n**Table 3: Compressibility Task Evaluation (Accuracy and F1)**\n| Method | Accuracy $\\uparrow$ | Macro F1 score $\\uparrow$ |\n| :--- | :--- | :--- |\n| Classifier-Free | $0.33 \\pm 0.04$ | 0.28 |\n| Reconstruction Guidance | $0.45 \\pm 0.04$ | 0.45 |\n| SMC | $0.27 \\pm 0.04$ | 0.22 |\n| MPGD | $0.70 \\pm 0.04$ | 0.72 |\n| SVDD | $0.78 \\pm 0.03$ | 0.78 |\n| **CTRL** | **$1.0 \\pm 0.0$** | **1.0** |\n\n**Table 4: Compressibility Task Image Quality Assessment**\n| Method | BRISQUE $\\downarrow$ (Lower is better) | CLIP Score $\\uparrow$ (Higher is better) |\n| :--- | :--- | :--- |\n| **CTRL** | **$30.8 \\pm 1.5$** | **$26.8 \\pm 0.2$** |\n| Classifier-Free | $33.2 \\pm 14.5$ | $25.7 \\pm 1.0$ |\n| Reconstruction Guidance | $90.2 \\pm 10.1$ | $22.8 \\pm 0.6$ |\n\n**Table 5: Multi-Task (Compressibility + Aesthetic) Evaluation**\n*Note: CP = Compressibility, AS = Aesthetic Score*\n| Method | Task Metric | Accuracy $\\uparrow$ | Macro F1 $\\uparrow$ |\n| :--- | :--- | :--- | :--- |\n| Classifier-Free | CP | $0.52 \\pm 0.04$ | 0.39 |\n| | AS | $0.59 \\pm 0.04$ | 0.55 |\n| Reconstruction Guidance | CP | $0.61 \\pm 0.04$ | 0.55 |\n| | AS | $0.66 \\pm 0.04$ | 0.62 |\n| SMC | CP | $0.51 \\pm 0.04$ | 0.35 |\n| | AS | $0.49 \\pm 0.04$ | 0.48 |\n| MPGD | CP | $0.56 \\pm 0.04$ | 0.45 |\n| | AS | $0.48 \\pm 0.04$ | 0.35 |\n| SVDD | CP | $0.82 \\pm 0.03$ | 0.82 |\n| | AS | $0.59 \\pm 0.04$ | 0.57 |\n| **CTRL** | **CP** | **$0.94 \\pm 0.02$** | **0.94** |\n| | **AS** | **$0.93 \\pm 0.02$** | **0.93** |\n\n**Table 6: Reconstruction Guidance Ablation Study (Conditioning on Compressibility)**\n*Analysis of Accuracy and Mean Score across different guidance levels ($\\gamma$) for different target conditions ($Y$).*\n| Conditional control ($Y$) | Guidance level ($\\gamma$) | Accuracy $\\uparrow$ | Mean score |\n| :--- | :--- | :--- | :--- |\n| 0 | 0 | 0.43 | -110 |\n| 0 | 5 | 0.64 | -157.4 |\n| 0 | 7.5 | 0.62 | -148.2 |\n| 0 | 10 | 0.52 | -156.5 |\n| 0 | 20 | 0.66 | -152.5 |\n| 0 | 50 | 0.69 | -151.6 |\n| 1 | 0 | 0.45 | -110 |\n| 1 | 5 | 0.14 | -152.0 |\n| 1 | 7.5 | 0.12 | -189.7 |\n| 1 | 10 | 0.08 | -163.1 |\n| 1 | 20 | 0.06 | -169.5 |\n| 1 | 50 | 0 | -194.0 |\n| 2 | 0 | 0.13 | -110 |\n| 2 | 5 | 0.02 | -104.9 |\n| 2 | 7.5 | 0.10 | -122.1 |\n| 2 | 10 | 0.12 | -111.3 |\n| 2 | 20 | 0.08 | -157.6 |\n| 2 | 50 | 0.08 | -173.5 |\n| 3 | 0 | 0 | -110 |\n| 3 | 5 | 0.46 | -71.7 |\n| 3 | 7.5 | 0.46 | -67.6 |\n| 3 | 10 | 0.53 | -65.6 |\n| 3 | 20 | 0.26 | -112.4 |\n| 3 | 50 | 0.32 | -121.5 |\n\n**Table 7: Compressibility Classifier Architecture**\n| Layer # | Layer Type | Input Dimension | Output Dimension |\n| :--- | :--- | :--- | :--- |\n| 1 | ResidualBlock (Conv2d 64, 3x3) | $C \\times H \\times W$ | $64 \\times H \\times W$ |\n| 2 | ResidualBlock (Conv2d 128, 3x3) | $64 \\times H \\times W$ | $128 \\times H/2 \\times W/2$ |\n| 3 | ResidualBlock (Conv2d 256, 3x3) | $128 \\times H/2 \\times W/2$ | $256 \\times H/4 \\times W/4$ |\n| 4 | AdaptiveAvgPool2d (1,1) | $256 \\times H/4 \\times W/4$ | $256 \\times 1 \\times 1$ |\n| 5 | Flatten | $256 \\times 1 \\times 1$ | 256 |\n| 6 | Linear | 256 | num_classes |\n\n**Table 8: Aesthetic Score Classifier Architecture**\n| Layer # | Layer Type | Input Dimension | Output Dimension |\n| :--- | :--- | :--- | :--- |\n| 1 | Linear | 768 | 1024 |\n| 2 | Dropout | - | - |\n| 3 | Linear | 1024 | 128 |\n| 4 | Dropout | - | - |\n| 5 | Linear | 128 | 64 |\n| 6 | Dropout | - | - |\n| 7 | Linear | 64 | 16 |\n| 8 | Linear | 16 | num_classes |\n\n## 3. Qualitative Observations\n\n### Compressibility Task Findings\n*   **Pre-trained Distribution:** We observed that generating samples conditioned on $Y=3$ (high compressibility) was extremely challenging for the baseline pre-trained model because such samples occur infrequently in the training distribution.\n*   **Convergence:** We tracked the mean compressibility curves during fine-tuning. The curves for the four distinct conditions separated and converged to their target levels, confirming that our method effectively aligned generated samples with target conditions.\n*   **Sample Quality:** We observed that CTRL produced diverse images with correct compressibility levels across various prompts (e.g., Cat, Dog, Horse, Rabbit).\n*   **Baseline Comparison:** CTRL outperformed all baselines (Classifier-Free, Reconstruction Guidance, SMC, MPGD, SVDD) in both accuracy and Macro F1 score, achieving perfect scores in our evaluation setup.\n*   **Image Quality Metrics:** CTRL achieved better image quality (lower BRISQUE score) and higher text-image alignment (higher CLIP Score) compared to Classifier-Free and Reconstruction Guidance baselines. Reconstruction guidance yielded particularly poor image quality (high BRISQUE score).\n\n### Multi-Task Findings\n*   **Task Difficulty:** Generating samples for $Y=1$ (Low Aesthetic, High Compressibility) and $Y=3$ (High Aesthetic, High Compressibility) was identified as particularly challenging due to the rare occurrence of such samples in the pre-trained model. Specifically, highly aesthetic images typically require more storage (low compressibility), making the combination $Y=3$ difficult.\n*   **Performance:** CTRL successfully generated samples for these rare classes with over 90% accuracy, significantly outperforming baselines. The method demonstrated the ability to handle compositional conditions.\n*   **Visual Validation:** Generated images confirmed that CTRL could produce highly aesthetic images ($Y=2, Y=3$) distinct from low aesthetic ones, while maintaining the specified compressibility constraints.\n\n### Ablation and Methodology Observations\n*   **Reconstruction Guidance Limitations:** In ablation studies of Reconstruction Guidance, we observed that increasing guidance strength ($\\gamma$) improved accuracy for extreme conditions ($Y=0$ and $Y=3$) but decreased accuracy for intermediate conditions ($Y=1$ and $Y=2$).\n*   **Non-linear Dynamics:** For Reconstruction Guidance, we found a non-linear relationship between guidance strength and generation quality, where mean scores for intermediate classes often overshot or undershot target intervals.\n*   **Computational Efficiency:** Single-task fine-tuning required approximately 20 A100 GPU hours. Multi-task fine-tuning was more demanding, requiring approximately 200 A100 GPU hours.\n*   **Benefits of Independence:** Unlike classifier-free guidance which required data augmentation to create triplets $(c, x, y)$, our method leveraged conditional independence ($y \\perp c | x$) to use only pairs $(x, y)$, simplifying offline dataset construction.\n\n[AVAILABLE FIGURES]\n### AVAILABLE FIGURES LIST\nItem 1:\n  - Filename: figure_3.png\n  - Caption: Figure 3: Confusion matrix for Reconstruction Guidance.\n--------------------------------------------------\nItem 2:\n  - Filename: figure_2.png\n  - Caption: Figure 2: Results for multi-task conditioning. Figure a plots the histogram of samples generated by the pre-trained diffusion model. Table b presents the evaluation statistics. Figure c displays images generated by a single model fine-tuned with CTRL.\n--------------------------------------------------\nItem 3:\n  - Filename: figure_4.png\n  - Caption: Figure 4: More images generated by CTRL in the compressibility task.\n--------------------------------------------------\nItem 4:\n  - Filename: figure_5.png\n  - Caption: Figure 5: More images generated by CTRL in the multi-task conditional generation.\n--------------------------------------------------\nItem 5:\n  - Filename: figure_1.png\n  - Caption: Figure 1: Results for conditioning on compressibility. Figure a plots the histogram of samples generated by the pre-trained diffusion model. Figure d shows the mean compressibility curves during fine-tuning with four distinct lines representing each condition. It is evident that CTRL effectively aligns the generated samples with their target compressibility levels via fine-tuning. Table b, c provide evaluation metrics, and Figure e shows images generated by a single model fine-tuned with CTRL.\n--------------------------------------------------\n\nFigures are located in the figures/ directory and should be referenced appropriately in the paper using standard \\includegraphics commands.\n\n[LATEX TEMPLATE]\n\\documentclass{article} % For LaTeX2e\n\\usepackage{iclr2025_conference,times}\n\n% Optional math commands from https://github.com/goodfeli/dlbook_notation.\n\\input{math_commands.tex}\n\n\\usepackage{hyperref}\n\\usepackage{url}\n\n%%%%%%%%% TITLE - PLEASE UPDATE TITLE HERE\n\\title{My Title}\n\n\\author{Ambitious AI Researcher\\\\\nAI Research Institute\\\\\n123 AI Avenue, ML City\\\\\n\\texttt{researcher@institute.ai}\n}\n\n\\newcommand{\\fix}{\\marginpar{FIX}}\n\\newcommand{\\new}{\\marginpar{NEW}}\n\n\\begin{document}\n\n\\maketitle\n\n\\begin{abstract}\n%%%%%%%%% ABSTRACT %%%%%%%%%\nAbstract here.\n%%%%%%%%% ABSTRACT %%%%%%%%%\n\\end{abstract}\n\n\\section{Introduction}\n\\label{sec:intro}\n%%%%%%%%% INTRODUCTION %%%%%%%%%\nIntroduction here.\n%%%%%%%%% INTRODUCTION %%%%%%%%%\n\n\\section{Related Work}\n\\label{sec:related_work}\n%%%%%%%%% RELATED WORK %%%%%%%%%\nRelated work here.\n%%%%%%%%% RELATED WORK %%%%%%%%%\n\n\\section{Methodology}\n\\label{sec:method}\n%%%%%%%%% METHOD %%%%%%%%%\nMethodology here.\n%%%%%%%%% METHOD %%%%%%%%%\n\n\\section{Experiments}\n\\label{sec:experiments}\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\nExperimental setup, results, and analysis here.\n%%%%%%%%% EXPERIMENTS %%%%%%%%%\n\n\\section{Conclusion}\n\\label{sec:conclusion}\n%%%%%%%%% CONCLUSION %%%%%%%%%\nConclusion here.\n%%%%%%%%% CONCLUSION %%%%%%%%%\n\n%%%%%%%%% REFERENCES %%%%%%%%%\n\\bibliography{references}\n\\bibliographystyle{iclr2025_conference}\n%%%%%%%%% REFERENCES %%%%%%%%%\n\n%%%%%%%%% Appendix %%%%%%%%%\n% If you want to add appendix, uncomment the following lines:\n% \\appendix\n% \\section{xxx}\n%%%%%%%%% Appendix %%%%%%%%%\n\n\\end{document}\n\n\nResponse Format\nReturn EXACTLY TWO fenced code blocks.\n1. First code block: the BibTeX file:\n```bibtex\n@article{example2023,\ntitle={Example Title},\nauthor={Author, First},\njournal={Example Journal},\nyear={2023}\n}\n```\n2. Second code block: the generated LaTeX paper:\n```latex\n% The complete LaTeX paper here\n```\nThe final paper must be coherent, highly polished, and scientifically accurate.\n\n[Delivery in this environment]\nYour working directory is /work: it holds the conference's LaTeX template files and the figures/ directory. Write the two files there as /work/references.bib and /work/template.tex (you may also return them as the two code blocks), and compile /work/template.tex with pdflatex and bibtex into /work/template.pdf. The compiled template.pdf is the paper that is evaluated.\n"
+  },
+  {
+   "name": "SYSTEM.md",
+   "size": 9869,
+   "text": "Role: Senior AI Researcher and Academic Writer.\nObjective: Complete a machine learning research paper by filling in missing sections of a provided LaTeX template and generating a corresponding bibliography file. You must produce a scientifically sound, well-structured paper suitable for submission to a top-tier ML conference.\n\nInputs\nYou will receive the following materials:\n• idea.md: Detailed description of the proposed method and technical ideas.\n• experimental_log.md: Raw experimental results and observations used to construct tables, figures, and analysis.\n• conference_guidelines.md: Formatting and stylistic requirements for the target conference.\n• figures_list: A list of figures that may be referenced in the paper.\n\nConference Guidelines\n# ICLR 2025 Paper Writing Guidelines\n\nBelow are the instructions to help you with the LaTeX paper writing process for ICLR 2025.\n\n## General Setup\n* **Document Class:** `\\documentclass{article}`\n* **Required Packages:**\n    ```latex\n    \\usepackage{iclr2025_conference,times}\n    \\usepackage{hyperref}\n    \\usepackage{url}\n    % Optional but recommended for math\n    \\input{math_commands.tex}\n    ```\n* **Style Files:** You must use `iclr2025_conference.sty` and `iclr2025_conference.bst`.\n\n## Anonymity (Crucial)\n* ICLR is double-blind. **Do not** include real author names or affiliations in the submission version, use \"Ambitious AI Researcher\" instead.\n* Use the third person when citing your own prior work (e.g., \"Earlier work by Smalle (2024)...\" instead of \"In our earlier work...\").\n* You may post your paper on arXiv, but do not explicitly refer to the arXiv version in the paper to maintain anonymity.\n\n## Paper Length\n* **Main Text:** Strict upper limit of **10 pages**.\n* **Citations:** Unlimited additional pages.\n* **Ethics & Reproducibility Statements:** Optional. Do not count toward the page limit (max 1 page each).\n* **Acknowledgments:** Do not count toward the page limit.\n\n## Abstract\nThe abstract must be limited to **one paragraph**.\n* **Margins:** Indented 1/2 inch (3 picas) on both left and right-hand margins.\n* **Font:** 10-point type, vertical spacing of 11-points.\n* **Title:** The word `\\textsc{Abstract}` must be centered, in small caps, and in point size 12.\n* **Spacing:** Two line spaces precede the abstract.\n\n## Formatting Your Paper\nThe text must be confined within a rectangle 5.5 inches (33 picas) wide and 9 inches (54 picas) long. The left margin is 1.5 inch (9 picas).\n* **Font:** Times New Roman (via `times` package) is preferred.\n* **Size:** 10-point type with 11-point vertical spacing.\n* **Paragraphs:** Separated by 1/2 line space, with **no indentation**.\n* **Paper Title:** 17-point, small caps, left-aligned.\n\n### Headings\n* **First Level:** Small caps (`\\textsc`), flush left, 12-point. One line space before, 1/2 after.\n* **Second Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n* **Third Level:** Small caps, flush left, 10-point. One line space before, 1/2 after.\n\n## Citations and References\nUse the `natbib` package (loaded automatically by the style file).\n* **Narrative citation:** Use `\\citet{Gomu2024}` $\\rightarrow$ \"Gomu et al. (2024)\".\n* **Parenthetical citation:** Use `\\citep{Gomu2024}` $\\rightarrow$ \"(Gomu et al., 2024)\".\n* **Bibliography:**\n    ```latex\n    \\bibliography{references}\n    \\bibliographystyle{iclr2025_conference}\n    ```\n\n## Figures and Tables\n* All artwork must be neat, clean, and legible.\n* **Captions:** Lower case (except for first word and proper nouns).\n* **Placement:**\n    * **Figures:** Caption appears **after** (below) the figure.\n    * **Tables:** Caption appears **before** (above) the table.\n\n### Example Code for Figures\n```latex\n\\begin{figure}[h]\n\\begin{center}\n%\\framebox[4.0in]{$\\;$}\n\\fbox{\\rule[-.5cm]{0cm}{4cm} \\rule[-.5cm]{4cm}{0cm}}\n\\end{center}\n\\caption{Sample figure caption.}\n\\end{figure}\n```\n\n### Example Code for Tables\n```latex\n\\begin{table}[t]\n\\caption{Sample table title}\n\\label{sample-table}\n\\begin{center}\n\\begin{tabular}{ll}\n\\multicolumn{1}{c}{\\bf PART}  &\\multicolumn{1}{c}{\\bf DESCRIPTION}\n\\\\ \\hline \\\\\nDendrite         &Input terminal \\\\\nAxon             &Output terminal \\\\\nSoma             &Cell body (contains cell nucleus) \\\\\n\\end{tabular}\n\\end{center}\n\\end{table}\n```\n\n## Math Notation\n* ICLR encourages standardized notation using `\\input{math_commands.tex}` (based on the Deep Learning book notation).\n* Variables: Italics ($a$, $\\va$, $\\mA$).\n* Random Variables: Roman ($P(\\ra)$).\n* Sets: Blackboard bold ($\\R$, $\\sA$).\n* Functions: Standard LaTeX ($f(\\vx)$).\n\n## Optional Statements\nThese should appear at the end of the main text, before references.\n1.  **Ethics Statement:** (Optional, max 1 page) Address potential concerns (human subjects, sensitive data, bias, etc.).\n2.  **Reproducibility Statement:** (Optional, max 1 page) Reference code, proofs, or data processing steps to ensure reproducibility.\n\n## Important Rules\n* **Formatting:** Do not modify the width or length of the text rectangle or font sizes.\n* **Line Numbers:** Do not refer to line numbers in your text (the style file adds them automatically for review).\n* **Appendix:** You may include an appendix at the very end of the main PDF (after references). Use `\\appendix` to start this section.\n* **Figures Directory:** For consistent compilation, all figures will reside in the `figures` directory. Always include the `figures/` prefix in your `\\includegraphics` command (e.g., `figures/figure_1.pdf`).\n* **Author Information:** Always use the following author information placeholder in your writeup:\n    * Ambitious AI Researcher, AI Research Institute, 123 AI Avenue, ML City, researcher@institute.ai\n\nCritical Constraints\n1. Scientific Integrity\n• All reported experimental results MUST match the provided experimental logs.\n• Never fabricate results, numbers, baselines, datasets, or metrics.\n• If results are weak, negative, or inconclusive, report them honestly and discuss possible explanations.\n2. Literature Cutoff Rule\nYou must behave as if the current date is: 2024-10. Do NOT cite or discuss papers published after this date.\n3. Page Limit\nThe main paper is limited to 10 pages (including figures and tables but excluding references and appendices). Use space efficiently while remaining concise.\n4. Template Compliance\n• Do not modify the overall LaTeX style or document structure mandated by the conference template.\n• References must be handled through a references.bib file.\n• Use standard LaTeX citation commands (e.g., \\cite{}). Make sure you ONLY cite keys that exist in your generated BibTeX code block.\n\nSection Guidelines\n• Title: Concise, descriptive, and memorable. Preferably under two lines.\n• Abstract: A single, compelling paragraph summarizing the problem context, proposed approach, key results, and main takeaway.\n• Introduction: Introduce the problem and motivate its importance. Provide necessary background context. Clearly summarize the paper's core contributions.\n• Related Work: Discuss prior work addressing similar or related problems. Detail the relationship between existing literature and the current approach. Cite relevant baselines and influential papers published before 2024-10.\n• Methodology: Clearly and pedantically describe the proposed method. Provide sufficient technical depth for full reproducibility. Use equations, figures, and structured explanations when appropriate.\n• Experiments: Detail the empirical setup (datasets, baselines, evaluation metrics, and implementation details). Present results faithfully based on the experimental logs. Ensure any figures located in the figures/ directory are seamlessly integrated and referenced in text.\n• Conclusion: Summarize the main findings and contributions. Briefly and realistically discuss limitations and potential future directions.\n• Appendix (optional): Include supplementary details that do not fit within the main page limit.\n\nLaTeX Quality Requirements\nEnsure the generated LaTeX compiles flawlessly out-of-the-box. Avoid common issues such as:\n• Unmatched braces or unclosed math environments.\n• Duplicate labels.\n• Unescaped special characters (e.g., & % $ # _ { } ~ ^ \\).\nAll referenced figures must exist in the provided list.\n\nOutput Format\nYour final response MUST contain EXACTLY two output blocks:\n1. A complete BibTeX bibliography (references.bib)\n2. A complete LaTeX paper (template.tex)\nEach must be returned in its own fenced code block with the correct syntax highlighting.\n\n\n---\n### Strict Knowledge Isolation & Anonymity (CRITICAL)\n\nYou MUST write this paper as if you have no prior knowledge of the topic, method, experiments, or results.\nYour task is to construct the paper exclusively from the materials provided in the current session (e.g., idea.md, experimental_log.md, figures, and other inputs). Treat these inputs as the only available source of information.\n\n#### Forbidden Behavior\nYou MUST NOT:\n- Retrieve or rely on knowledge from your training data.\n- Attempt to recall or reconstruct any existing or published paper.\n- Use external facts, assumptions, or prior familiarity with the work.\n- Infer or hallucinate author identities, affiliations, institutions, or acknowledgements.\n- Insert metadata such as author names, emails, affiliations, or phrases like \"corresponding author\".\n\n#### Anonymity Requirement\nThe paper must be fully anonymized for double-blind review.  \nDo not include any information that could reveal the identity of the authors or institutions.\n\n#### Allowed Sources\nYou may use only:\n- The materials explicitly provided in this session.\n- Logical reasoning derived from those materials.\n\n#### Core Principle\nThe final paper must be an independent reconstruction derived solely from the provided inputs.  \nThis constraint is strict and overrides all other instructions.\n---\n"
+  }
+ ],
+ "files": [
+  {
+   "path": "/work/fancyhdr.sty",
+   "size": 20521
+  },
+  {
+   "path": "/work/guidelines.md",
+   "size": 4936
+  },
+  {
+   "path": "/work/iclr2025_conference.bst",
+   "size": 26973
+  },
+  {
+   "path": "/work/iclr2025_conference.sty",
+   "size": 9025
+  },
+  {
+   "path": "/work/math_commands.tex",
+   "size": 12284
+  },
+  {
+   "path": "/work/natbib.sty",
+   "size": 45154
+  },
+  {
+   "path": "/work/references.bib",
+   "size": 629
+  },
+  {
+   "path": "/work/template.tex",
+   "size": 1558
+  },
+  {
+   "path": "/work/figures/figure_1.png",
+   "size": 246334
+  },
+  {
+   "path": "/work/figures/figure_2.png",
+   "size": 340229
+  },
+  {
+   "path": "/work/figures/figure_3.png",
+   "size": 24864
+  },
+  {
+   "path": "/work/figures/figure_4.png",
+   "size": 666337
+  },
+  {
+   "path": "/work/figures/figure_5.png",
+   "size": 673364
+  },
+  {
+   "path": "/work/figures/info.json",
+   "size": 1290
+  }
+ ],
+ "file_notes": [],
+ "settings": {
+  "limits": {
+   "time_limit_hours": 2.0
+  },
+  "offline": false,
+  "image": null,
+  "deliverables": [
+   "template.pdf",
+   "template.tex",
+   "references.bib"
+  ],
+  "work": "paper",
+  "inputs": [
+   {
+    "path": "/work/figures",
+    "from": "figures"
+   }
+  ],
+  "software": false
+ },
+ "shield": {
+  "source": {
+   "title": "Adding Conditional Control to Diffusion Models with Reinforcement Learning",
+   "authors": [
+    "Yulai Zhao",
+    "Masatoshi Uehara",
+    "Gabriele Scalia",
+    "Sunyuan Kung",
+    "Tommaso Biancalani",
+    "Sergey Levine",
+    "Ehsan Hajiramezanali"
+   ],
+   "time_cutoff": "2024-10-01",
+   "abs_url": "https://openreview.net/forum?id=svp1EBA6hA",
+   "pdf_url": "https://openreview.net/pdf?id=svp1EBA6hA",
+   "openreview_forum": "svp1EBA6hA",
+   "arxiv_id": "2406.12120",
+   "code_repository": [
+    "https://github.com/google-research/paper-orchestra"
+   ]
+  },
+  "extra": {
+   "urls": [
+    "https://huggingface.co/datasets/yiwen-song/PaperWritingBench",
+    "https://yiwen-song.github.io/paper_orchestra/",
+    "https://arxiv.org/abs/2406.12120"
+   ]
+  },
+  "probe_url": "https://github.com/google-research/paper-orchestra"
+ },
+ "evaluator": {
+  "repo": "https://github.com/google-research/paper-orchestra",
+  "commit": "ca1b3fa01c2970fc7cda32d16245db38d57b3f56",
+  "dataset": "yiwen-song/PaperWritingBench",
+  "revision": "fbcfcafd042184ca954954b08dfcb92bd7942b51",
+  "paper_id": "iclr2025_5d6bf7a5df",
+  "venue": "iclr2025",
+  "paper_dir": "iclr2025/papers/iclr2025_5d6bf7a5df",
+  "idea": "idea_sparse.md",
+  "research_cutoff": "2024-10",
+  "prompt": "Single Agent (arXiv 2604.05018v1 App. F.1)",
+  "paper": "template.pdf"
+ },
+ "references": [
+  {
+   "name": "iclr2025_5d6bf7a5df.pdf",
+   "size": 9727642,
+   "text": null,
+   "note": "the original paper",
+   "file_reason": "not-in-batch"
+  },
+  {
+   "name": "raw_materials/idea_dense.md",
+   "size": 7604,
+   "text": "## Problem Statement\nLarge-scale pre-trained diffusion models have achieved remarkable success in modeling conditional distributions $p(x|c)$, where $c$ represents established conditions such as text prompts. However, a critical limitation arises when downstream applications require conditioning on an additional random variable $y \\in \\mathcal{V}$ (e.g., specific aesthetic scores, compressibility, or structural constraints) that was not present during pre-training.\n\nCurrent approaches to fine-tuning for $p(x|c, y)$ face significant hurdles. **Classifier-free guidance** necessitates retraining or fine-tuning using triplets $\\{c, x, y\\}$. This is data-inefficient and often impractical, as constructing large offline datasets containing all three variables is difficult. Furthermore, it fails to leverage potential conditional independence between $y$ and $c$. **Classifier guidance** avoids fine-tuning the generative model but requires training a noise-dependent classifier $p(y|x_t)$ on intermediate noisy states. This introduces severe cumulative errors due to the difficulty of predicting labels from noisy inputs and necessitates computing gradients through the classifier at every sampling step.\n\nWe identify a need for a framework that allows adding new controls to pre-trained models using only offline datasets of inputs and labels, potentially exploiting pairs $\\{x, y\\}$ rather than full triplets, without relying on noisy intermediate classifier guidance.\n\n## Core Hypothesis\nWe propose **CTRL (Conditioning pre-Trained diffusion models with Reinforcement Learning)**. Our core hypothesis is that the task of conditioning a pre-trained diffusion model on a new variable $y$ can be mathematically formulated as a Reinforcement Learning (RL) problem within a Markov Decision Process (MDP).\n\nWe hypothesize that by defining the reward function as the log-likelihood of the additional label given the clean data, $\\log p(y|x, c)$, and regularizing the policy via Kullback-Leibler (KL) divergence against the pre-trained model's distribution, we can derive a **soft-optimal policy**. This policy will correspond to a new drift term in the diffusion SDE. By fine-tuning an augmented diffusion architecture to maximize this objective, we will enable sampling from the exact target conditional distribution $p(x|c, y)$ while maintaining sample efficiency and avoiding the instability of time-dependent classifiers.\n\n## Proposed Methodology (Detailed Technical Approach)\n\nWe will execute this project in three distinct phases: mathematical formulation, architecture augmentation, and RL-based fine-tuning.\n\n### 1. Mathematical Formulation and Target Distribution\nWe start with a pre-trained model governed by the stochastic differential equation (SDE):\n$$ d x_t = f^{\\mathrm{pre}}(t, c, x_t; \\theta^{\\mathrm{pre}}) dt + \\sigma(t) d w_t $$\nwhere $f^{\\mathrm{pre}}$ is the pre-trained drift coefficient and $w_t$ is Brownian motion.\n\nWe define our target distribution $p_\\gamma(\\cdot | c, y)$ as a re-weighted version of the pre-trained distribution, controlled by a guidance strength parameter $\\gamma$:\n$$ p_\\gamma(\\cdot | c, y) := \\frac{ \\{ p^\\diamond(y|\\cdot, c) \\}^\\gamma p^{\\mathrm{pre}}(\\cdot | c) }{ \\int \\{ p^\\diamond(y|x, c) \\}^\\gamma p^{\\mathrm{pre}}(x | c) \\mu(dx) } $$\nwhere $p^\\diamond(y|x, c)$ is the ground-truth conditional distribution of the label $y$.\n\nTo achieve this target, we will define a new SDE with an **augmented drift term** $g$:\n$$ d x_t = g(t, c, y, x_t; \\psi) dt + \\sigma(t) d w_t $$\nHere, $\\psi$ represents the learnable parameters of the augmented model.\n\n### 2. Reinforcement Learning Objective\nWe will solve for the optimal drift $g^\\star$ by framing the problem as an entropy-regularized control problem. We define the objective function as the maximization of the expected reward (conditional log-likelihood) minus the control cost (deviation from the pre-trained trajectory).\n\nWe will formulate the optimization problem as finding the parameters $\\hat{\\psi}$ that maximize:\n$$ \\hat{\\psi} = \\underset{\\psi}{\\mathrm{argmax}} \\ \\mathbb{E}_{\\mathbf{\\phi}(c, y) \\sim \\Pi(c, y)} \\left[ \\gamma \\log \\hat{p}(y | x_T, c) - \\frac{1}{2} \\int_0^T \\frac{\\| f^{\\mathrm{pre}}(s, c, x_s) - g(s, c, y, x_s; \\psi) \\|^2}{\\sigma^2(s)} ds \\right] $$\nwhere:\n*   $\\Pi(c, y)$ is an exploratory distribution over conditions.\n*   $\\hat{p}(y | x_T, c)$ is a calibrated classifier trained on the offline dataset (serving as the reward function).\n*   The integral term represents the KL divergence penalty accumulated over the diffusion trajectory.\n\n### 3. Architecture and Construction\nWe will construct the system using the following three-step pipeline:\n\n**Step A: Reward Model Training**\nWe will train a classifier $\\hat{p}(y | x, c)$ using the available offline dataset $\\mathcal{D} = \\{ c^{(i)}, x^{(i)}, y^{(i)} \\}$.\n*   We will perform Maximum Likelihood Estimation (MLE):\n    $$ \\hat{p}(\\cdot | x, c) := \\underset{r \\in \\mathcal{F}}{\\mathrm{argmax}} \\sum_{i=1}^n \\log r(y^{(i)} | x^{(i)}, c^{(i)}) $$\n*   Crucially, if conditional independence $y \\perp c | x$ holds (e.g., image compressibility depends only on the image $x$, not the prompt $c$), we will train on pairs $\\{x, y\\}$, simplifying dataset requirements.\n\n**Step B: Augmented Model Construction**\nWe will modify the pre-trained architecture $f^{\\mathrm{pre}}$ to create $g(t, c, y, x; \\psi)$.\n*   Let $\\psi = [\\theta^\\top, \\phi^\\top]^\\top$, initialized at $\\psi^{\\mathrm{ini}} = [{\\theta^{\\mathrm{pre}}}^\\top, \\mathbf{0}^\\top]$.\n*   We will introduce a parameter set $\\phi$ as a **linear embedding layer** that maps the label $y$ to a vector in $\\mathbb{R}^d$.\n*   These embeddings will be added to the intermediate outputs of the diffusion model (e.g., UNet feature maps) at each timestep. This approach preserves the pre-trained weights while enabling control.\n\n**Step C: Planning via Direct Backpropagation**\nWe will optimize the objective using a direct backpropagation through time (BPTT) approach.\n1.  **Sampling:** Generate trajectories $\\{x_{0:T}\\}$ using the current policy $g(\\cdot; \\psi)$.\n2.  **Reward Computation:** Evaluate the terminal state $x_T$ using the trained classifier $\\hat{p}$.\n3.  **Update:** Compute gradients of the objective w.r.t. $\\psi$. To manage memory complexity during BPTT, we will employ **Gradient Checkpointing** and **LoRA (Low-Rank Adaptation)**, fine-tuning only the rank-decomposition matrices and the new embedding layers.\n\n## Expected Contribution\n1.  **Theoretical Framework:** We will provide a formal proof that the optimal policy of our defined RL objective induces a marginal distribution at time $T$ that is exactly equivalent to the target distribution $p_\\gamma(\\cdot | c, y)$.\n2.  **Sample Efficiency:** We expect to demonstrate that by modeling the discriminative distribution $p(y|x)$ (which is often lower-dimensional) rather than the generative distribution $p(x|y, c)$, we achieve significantly higher sample efficiency than classifier-free guidance.\n3.  **Handling Conditional Independence:** We will show that our method decouples the data requirements. In scenarios where labels are independent of prompts given the data (e.g., $y \\perp c | x$), we can utilize disjoint datasets for pre-training and control learning, eliminating the need for hard-to-obtain triplets.\n4.  **Novel Connection:** We will theoretically bridge RL-based fine-tuning and classifier guidance, showing that classifier guidance is a specific inference-time approximation of our RL formulation, while our method solves for the optimal drift directly to avoid approximation errors.",
+   "note": "the dense idea (the method that produced the experimental log)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gpt-5-2025-08-07.json",
+   "size": 38135,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Anderson, B. D. (1982). Reverse-time diffusion equation models. Stochastic Processes and their Applications 12(3), 313\\u2013326.\",\n            \"extracted_paper_title\": \"Reverse-time diffusion equation models\",\n            \"fetched_paper_id\": \"c7a5128b45edb4db9105ec5167210b887617ddf2\",\n            \"fetched_paper_title\": \"Reverse-time diffusion equation models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Bansal, A., H.-M. Chu, A. Schwarzschild, S. Sengupta, M. Goldblum, J. Geiping, and T. Goldstein (2023). Universal guidance for diffusion models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 843\\u2013852.\",\n            \"extracted_paper_title\": \"Universal guidance for diffusion models\",\n            \"fetched_paper_id\": \"d24b4f34197df0257390b57f02537e6ce3284f2e\",\n            \"fetched_paper_title\": \"Universal Guidance for Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Black, K., M. Janner, Y. Du, I. Kostrikov, and S. Levine (2023). Training diffusion models with reinforcement learning.\",\n            \"extracted_paper_title\": \"Training diffusion models with reinforcement learning\",\n            \"fetched_paper_id\": \"d8c78221e4366d6a72a6b3e41e35b706cc45c01d\",\n            \"fetched_paper_title\": \"Training Diffusion Models with Reinforcement Learning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Brooks, T., A. Holynski, and A. A. Efros (2023). Instructpix2pix: Learning to follow image editing instructions. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 18392\\u201318402.\",\n            \"extracted_paper_title\": \"Instructpix2pix: Learning to follow image editing instructions\",\n            \"fetched_paper_id\": \"a2d2bbe4c542173662a444b33b76c66992697830\",\n            \"fetched_paper_title\": \"InstructPix2Pix: Learning to Follow Image Editing Instructions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chen, T., B. Xu, C. Zhang, and C. Guestrin (2016). Training deep nets with sublinear memory cost. arXiv preprint arXiv:1604.06174.\",\n            \"extracted_paper_title\": \"Training deep nets with sublinear memory cost\",\n            \"fetched_paper_id\": \"942deb7d865b7782c03176d95e3a0d56cb71009e\",\n            \"fetched_paper_title\": \"Training Deep Nets with Sublinear Memory Cost\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chung, H., J. Kim, M. T. Mccann, M. L. Klasky, and J. C. Ye (2022). Diffusion posterior sampling for general noisy inverse problems. arXiv preprint arXiv:2209.14687.\",\n            \"extracted_paper_title\": \"Diffusion posterior sampling for general noisy inverse problems\",\n            \"fetched_paper_id\": \"61e46884567be7cad12e999365b16a8d3414b678\",\n            \"fetched_paper_title\": \"Diffusion Posterior Sampling for General Noisy Inverse Problems\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Clark, K., P. Vicol, K. Swersky, and D. J. Fleet (2023). Directly fine-tuning diffusion models on differentiable rewards. arXiv preprint arXiv:2309.17400.\",\n            \"extracted_paper_title\": \"Directly fine-tuning diffusion models on differentiable rewards\",\n            \"fetched_paper_id\": \"a395f1c0910a5622f6faaefb5b27e87bb1617759\",\n            \"fetched_paper_title\": \"Directly Fine-Tuning Diffusion Models on Differentiable Rewards\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Denker, A., F. Vargas, S. Padhy, K. Didi, S. Mathis, R. Barbano, V. Dutordoir, E. Mathieu, U. J. Komorowska, and P. Lio (2025). Deft: Efficient fine-tuning of diffusion models by learning the generalised h-transform. Advances in Neural Information Processing Systems 37, 19636\\u201319682.\",\n            \"extracted_paper_title\": \"Deft: Efficient fine-tuning of diffusion models by learning the generalised h-transform\",\n            \"fetched_paper_id\": \"8899a55b0db3d1305ad380db5cbe8408972cf294\",\n            \"fetched_paper_title\": \"DEFT: Efficient Fine-tuning of Diffusion Models by Learning the Generalised $h$-transform\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dhariwal, P. and A. Nichol (2021). Diffusion models beat gans on image synthesis. Advances in neural information processing systems 34, 8780\\u20138794.\",\n            \"extracted_paper_title\": \"Diffusion models beat gans on image synthesis\",\n            \"fetched_paper_id\": \"64ea8f180d0682e6c18d1eb688afdb2027c02794\",\n            \"fetched_paper_title\": \"Diffusion Models Beat GANs on Image Synthesis\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Epstein, D., A. Jabri, B. Poole, A. Efros, and A. Holynski (2023). Diffusion self-guidance for controllable image generation. Advances in Neural Information Processing Systems 36, 16222\\u201316239.\",\n            \"extracted_paper_title\": \"Diffusion self-guidance for controllable image generation\",\n            \"fetched_paper_id\": \"fbebb1a5d72aec2a6b13fc909f781f6ba9b04925\",\n            \"fetched_paper_title\": \"Diffusion Self-Guidance for Controllable Image Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Fan, Y., O. Watkins, Y. Du, H. Liu, M. Ryu, C. Boutilier, P. Abbeel, M. Ghavamzadeh, K. Lee, and K. Lee (2023). Dpok: Reinforcement learning for fine-tuning text-to-image diffusion models. arXiv preprint arXiv:2305.16381.\",\n            \"extracted_paper_title\": \"Dpok: Reinforcement learning for fine-tuning text-to-image diffusion models\",\n            \"fetched_paper_id\": \"a553bf27d801d09f667fe121c0ba9632257f364b\",\n            \"fetched_paper_title\": \"DPOK: Reinforcement Learning for Fine-tuning Text-to-Image Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Finzi, M. A., A. Boral, A. G. Wilson, F. Sha, and L. Zepeda-N\\u00b4u\\u02dcnez (2023). User-defined event sampling and uncertainty quantification in diffusion models for physical dynamical systems. In International Conference on Machine Learning, pp. 10136\\u201310152. PMLR.\",\n            \"extracted_paper_title\": \"User-defined event sampling and uncertainty quantification in diffusion models for physical dynamical systems\",\n            \"fetched_paper_id\": \"69f29341e91e2a205d5e37a1dcf08c43d1368aaa\",\n            \"fetched_paper_title\": \"User-defined Event Sampling and Uncertainty Quantification in Diffusion Models for Physical Dynamical Systems\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Giannone, G., A. Srivastava, O. Winther, and F. Ahmed (2024). Aligning optimization trajectories with diffusion models for constrained design generation. Advances in Neural Information Processing Systems 36.\",\n            \"extracted_paper_title\": \"Aligning optimization trajectories with diffusion models for constrained design generation\",\n            \"fetched_paper_id\": \"ad5fb88450fef465332327541351e9e5fae03210\",\n            \"fetched_paper_title\": \"Aligning Optimization Trajectories with Diffusion Models for Constrained Design Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Gruslys, A., R. Munos, I. Danihelka, M. Lanctot, and A. Graves (2016). Memory-efficient backpropagation through time. Advances in neural information processing systems 29.\",\n            \"extracted_paper_title\": \"Memory-efficient backpropagation through time\",\n            \"fetched_paper_id\": \"f61e9fd5a4878e1493f7a6b03774a61c17b7e9a4\",\n            \"fetched_paper_title\": \"Memory-Efficient Backpropagation Through Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Guo, C., G. Pleiss, Y. Sun, and K. Q. Weinberger (2017). On calibration of modern neural networks. In International conference on machine learning, pp. 1321\\u20131330. PMLR.\",\n            \"extracted_paper_title\": \"On calibration of modern neural networks\",\n            \"fetched_paper_id\": \"d65ce2b8300541414bfe51d03906fca72e93523c\",\n            \"fetched_paper_title\": \"On Calibration of Modern Neural Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Guo, Y., H. Yuan, Y. Yang, M. Chen, and M. Wang (2024). Gradient guidance for diffusion models: An optimization perspective. arXiv preprint arXiv:2404.14743.\",\n            \"extracted_paper_title\": \"Gradient guidance for diffusion models: An optimization perspective\",\n            \"fetched_paper_id\": \"5aabe3a210270711c72bddaa0290c4edd3db7720\",\n            \"fetched_paper_title\": \"Gradient Guidance for Diffusion Models: An Optimization Perspective\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Han, X., H. Zheng, and M. Zhou (2022). Card: Classification and regression diffusion models. Advances in Neural Information Processing Systems 35, 18100\\u201318115.\",\n            \"extracted_paper_title\": \"Card: Classification and regression diffusion models\",\n            \"fetched_paper_id\": \"3dfacece8dd1efe41b96b762b6be4a016467f136\",\n            \"fetched_paper_title\": \"CARD: Classification and Regression Diffusion Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"He, Y., N. Murata, C.-H. Lai, Y. Takida, T. Uesaka, D. Kim, W.-H. Liao, Y. Mitsufuji, J. Z. Kolter, R. Salakhutdinov, and S. Ermon (2024). Manifold preserving guided diffusion. In The Twelfth International Conference on Learning Representations.\",\n            \"extracted_paper_title\": \"Manifold preserving guided diffusion\",\n            \"fetched_paper_id\": \"19f4d1533d8f7c4c13e9732c36fb374edd5ad470\",\n            \"fetched_paper_title\": \"Manifold Preserving Guided Diffusion\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ho, J., A. Jain, and P. Abbeel (2020). Denoising diffusion probabilistic models. Advances in neural information processing systems 33, 6840\\u20136851.\",\n            \"extracted_paper_title\": \"Denoising diffusion probabilistic models\",\n            \"fetched_paper_id\": \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n            \"fetched_paper_title\": \"Denoising Diffusion Probabilistic Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ho, J. and T. Salimans (2022). Classifier-free diffusion guidance. arXiv preprint arXiv:2207.12598.\",\n            \"extracted_paper_title\": \"Classifier-free diffusion guidance\",\n            \"fetched_paper_id\": \"af9f365ed86614c800f082bd8eb14be76072ad16\",\n            \"fetched_paper_title\": \"Classifier-Free Diffusion Guidance\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ho, J., T. Salimans, A. Gritsenko, W. Chan, M. Norouzi, and D. J. Fleet (2022). Video diffusion models. Advances in Neural Information Processing Systems 35, 8633\\u20138646.\",\n            \"extracted_paper_title\": \"Video diffusion models\",\n            \"fetched_paper_id\": \"1206b05eae5a06ba662ae79fb291b50e359c4f42\",\n            \"fetched_paper_title\": \"Stable Video Diffusion: Scaling Latent Video Diffusion Models to Large Datasets\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Hu, E. J., Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang, and W. Chen (2021). Lora: Low-rank adaptation of large language models. arXiv preprint arXiv:2106.09685.\",\n            \"extracted_paper_title\": \"Lora: Low-rank adaptation of large language models\",\n            \"fetched_paper_id\": \"a8ca46b171467ceb2d7652fbfb67fe701ad86092\",\n            \"fetched_paper_title\": \"LoRA: Low-Rank Adaptation of Large Language Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Huang, K., T. Fu, W. Gao, Y. Zhao, Y. H. Roohani, J. Leskovec, C. W. Coley, C. Xiao, J. Sun, and M. Zitnik (2021). Therapeutics data commons: Machine learning datasets and tasks for drug discovery and development. In Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track (Round 1).\",\n            \"extracted_paper_title\": \"Therapeutics data commons: Machine learning datasets and tasks for drug discovery and development.\",\n            \"fetched_paper_id\": \"54ca116f1e9a45768a3a2c47a4608ff34adefa0c\",\n            \"fetched_paper_title\": \"Therapeutics Data Commons: Machine Learning Datasets and Tasks for Drug Discovery and Development\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Lee, K., H. Liu, M. Ryu, O. Watkins, Y. Du, C. Boutilier, P. Abbeel, M. Ghavamzadeh, and S. S. Gu (2023). Aligning text-to-image models using human feedback. arXiv preprint arXiv:2302.12192.\",\n            \"extracted_paper_title\": \"Aligning text-to-image models using human feedback\",\n            \"fetched_paper_id\": \"1e4b6567ff66de6cdcbe58c863538241e2f62b45\",\n            \"fetched_paper_title\": \"Aligning Text-to-Image Models using Human Feedback\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Li, X., Y. Zhao, C. Wang, G. Scalia, G. Eraslan, S. Nair, T. Biancalani, S. Ji, A. Regev, S. Levine, et al. (2024). Derivative-free guidance in continuous and discrete diffusion models with soft value-based decoding. arXiv preprint arXiv:2408.08252.\",\n            \"extracted_paper_title\": \"Derivative-free guidance in continuous and discrete diffusion models with soft value-based decoding\",\n            \"fetched_paper_id\": \"a673ef39237e227381fccf5b1d154d96de428f1d\",\n            \"fetched_paper_title\": \"Derivative-Free Guidance in Continuous and Discrete Diffusion Models with Soft Value-Based Decoding\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Li, Y. and M. van der Schaar (2023). On error propagation of diffusion models. In The Twelfth International Conference on Learning Representations.\",\n            \"extracted_paper_title\": \"On error propagation of diffusion models\",\n            \"fetched_paper_id\": \"b59c9904994204f76f9863cb86d19093df10edb8\",\n            \"fetched_paper_title\": \"On Error Propagation of Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Loshchilov, I. and F. Hutter (2019). Decoupled weight decay regularization. In International Conference on Learning Representations.\",\n            \"extracted_paper_title\": \"Decoupled weight decay regularization\",\n            \"fetched_paper_id\": \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n            \"fetched_paper_title\": \"Decoupled Weight Decay Regularization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Mittal, A., A. K. Moorthy, and A. C. Bovik (2012). No-reference image quality assessment in the spatial domain. IEEE Transactions on image processing 21(12), 4695\\u20134708.\",\n            \"extracted_paper_title\": \"No-reference image quality assessment in the spatial domain\",\n            \"fetched_paper_id\": \"a2cad4e4fd946adf6cc87e483b2ba18579de1264\",\n            \"fetched_paper_title\": \"No-Reference Image Quality Assessment in the Spatial Domain\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Murray, N., L. Marchesotti, and F. Perronnin (2012). Ava: A large-scale database for aesthetic visual analysis. In 2012 IEEE conference on computer vision and pattern recognition, pp. 2408\\u20132415. IEEE.\",\n            \"extracted_paper_title\": \"Ava: A large-scale database for aesthetic visual analysis\",\n            \"fetched_paper_id\": \"7bbe0235f583b27f96c0f288043876f86795d6c2\",\n            \"fetched_paper_title\": \"AVA: A large-scale database for aesthetic visual analysis\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Nichol, A., P. Dhariwal, A. Ramesh, P. Shyam, P. Mishkin, B. McGrew, I. Sutskever, and M. Chen (2021). Glide: Towards photorealistic image generation and editing with text-guided diffusion models. arXiv preprint arXiv:2112.10741.\",\n            \"extracted_paper_title\": \"Glide: Towards photorealistic image generation and editing with text-guided diffusion models\",\n            \"fetched_paper_id\": \"7002ae048e4b8c9133a55428441e8066070995cb\",\n            \"fetched_paper_title\": \"GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Phillips, A., H.-D. Dau, M. J. Hutchinson, V. De Bortoli, G. Deligiannidis, and A. Doucet (2024). Particle denoising diffusion sampler. arXiv preprint arXiv:2402.06320.\",\n            \"extracted_paper_title\": \"Particle denoising diffusion sampler\",\n            \"fetched_paper_id\": \"187308ff437755641bcc0bd14b08a7c365d88253\",\n            \"fetched_paper_title\": \"Particle Denoising Diffusion Sampler\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Prabhudesai, M., A. Goyal, D. Pathak, and K. Fragkiadaki (2023). Aligning text-to-image diffusion models with reward backpropagation. arXiv preprint arXiv:2310.03739.\",\n            \"extracted_paper_title\": \"Aligning text-to-image diffusion models with reward backpropagation\",\n            \"fetched_paper_id\": \"174df7d2cc8d49f219d8899c7d75bc929f3a57c7\",\n            \"fetched_paper_title\": \"Aligning Text-to-Image Diffusion Models with Reward Backpropagation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Radford, A., J. W. Kim, C. Hallacy, A. Ramesh, G. Goh, S. Agarwal, G. Sastry, A. Askell, P. Mishkin, J. Clark, G. Krueger, and I. Sutskever (2021). Learning transferable visual models from natural language supervision. arXiv preprint arXiv:2103.00020.\",\n            \"extracted_paper_title\": \"Learning transferable visual models from natural language supervision\",\n            \"fetched_paper_id\": \"6f870f7f02a8c59c3e23f407f3ef00dd1dcf8fc4\",\n            \"fetched_paper_title\": \"Learning Transferable Visual Models From Natural Language Supervision\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ramesh, A., M. Pavlov, G. Goh, S. Gray, C. Voss, A. Radford, M. Chen, and I. Sutskever (2021). Zero-shot text-to-image generation. In International conference on machine learning, pp. 8821\\u20138831. Pmlr.\",\n            \"extracted_paper_title\": \"Zero-shot text-to-image generation\",\n            \"fetched_paper_id\": \"2cd605106b88c85d7d8b865b1ef0f8c8293debf1\",\n            \"fetched_paper_title\": \"Zero-Shot Text-to-Image Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Rogers, L. C. G. and D. Williams (2000). Diffusions, Markov processes and martingales: Volume 2, It\\u02c6o calculus, Volume 2. Cambridge university press.\",\n            \"extracted_paper_title\": \"Diffusions, Markov processes and martingales: Volume 2, It\\u02c6o calculus, Volume 2\",\n            \"fetched_paper_id\": \"3c476a73a4d99fc39fb4e3aa857efa4f373c6732\",\n            \"fetched_paper_title\": \"DIFFUSIONS, MARKOV PROCESSES AND MARTINGALES: Volume 2: It\\u00f4 Calculus\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Rombach, R., A. Blattmann, D. Lorenz, P. Esser, and B. Ommer (2022). High-resolution image synthesis with latent diffusion models. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pp. 10684\\u201310695.\",\n            \"extracted_paper_title\": \"High-resolution image synthesis with latent diffusion models\",\n            \"fetched_paper_id\": \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n            \"fetched_paper_title\": \"High-Resolution Image Synthesis with Latent Diffusion Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Saharia, C., W. Chan, S. Saxena, L. Li, J. Whang, E. L. Denton, K. Ghasemipour, R. Gontijo Lopes, B. Karagol Ayan, T. Salimans, et al. (2022). Photorealistic text-to-image diffusion models with deep language understanding. Advances in neural information processing systems 35, 36479\\u201336494.\",\n            \"extracted_paper_title\": \"Photorealistic text-to-image diffusion models with deep language understanding\",\n            \"fetched_paper_id\": \"9695824d7a01fad57ba9c01d7d76a519d78d65e7\",\n            \"fetched_paper_title\": \"Photorealistic Text-to-Image Diffusion Models with Deep Language Understanding\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Schulman, J., F. Wolski, P. Dhariwal, A. Radford, and O. Klimov (2017). Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347.\",\n            \"extracted_paper_title\": \"Proximal policy optimization algorithms\",\n            \"fetched_paper_id\": \"dce6f9d4017b1785979e7520fd0834ef8cf02f4b\",\n            \"fetched_paper_title\": \"Proximal Policy Optimization Algorithms\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shreve, S. E. et al. (2004). Stochastic calculus for finance II: Continuous-time models, Volume 11. Springer.\",\n            \"extracted_paper_title\": \"Stochastic calculus for finance II: Continuous-time models\",\n            \"fetched_paper_id\": \"b46dc46fdfe55811d9ed350fc44ddb289fdba68c\",\n            \"fetched_paper_title\": \"Stochastic Calculus for Finance II: Continuous-Time Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Sohl-Dickstein, J., E. Weiss, N. Maheswaranathan, and S. Ganguli (2015). Deep unsupervised learning using nonequilibrium thermodynamics. In International conference on machine learning, pp. 2256\\u20132265. PMLR.\",\n            \"extracted_paper_title\": \"Deep unsupervised learning using nonequilibrium thermodynamics\",\n            \"fetched_paper_id\": \"2dcef55a07f8607a819c21fe84131ea269cc2e3c\",\n            \"fetched_paper_title\": \"Deep Unsupervised Learning using Nonequilibrium Thermodynamics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Song, J., C. Meng, and S. Ermon (2020). Denoising diffusion implicit models. arXiv preprint arXiv:2010.02502.\",\n            \"extracted_paper_title\": \"Denoising diffusion implicit models\",\n            \"fetched_paper_id\": \"014576b866078524286802b1d0e18628520aa886\",\n            \"fetched_paper_title\": \"Denoising Diffusion Implicit Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Song, J., A. Vahdat, M. Mardani, and J. Kautz (2022). Pseudoinverse-guided diffusion models for inverse problems. In International Conference on Learning Representations.\",\n            \"extracted_paper_title\": \"Pseudoinverse-guided diffusion models for inverse problems\",\n            \"fetched_paper_id\": \"9c81be0c478bfc0a48eedb8769326fe289a11acc\",\n            \"fetched_paper_title\": \"Pseudoinverse-Guided Diffusion Models for Inverse Problems\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Song, Y., J. Sohl-Dickstein, D. P. Kingma, A. Kumar, S. Ermon, and B. Poole (2020). Score-based generative modeling through stochastic differential equations. arXiv preprint arXiv:2011.13456.\",\n            \"extracted_paper_title\": \"Score-based generative modeling through stochastic differential equations\",\n            \"fetched_paper_id\": \"633e2fbfc0b21e959a244100937c5853afca4853\",\n            \"fetched_paper_title\": \"Score-Based Generative Modeling through Stochastic Differential Equations\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Uehara, M., Y. Zhao, T. Biancalani, and S. Levine (2024). Understanding reinforcement learning-based fine-tuning of diffusion models: A tutorial and review. arXiv preprint arXiv:2407.13734.\",\n            \"extracted_paper_title\": \"Understanding reinforcement learning-based fine-tuning of diffusion models: A tutorial and review\",\n            \"fetched_paper_id\": \"aa59b834711645f768e58b904a3585c2ba935973\",\n            \"fetched_paper_title\": \"Understanding Reinforcement Learning-Based Fine-Tuning of Diffusion Models: A Tutorial and Review\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Uehara, M., Y. Zhao, K. Black, E. Hajiramezanali, G. Scalia, N. L. Diamant, A. M. Tseng, T. Biancalani, and S. Levine (2024). Fine-tuning of continuous-time diffusion models as entropy-regularized control. arXiv preprint arXiv:2402.15194.\",\n            \"extracted_paper_title\": \"Fine-tuning of continuous-time diffusion models as entropy-regularized control\",\n            \"fetched_paper_id\": \"cbeca8850c37cb3cca794091c888b00a193c2b59\",\n            \"fetched_paper_title\": \"Fine-Tuning of Continuous-Time Diffusion Models as Entropy-Regularized Control\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Uehara, M., Y. Zhao, K. Black, E. Hajiramezanali, G. Scalia, N. L. Diamant, A. M. Tseng, S. Levine, and T. Biancalani (2024, 21\\u201327 Jul). Feedback efficient online fine-tuning of diffusion models. In R. Salakhutdinov, Z. Kolter, K. Heller, A. Weller, N. Oliver, J. Scarlett, and F. Berkenkamp (Eds.), Proceedings of the 41st International Conference on Machine Learning, Volume 235 of Proceedings of Machine Learning Research, pp. 48892\\u201348918. PMLR.\",\n            \"extracted_paper_title\": \"Feedback efficient online fine-tuning of diffusion models\",\n            \"fetched_paper_id\": \"6a225bb2454f66d1b106bbae7e5129d6569aa260\",\n            \"fetched_paper_title\": \"Feedback Efficient Online Fine-Tuning of Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Uehara, M., Y. Zhao, E. Hajiramezanali, G. Scalia, G. Eraslan, A. Lal, S. Levine, and T. Biancalani (2024). Bridging model-based optimization and generative modeling via conservative fine-tuning of diffusion models. In The Thirty-eighth Annual Conference on Neural Information Processing Systems.\",\n            \"extracted_paper_title\": \"Bridging model-based optimization and generative modeling via conservative fine-tuning of diffusion models.\",\n            \"fetched_paper_id\": \"8053f1079767d3d6cc6ffd90c885b513acc6af5f\",\n            \"fetched_paper_title\": \"Bridging Model-Based Optimization and Generative Modeling via Conservative Fine-Tuning of Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wainwright, M. J. (2019). High-dimensional statistics: A non-asymptotic viewpoint, Volume 48. Cambridge university press.\",\n            \"extracted_paper_title\": \"High-dimensional statistics: A non-asymptotic viewpoint\",\n            \"fetched_paper_id\": \"47628dde478a58668ea8ba1ea9a432c5f5ddb652\",\n            \"fetched_paper_title\": \"High\\u2010dimensional Statistics: A Non\\u2010asymptotic Viewpoint, Martin J.Wainwright, Cambridge University Press, 2019, xvii 552 pages, \\u00a357.99, hardback ISBN: 978\\u20101\\u20101084\\u20109802\\u20109\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wu, L., B. Trippe, C. Naesseth, D. Blei, and J. P. Cunningham (2024). Practical and asymptotically exact conditional sampling in diffusion models. Advances in Neural Information Processing Systems 36.\",\n            \"extracted_paper_title\": \"Practical and asymptotically exact conditional sampling in diffusion models\",\n            \"fetched_paper_id\": \"79531b47bb27cb18022891eb2ab1fcb41745fca6\",\n            \"fetched_paper_title\": \"Practical and Asymptotically Exact Conditional Sampling in Diffusion Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Wu, X., K. Sun, F. Zhu, R. Zhao, and H. Li (2023). Better aligning text-to-image models with human preference. arXiv preprint arXiv:2303.14420.\",\n            \"extracted_paper_title\": \"Better aligning text-to-image models with human preference\",\n            \"fetched_paper_id\": \"14c3cf58192774b9b6fc6188df99efd6ab5fc739\",\n            \"fetched_paper_title\": \"Better Aligning Text-to-Image Models with Human Preference\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xie, E., L. Yao, H. Shi, Z. Liu, D. Zhou, Z. Liu, J. Li, and Z. Li (2023). Difffit: Unlocking transferability of large diffusion models via simple parameter-efficient fine-tuning. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pp. 4230\\u20134239.\",\n            \"extracted_paper_title\": \"Difffit: Unlocking transferability of large diffusion models via simple parameter-efficient fine-tuning.\",\n            \"fetched_paper_id\": \"721f9afcfe45c70ba0a98f8aed833e28b278b275\",\n            \"fetched_paper_title\": \"DiffFit: Unlocking Transferability of Large Diffusion Models via Simple Parameter-Efficient Fine-Tuning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xu, J., X. Liu, Y. Wu, Y. Tong, Q. Li, M. Ding, J. Tang, and Y. Dong (2023). Imagereward: Learning and evaluating human preferences for text-to-image generation. arXiv preprint arXiv:2304.05977.\",\n            \"extracted_paper_title\": \"Image Reward: Learning and evaluating human preferences for text-to-image generation\",\n            \"fetched_paper_id\": \"1b2355c3c674b26a977768a91a164384ad51bbb1\",\n            \"fetched_paper_title\": \"ImageReward: Learning and Evaluating Human Preferences for Text-to-Image Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yellapragada, S., A. Graikos, P. Prasanna, T. Kurc, J. Saltz, and D. Samaras (2024). Pathldm: Text conditioned latent diffusion model for histopathology. In Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision, pp. 5182\\u20135191.\",\n            \"extracted_paper_title\": \"Pathldm: Text conditioned latent diffusion model for histopathology\",\n            \"fetched_paper_id\": \"eb40c436d18f8e657cf2626fe94507c7d8f462ec\",\n            \"fetched_paper_title\": \"PathLDM: Text conditioned Latent Diffusion Model for Histopathology\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhang, L., A. Rao, and M. Agrawala (2023). Adding conditional control to text-to-image diffusion models. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pp. 3836\\u20133847.\",\n            \"extracted_paper_title\": \"Adding conditional control to text-to-image diffusion models\",\n            \"fetched_paper_id\": \"efbe97d20c4ffe356e8826c01dc550bacc405add\",\n            \"fetched_paper_title\": \"Adding Conditional Control to Text-to-Image Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhang, Z., L. Han, A. Ghosh, D. N. Metaxas, and J. Ren (2023). Sine: Single image editing with text-to-image diffusion models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 6027\\u20136037.\",\n            \"extracted_paper_title\": \"Sine: Single image editing with text-to-image diffusion models\",\n            \"fetched_paper_id\": \"a6ad30123bef4b19ee40c3d63cfabf00d211f0ef\",\n            \"fetched_paper_title\": \"SINE: SINgle Image Editing with Text-to-Image Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhao, S., D. Chen, Y.-C. Chen, J. Bao, S. Hao, L. Yuan, and K.-Y. K. Wong (2024). Uni-controlnet: All-in-one control to text-to-image diffusion models. Advances in Neural Information Processing Systems 36.\",\n            \"extracted_paper_title\": \"Uni-controlnet: All-in-one control to text-to-image diffusion models\",\n            \"fetched_paper_id\": \"a483ff9557f29d21fe780b3dd969a037a3ffc3ed\",\n            \"fetched_paper_title\": \"Uni-ControlNet: All-in-One Control to Text-to-Image Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhengwentai, S. (2023, March). clip-score: CLIP Score for PyTorch. https://github.com/taited/clip-score. Version 0.1.0.\",\n            \"extracted_paper_title\": \"clip-score: CLIP Score for PyTorch\",\n            \"fetched_paper_id\": \"e4cd5c96db19ec214799839adcd62e764c7d8254\",\n            \"fetched_paper_title\": \"\\u2207NABLA: Neighborhood Adaptive Block-Level Attention\",\n            \"priority\": \"P0\"\n        }\n    ],\n    \"all_ids\": [\n        \"a673ef39237e227381fccf5b1d154d96de428f1d\",\n        \"014576b866078524286802b1d0e18628520aa886\",\n        \"a395f1c0910a5622f6faaefb5b27e87bb1617759\",\n        \"69f29341e91e2a205d5e37a1dcf08c43d1368aaa\",\n        \"a2cad4e4fd946adf6cc87e483b2ba18579de1264\",\n        \"9695824d7a01fad57ba9c01d7d76a519d78d65e7\",\n        \"61e46884567be7cad12e999365b16a8d3414b678\",\n        \"7002ae048e4b8c9133a55428441e8066070995cb\",\n        \"3c476a73a4d99fc39fb4e3aa857efa4f373c6732\",\n        \"aa59b834711645f768e58b904a3585c2ba935973\",\n        \"fbebb1a5d72aec2a6b13fc909f781f6ba9b04925\",\n        \"54ca116f1e9a45768a3a2c47a4608ff34adefa0c\",\n        \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n        \"dce6f9d4017b1785979e7520fd0834ef8cf02f4b\",\n        \"cbeca8850c37cb3cca794091c888b00a193c2b59\",\n        \"942deb7d865b7782c03176d95e3a0d56cb71009e\",\n        \"efbe97d20c4ffe356e8826c01dc550bacc405add\",\n        \"721f9afcfe45c70ba0a98f8aed833e28b278b275\",\n        \"f61e9fd5a4878e1493f7a6b03774a61c17b7e9a4\",\n        \"8053f1079767d3d6cc6ffd90c885b513acc6af5f\",\n        \"2dcef55a07f8607a819c21fe84131ea269cc2e3c\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"1206b05eae5a06ba662ae79fb291b50e359c4f42\",\n        \"ad5fb88450fef465332327541351e9e5fae03210\",\n        \"47628dde478a58668ea8ba1ea9a432c5f5ddb652\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"d8c78221e4366d6a72a6b3e41e35b706cc45c01d\",\n        \"a8ca46b171467ceb2d7652fbfb67fe701ad86092\",\n        \"19f4d1533d8f7c4c13e9732c36fb374edd5ad470\",\n        \"174df7d2cc8d49f219d8899c7d75bc929f3a57c7\",\n        \"b46dc46fdfe55811d9ed350fc44ddb289fdba68c\",\n        \"6a225bb2454f66d1b106bbae7e5129d6569aa260\",\n        \"b59c9904994204f76f9863cb86d19093df10edb8\",\n        \"14c3cf58192774b9b6fc6188df99efd6ab5fc739\",\n        \"8899a55b0db3d1305ad380db5cbe8408972cf294\",\n        \"d24b4f34197df0257390b57f02537e6ce3284f2e\",\n        \"64ea8f180d0682e6c18d1eb688afdb2027c02794\",\n        \"e4cd5c96db19ec214799839adcd62e764c7d8254\",\n        \"a483ff9557f29d21fe780b3dd969a037a3ffc3ed\",\n        \"eb40c436d18f8e657cf2626fe94507c7d8f462ec\",\n        \"c7a5128b45edb4db9105ec5167210b887617ddf2\",\n        \"2cd605106b88c85d7d8b865b1ef0f8c8293debf1\",\n        \"3dfacece8dd1efe41b96b762b6be4a016467f136\",\n        \"d65ce2b8300541414bfe51d03906fca72e93523c\",\n        \"a553bf27d801d09f667fe121c0ba9632257f364b\",\n        \"5aabe3a210270711c72bddaa0290c4edd3db7720\",\n        \"af9f365ed86614c800f082bd8eb14be76072ad16\",\n        \"187308ff437755641bcc0bd14b08a7c365d88253\",\n        \"1b2355c3c674b26a977768a91a164384ad51bbb1\",\n        \"7bbe0235f583b27f96c0f288043876f86795d6c2\",\n        \"9c81be0c478bfc0a48eedb8769326fe289a11acc\",\n        \"6f870f7f02a8c59c3e23f407f3ef00dd1dcf8fc4\",\n        \"a2d2bbe4c542173662a444b33b76c66992697830\",\n        \"1e4b6567ff66de6cdcbe58c863538241e2f62b45\",\n        \"a6ad30123bef4b19ee40c3d63cfabf00d211f0ef\",\n        \"79531b47bb27cb18022891eb2ab1fcb41745fca6\"\n    ],\n    \"all_ids_count\": 57,\n    \"p0_ids\": [\n        \"3c476a73a4d99fc39fb4e3aa857efa4f373c6732\",\n        \"a395f1c0910a5622f6faaefb5b27e87bb1617759\",\n        \"3dfacece8dd1efe41b96b762b6be4a016467f136\",\n        \"af9f365ed86614c800f082bd8eb14be76072ad16\",\n        \"6f870f7f02a8c59c3e23f407f3ef00dd1dcf8fc4\",\n        \"61e46884567be7cad12e999365b16a8d3414b678\",\n        \"1206b05eae5a06ba662ae79fb291b50e359c4f42\",\n        \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n        \"174df7d2cc8d49f219d8899c7d75bc929f3a57c7\",\n        \"e4cd5c96db19ec214799839adcd62e764c7d8254\",\n        \"a673ef39237e227381fccf5b1d154d96de428f1d\",\n        \"b46dc46fdfe55811d9ed350fc44ddb289fdba68c\",\n        \"014576b866078524286802b1d0e18628520aa886\",\n        \"187308ff437755641bcc0bd14b08a7c365d88253\",\n        \"19f4d1533d8f7c4c13e9732c36fb374edd5ad470\",\n        \"64ea8f180d0682e6c18d1eb688afdb2027c02794\",\n        \"a2cad4e4fd946adf6cc87e483b2ba18579de1264\",\n        \"7bbe0235f583b27f96c0f288043876f86795d6c2\",\n        \"79531b47bb27cb18022891eb2ab1fcb41745fca6\"\n    ],\n    \"p0_ids_count\": 19,\n    \"p1_ids\": [\n        \"d65ce2b8300541414bfe51d03906fca72e93523c\",\n        \"1e4b6567ff66de6cdcbe58c863538241e2f62b45\",\n        \"5aabe3a210270711c72bddaa0290c4edd3db7720\",\n        \"a8ca46b171467ceb2d7652fbfb67fe701ad86092\",\n        \"fbebb1a5d72aec2a6b13fc909f781f6ba9b04925\",\n        \"6a225bb2454f66d1b106bbae7e5129d6569aa260\",\n        \"8053f1079767d3d6cc6ffd90c885b513acc6af5f\",\n        \"d8c78221e4366d6a72a6b3e41e35b706cc45c01d\",\n        \"8899a55b0db3d1305ad380db5cbe8408972cf294\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"eb40c436d18f8e657cf2626fe94507c7d8f462ec\",\n        \"54ca116f1e9a45768a3a2c47a4608ff34adefa0c\",\n        \"a553bf27d801d09f667fe121c0ba9632257f364b\",\n        \"2dcef55a07f8607a819c21fe84131ea269cc2e3c\",\n        \"a2d2bbe4c542173662a444b33b76c66992697830\",\n        \"9695824d7a01fad57ba9c01d7d76a519d78d65e7\",\n        \"14c3cf58192774b9b6fc6188df99efd6ab5fc739\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"efbe97d20c4ffe356e8826c01dc550bacc405add\",\n        \"d24b4f34197df0257390b57f02537e6ce3284f2e\",\n        \"c7a5128b45edb4db9105ec5167210b887617ddf2\",\n        \"721f9afcfe45c70ba0a98f8aed833e28b278b275\",\n        \"cbeca8850c37cb3cca794091c888b00a193c2b59\",\n        \"69f29341e91e2a205d5e37a1dcf08c43d1368aaa\",\n        \"aa59b834711645f768e58b904a3585c2ba935973\",\n        \"a483ff9557f29d21fe780b3dd969a037a3ffc3ed\",\n        \"2cd605106b88c85d7d8b865b1ef0f8c8293debf1\",\n        \"7002ae048e4b8c9133a55428441e8066070995cb\",\n        \"a6ad30123bef4b19ee40c3d63cfabf00d211f0ef\",\n        \"47628dde478a58668ea8ba1ea9a432c5f5ddb652\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"ad5fb88450fef465332327541351e9e5fae03210\",\n        \"f61e9fd5a4878e1493f7a6b03774a61c17b7e9a4\",\n        \"9c81be0c478bfc0a48eedb8769326fe289a11acc\",\n        \"b59c9904994204f76f9863cb86d19093df10edb8\",\n        \"1b2355c3c674b26a977768a91a164384ad51bbb1\",\n        \"dce6f9d4017b1785979e7520fd0834ef8cf02f4b\",\n        \"942deb7d865b7782c03176d95e3a0d56cb71009e\"\n    ],\n    \"p1_ids_count\": 38\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  },
+  {
+   "name": "raw_materials/original_paper_gt_citations_gemini-3.1-pro-preview.json",
+   "size": 37972,
+   "text": "{\n    \"citation_info\": [\n        {\n            \"citation_text\": \"Anderson, B. D. (1982). Reverse-time diffusion equation models. Stochastic Processes and their Applications 12(3), 313\\u2013326.\",\n            \"extracted_paper_title\": \"Reverse-time diffusion equation models\",\n            \"fetched_paper_id\": \"c7a5128b45edb4db9105ec5167210b887617ddf2\",\n            \"fetched_paper_title\": \"Reverse-time diffusion equation models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Bansal, A., H.-M. Chu, A. Schwarzschild, S. Sengupta, M. Goldblum, J. Geiping, and T. Goldstein (2023). Universal guidance for diffusion models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 843\\u2013852.\",\n            \"extracted_paper_title\": \"Universal guidance for diffusion models\",\n            \"fetched_paper_id\": \"d24b4f34197df0257390b57f02537e6ce3284f2e\",\n            \"fetched_paper_title\": \"Universal Guidance for Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Black, K., M. Janner, Y. Du, I. Kostrikov, and S. Levine (2023). Training diffusion models with reinforcement learning.\",\n            \"extracted_paper_title\": \"Training diffusion models with reinforcement learning\",\n            \"fetched_paper_id\": \"d8c78221e4366d6a72a6b3e41e35b706cc45c01d\",\n            \"fetched_paper_title\": \"Training Diffusion Models with Reinforcement Learning\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Brooks, T., A. Holynski, and A. A. Efros (2023). Instructpix2pix: Learning to follow image editing instructions. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 18392\\u201318402.\",\n            \"extracted_paper_title\": \"Instructpix2pix: Learning to follow image editing instructions\",\n            \"fetched_paper_id\": \"a2d2bbe4c542173662a444b33b76c66992697830\",\n            \"fetched_paper_title\": \"InstructPix2Pix: Learning to Follow Image Editing Instructions\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chen, T., B. Xu, C. Zhang, and C. Guestrin (2016). Training deep nets with sublinear memory cost. arXiv preprint arXiv:1604.06174.\",\n            \"extracted_paper_title\": \"Training deep nets with sublinear memory cost\",\n            \"fetched_paper_id\": \"942deb7d865b7782c03176d95e3a0d56cb71009e\",\n            \"fetched_paper_title\": \"Training Deep Nets with Sublinear Memory Cost\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Chung, H., J. Kim, M. T. Mccann, M. L. Klasky, and J. C. Ye (2022). Diffusion posterior sampling for general noisy inverse problems. arXiv preprint arXiv:2209.14687.\",\n            \"extracted_paper_title\": \"Diffusion posterior sampling for general noisy inverse problems\",\n            \"fetched_paper_id\": \"61e46884567be7cad12e999365b16a8d3414b678\",\n            \"fetched_paper_title\": \"Diffusion Posterior Sampling for General Noisy Inverse Problems\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Clark, K., P. Vicol, K. Swersky, and D. J. Fleet (2023). Directly fine-tuning diffusion models on differentiable rewards. arXiv preprint arXiv:2309.17400.\",\n            \"extracted_paper_title\": \"Directly fine-tuning diffusion models on differentiable rewards\",\n            \"fetched_paper_id\": \"a395f1c0910a5622f6faaefb5b27e87bb1617759\",\n            \"fetched_paper_title\": \"Directly Fine-Tuning Diffusion Models on Differentiable Rewards\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Denker, A., F. Vargas, S. Padhy, K. Didi, S. Mathis, R. Barbano, V. Dutordoir, E. Mathieu, U. J. Komorowska, and P. Lio (2025). Deft: Efficient fine-tuning of diffusion models by learning the generalised h-transform. Advances in Neural Information Processing Systems 37, 19636\\u201319682.\",\n            \"extracted_paper_title\": \"Deft: Efficient fine-tuning of diffusion models by learning the generalised h-transform\",\n            \"fetched_paper_id\": \"8899a55b0db3d1305ad380db5cbe8408972cf294\",\n            \"fetched_paper_title\": \"DEFT: Efficient Fine-tuning of Diffusion Models by Learning the Generalised $h$-transform\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Dhariwal, P. and A. Nichol (2021). Diffusion models beat gans on image synthesis. Advances in neural information processing systems 34, 8780\\u20138794.\",\n            \"extracted_paper_title\": \"Diffusion models beat gans on image synthesis\",\n            \"fetched_paper_id\": \"64ea8f180d0682e6c18d1eb688afdb2027c02794\",\n            \"fetched_paper_title\": \"Diffusion Models Beat GANs on Image Synthesis\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Epstein, D., A. Jabri, B. Poole, A. Efros, and A. Holynski (2023). Diffusion self-guidance for controllable image generation. Advances in Neural Information Processing Systems 36, 16222\\u2013 16239.\",\n            \"extracted_paper_title\": \"Diffusion self-guidance for controllable image generation\",\n            \"fetched_paper_id\": \"fbebb1a5d72aec2a6b13fc909f781f6ba9b04925\",\n            \"fetched_paper_title\": \"Diffusion Self-Guidance for Controllable Image Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Fan, Y., O. Watkins, Y. Du, H. Liu, M. Ryu, C. Boutilier, P. Abbeel, M. Ghavamzadeh, K. Lee, and K. Lee (2023). Dpok: Reinforcement learning for fine-tuning text-to-image diffusion models. arXiv preprint arXiv:2305.16381.\",\n            \"extracted_paper_title\": \"Dpok: Reinforcement learning for fine-tuning text-to-image diffusion models\",\n            \"fetched_paper_id\": \"a553bf27d801d09f667fe121c0ba9632257f364b\",\n            \"fetched_paper_title\": \"DPOK: Reinforcement Learning for Fine-tuning Text-to-Image Diffusion Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Finzi, M. A., A. Boral, A. G. Wilson, F. Sha, and L. Zepeda-N\\u00b4u\\u02dcnez (2023). User-defined event sampling and uncertainty quantification in diffusion models for physical dynamical systems. In International Conference on Machine Learning, pp. 10136\\u201310152. PMLR.\",\n            \"extracted_paper_title\": \"User-defined event sampling and uncertainty quantification in diffusion models for physical dynamical systems\",\n            \"fetched_paper_id\": \"69f29341e91e2a205d5e37a1dcf08c43d1368aaa\",\n            \"fetched_paper_title\": \"User-defined Event Sampling and Uncertainty Quantification in Diffusion Models for Physical Dynamical Systems\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Giannone, G., A. Srivastava, O. Winther, and F. Ahmed (2024). Aligning optimization trajectories with diffusion models for constrained design generation. Advances in Neural Information Processing Systems 36.\",\n            \"extracted_paper_title\": \"Aligning optimization trajectories with diffusion models for constrained design generation\",\n            \"fetched_paper_id\": \"ad5fb88450fef465332327541351e9e5fae03210\",\n            \"fetched_paper_title\": \"Aligning Optimization Trajectories with Diffusion Models for Constrained Design Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Gruslys, A., R. Munos, I. Danihelka, M. Lanctot, and A. Graves (2016). Memory-efficient backprop- agation through time. Advances in neural information processing systems 29.\",\n            \"extracted_paper_title\": \"Memory-efficient backpropagation through time\",\n            \"fetched_paper_id\": \"f61e9fd5a4878e1493f7a6b03774a61c17b7e9a4\",\n            \"fetched_paper_title\": \"Memory-Efficient Backpropagation Through Time\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Guo, C., G. Pleiss, Y. Sun, and K. Q. Weinberger (2017). On calibration of modern neural networks. In International conference on machine learning, pp. 1321\\u20131330. PMLR.\",\n            \"extracted_paper_title\": \"On calibration of modern neural networks\",\n            \"fetched_paper_id\": \"d65ce2b8300541414bfe51d03906fca72e93523c\",\n            \"fetched_paper_title\": \"On Calibration of Modern Neural Networks\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Guo, Y., H. Yuan, Y. Yang, M. Chen, and M. Wang (2024). Gradient guidance for diffusion models: An optimization perspective. arXiv preprint arXiv:2404.14743.\",\n            \"extracted_paper_title\": \"Gradient guidance for diffusion models: An optimization perspective\",\n            \"fetched_paper_id\": \"5aabe3a210270711c72bddaa0290c4edd3db7720\",\n            \"fetched_paper_title\": \"Gradient Guidance for Diffusion Models: An Optimization Perspective\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Han, X., H. Zheng, and M. Zhou (2022). Card: Classification and regression diffusion models. Advances in Neural Information Processing Systems 35, 18100\\u201318115.\",\n            \"extracted_paper_title\": \"Card: Classification and regression diffusion models\",\n            \"fetched_paper_id\": \"37232ccce1cfafbe9b9918557f0b6cdf80e5b83a\",\n            \"fetched_paper_title\": \"CARD: Classification and Regression Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"He, Y., N. Murata, C.-H. Lai, Y. Takida, T. Uesaka, D. Kim, W.-H. Liao, Y. Mitsufuji, J. Z. Kolter, R. Salakhutdinov, and S. Ermon (2024). Manifold preserving guided diffusion. In The Twelfth International Conference on Learning Representations.\",\n            \"extracted_paper_title\": \"Manifold preserving guided diffusion\",\n            \"fetched_paper_id\": \"19f4d1533d8f7c4c13e9732c36fb374edd5ad470\",\n            \"fetched_paper_title\": \"Manifold Preserving Guided Diffusion\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ho, J., A. Jain, and P. Abbeel (2020). Denoising diffusion probabilistic models. Advances in neural information processing systems 33, 6840\\u20136851.\",\n            \"extracted_paper_title\": \"Denoising diffusion probabilistic models\",\n            \"fetched_paper_id\": \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n            \"fetched_paper_title\": \"Denoising Diffusion Probabilistic Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Ho, J. and T. Salimans (2022). Classifier-free diffusion guidance. arXiv preprint arXiv:2207.12598.\",\n            \"extracted_paper_title\": \"Classifier-free diffusion guidance\",\n            \"fetched_paper_id\": \"gt_NA\",\n            \"fetched_paper_title\": \"gt_NA\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ho, J., T. Salimans, A. Gritsenko, W. Chan, M. Norouzi, and D. J. Fleet (2022). Video diffusion models. Advances in Neural Information Processing Systems 35, 8633\\u20138646.\",\n            \"extracted_paper_title\": \"Video diffusion models\",\n            \"fetched_paper_id\": \"1206b05eae5a06ba662ae79fb291b50e359c4f42\",\n            \"fetched_paper_title\": \"Stable Video Diffusion: Scaling Latent Video Diffusion Models to Large Datasets\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Hu, E. J., Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang, and W. Chen (2021). Lora: Low-rank adaptation of large language models. arXiv preprint arXiv:2106.09685.\",\n            \"extracted_paper_title\": \"Lora: Low-rank adaptation of large language models\",\n            \"fetched_paper_id\": \"a8ca46b171467ceb2d7652fbfb67fe701ad86092\",\n            \"fetched_paper_title\": \"LoRA: Low-Rank Adaptation of Large Language Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Huang, K., T. Fu, W. Gao, Y. Zhao, Y. H. Roohani, J. Leskovec, C. W. Coley, C. Xiao, J. Sun, and M. Zitnik (2021). Therapeutics data commons: Machine learning datasets and tasks for drug discovery and development. In Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track (Round 1).\",\n            \"extracted_paper_title\": \"Therapeutics data commons: Machine learning datasets and tasks for drug discovery and development\",\n            \"fetched_paper_id\": \"54ca116f1e9a45768a3a2c47a4608ff34adefa0c\",\n            \"fetched_paper_title\": \"Therapeutics Data Commons: Machine Learning Datasets and Tasks for Drug Discovery and Development\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Lee, K., H. Liu, M. Ryu, O. Watkins, Y. Du, C. Boutilier, P. Abbeel, M. Ghavamzadeh, and S. S. Gu (2023). Aligning text-to-image models using human feedback. arXiv preprint arXiv:2302.12192.\",\n            \"extracted_paper_title\": \"Aligning text-to-image models using human feedback\",\n            \"fetched_paper_id\": \"1e4b6567ff66de6cdcbe58c863538241e2f62b45\",\n            \"fetched_paper_title\": \"Aligning Text-to-Image Models using Human Feedback\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Li, X., Y. Zhao, C. Wang, G. Scalia, G. Eraslan, S. Nair, T. Biancalani, S. Ji, A. Regev, S. Levine, et al. (2024). Derivative-free guidance in continuous and discrete diffusion models with soft value-based decoding. arXiv preprint arXiv:2408.08252.\",\n            \"extracted_paper_title\": \"Derivative-free guidance in continuous and discrete diffusion models with soft value-based decoding.\",\n            \"fetched_paper_id\": \"a673ef39237e227381fccf5b1d154d96de428f1d\",\n            \"fetched_paper_title\": \"Derivative-Free Guidance in Continuous and Discrete Diffusion Models with Soft Value-Based Decoding\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Li, Y. and M. van der Schaar (2023). On error propagation of diffusion models. In The Twelfth International Conference on Learning Representations.\",\n            \"extracted_paper_title\": \"On error propagation of diffusion models\",\n            \"fetched_paper_id\": \"b59c9904994204f76f9863cb86d19093df10edb8\",\n            \"fetched_paper_title\": \"On Error Propagation of Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Loshchilov, I. and F. Hutter (2019). Decoupled weight decay regularization. In International Conference on Learning Representations.\",\n            \"extracted_paper_title\": \"Decoupled weight decay regularization\",\n            \"fetched_paper_id\": \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n            \"fetched_paper_title\": \"Decoupled Weight Decay Regularization\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Mittal, A., A. K. Moorthy, and A. C. Bovik (2012). No-reference image quality assessment in the spatial domain. IEEE Transactions on image processing 21(12), 4695\\u20134708.\",\n            \"extracted_paper_title\": \"No-reference image quality assessment in the spatial domain\",\n            \"fetched_paper_id\": \"a2cad4e4fd946adf6cc87e483b2ba18579de1264\",\n            \"fetched_paper_title\": \"No-Reference Image Quality Assessment in the Spatial Domain\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Murray, N., L. Marchesotti, and F. Perronnin (2012). Ava: A large-scale database for aesthetic visual analysis. In 2012 IEEE conference on computer vision and pattern recognition, pp. 2408\\u20132415. IEEE.\",\n            \"extracted_paper_title\": \"Ava: A large-scale database for aesthetic visual analysis\",\n            \"fetched_paper_id\": \"7bbe0235f583b27f96c0f288043876f86795d6c2\",\n            \"fetched_paper_title\": \"AVA: A large-scale database for aesthetic visual analysis\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Nichol, A., P. Dhariwal, A. Ramesh, P. Shyam, P. Mishkin, B. McGrew, I. Sutskever, and M. Chen (2021). Glide: Towards photorealistic image generation and editing with text-guided diffusion models. arXiv preprint arXiv:2112.10741.\",\n            \"extracted_paper_title\": \"Glide: Towards photorealistic image generation and editing with text-guided diffusion models\",\n            \"fetched_paper_id\": \"7002ae048e4b8c9133a55428441e8066070995cb\",\n            \"fetched_paper_title\": \"GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Phillips, A., H.-D. Dau, M. J. Hutchinson, V. De Bortoli, G. Deligiannidis, and A. Doucet (2024). Particle denoising diffusion sampler. arXiv preprint arXiv:2402.06320.\",\n            \"extracted_paper_title\": \"Particle denoising diffusion sampler\",\n            \"fetched_paper_id\": \"187308ff437755641bcc0bd14b08a7c365d88253\",\n            \"fetched_paper_title\": \"Particle Denoising Diffusion Sampler\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Prabhudesai, M., A. Goyal, D. Pathak, and K. Fragkiadaki (2023). Aligning text-to-image diffusion models with reward backpropagation. arXiv preprint arXiv:2310.03739.\",\n            \"extracted_paper_title\": \"Aligning text-to-image diffusion models with reward backpropagation\",\n            \"fetched_paper_id\": \"174df7d2cc8d49f219d8899c7d75bc929f3a57c7\",\n            \"fetched_paper_title\": \"Aligning Text-to-Image Diffusion Models with Reward Backpropagation\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Radford, A., J. W. Kim, C. Hallacy, A. Ramesh, G. Goh, S. Agarwal, G. Sastry, A. Askell, P. Mishkin, J. Clark, G. Krueger, and I. Sutskever (2021). Learning transferable visual models from natural language supervision. arXiv preprint arXiv:2103.00020.\",\n            \"extracted_paper_title\": \"Learning transferable visual models from natural language supervision\",\n            \"fetched_paper_id\": \"6f870f7f02a8c59c3e23f407f3ef00dd1dcf8fc4\",\n            \"fetched_paper_title\": \"Learning Transferable Visual Models From Natural Language Supervision\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Ramesh, A., M. Pavlov, G. Goh, S. Gray, C. Voss, A. Radford, M. Chen, and I. Sutskever (2021). Zero- shot text-to-image generation. In International conference on machine learning, pp. 8821\\u20138831. Pmlr.\",\n            \"extracted_paper_title\": \"Zero-shot text-to-image generation\",\n            \"fetched_paper_id\": \"2cd605106b88c85d7d8b865b1ef0f8c8293debf1\",\n            \"fetched_paper_title\": \"Zero-Shot Text-to-Image Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Rogers, L. C. G. and D. Williams (2000). Diffusions, Markov processes and martingales: Volume 2, It\\u02c6o calculus, Volume 2. Cambridge university press.\",\n            \"extracted_paper_title\": \"Diffusions, Markov processes and martingales: Volume 2, It\\u00f4 calculus, Volume 2\",\n            \"fetched_paper_id\": \"3c476a73a4d99fc39fb4e3aa857efa4f373c6732\",\n            \"fetched_paper_title\": \"DIFFUSIONS, MARKOV PROCESSES AND MARTINGALES: Volume 2: It\\u00f4 Calculus\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Rombach, R., A. Blattmann, D. Lorenz, P. Esser, and B. Ommer (2022). High-resolution image synthesis with latent diffusion models. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pp. 10684\\u201310695.\",\n            \"extracted_paper_title\": \"High-resolution image synthesis with latent diffusion models\",\n            \"fetched_paper_id\": \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n            \"fetched_paper_title\": \"High-Resolution Image Synthesis with Latent Diffusion Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Saharia, C., W. Chan, S. Saxena, L. Li, J. Whang, E. L. Denton, K. Ghasemipour, R. Gontijo Lopes, B. Karagol Ayan, T. Salimans, et al. (2022). Photorealistic text-to-image diffusion models with deep language understanding. Advances in neural information processing systems 35, 36479\\u201336494.\",\n            \"extracted_paper_title\": \"Photorealistic text-to-image diffusion models with deep language understanding\",\n            \"fetched_paper_id\": \"9695824d7a01fad57ba9c01d7d76a519d78d65e7\",\n            \"fetched_paper_title\": \"Photorealistic Text-to-Image Diffusion Models with Deep Language Understanding\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Schulman, J., F. Wolski, P. Dhariwal, A. Radford, and O. Klimov (2017). Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347.\",\n            \"extracted_paper_title\": \"Proximal policy optimization algorithms\",\n            \"fetched_paper_id\": \"dce6f9d4017b1785979e7520fd0834ef8cf02f4b\",\n            \"fetched_paper_title\": \"Proximal Policy Optimization Algorithms\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Shreve, S. E. et al. (2004). Stochastic calculus for finance II: Continuous-time models, Volume 11. Springer.\",\n            \"extracted_paper_title\": \"Stochastic calculus for finance II: Continuous-time models\",\n            \"fetched_paper_id\": \"b46dc46fdfe55811d9ed350fc44ddb289fdba68c\",\n            \"fetched_paper_title\": \"Stochastic Calculus for Finance II: Continuous-Time Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Sohl-Dickstein, J., E. Weiss, N. Maheswaranathan, and S. Ganguli (2015). Deep unsupervised learning using nonequilibrium thermodynamics. In International conference on machine learning, pp. 2256\\u20132265. PMLR.\",\n            \"extracted_paper_title\": \"Deep unsupervised learning using nonequilibrium thermodynamics\",\n            \"fetched_paper_id\": \"2dcef55a07f8607a819c21fe84131ea269cc2e3c\",\n            \"fetched_paper_title\": \"Deep Unsupervised Learning using Nonequilibrium Thermodynamics\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Song, J., C. Meng, and S. Ermon (2020). Denoising diffusion implicit models. arXiv preprint arXiv:2010.02502.\",\n            \"extracted_paper_title\": \"Denoising diffusion implicit models\",\n            \"fetched_paper_id\": \"014576b866078524286802b1d0e18628520aa886\",\n            \"fetched_paper_title\": \"Denoising Diffusion Implicit Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Song, J., A. Vahdat, M. Mardani, and J. Kautz (2022). Pseudoinverse-guided diffusion models for inverse problems. In International Conference on Learning Representations.\",\n            \"extracted_paper_title\": \"Pseudoinverse-guided diffusion models for inverse problems\",\n            \"fetched_paper_id\": \"9c81be0c478bfc0a48eedb8769326fe289a11acc\",\n            \"fetched_paper_title\": \"Pseudoinverse-Guided Diffusion Models for Inverse Problems\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Song, Y., J. Sohl-Dickstein, D. P. Kingma, A. Kumar, S. Ermon, and B. Poole (2020). Score-based generative modeling through stochastic differential equations. arXiv preprint arXiv:2011.13456.\",\n            \"extracted_paper_title\": \"Score-based generative modeling through stochastic differential equations\",\n            \"fetched_paper_id\": \"633e2fbfc0b21e959a244100937c5853afca4853\",\n            \"fetched_paper_title\": \"Score-Based Generative Modeling through Stochastic Differential Equations\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Uehara, M., Y. Zhao, T. Biancalani, and S. Levine (2024). Understanding reinforcement learning- based fine-tuning of diffusion models: A tutorial and review. arXiv preprint arXiv:2407.13734.\",\n            \"extracted_paper_title\": \"Understanding reinforcement learning-based fine-tuning of diffusion models: A tutorial and review.\",\n            \"fetched_paper_id\": \"aa59b834711645f768e58b904a3585c2ba935973\",\n            \"fetched_paper_title\": \"Understanding Reinforcement Learning-Based Fine-Tuning of Diffusion Models: A Tutorial and Review\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Uehara, M., Y. Zhao, K. Black, E. Hajiramezanali, G. Scalia, N. L. Diamant, A. M. Tseng, T. Biancalani, and S. Levine (2024). Fine-tuning of continuous-time diffusion models as entropy- regularized control. arXiv preprint arXiv:2402.15194.\",\n            \"extracted_paper_title\": \"Fine-tuning of continuous-time diffusion models as entropy-regularized control\",\n            \"fetched_paper_id\": \"cbeca8850c37cb3cca794091c888b00a193c2b59\",\n            \"fetched_paper_title\": \"Fine-Tuning of Continuous-Time Diffusion Models as Entropy-Regularized Control\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Uehara, M., Y. Zhao, K. Black, E. Hajiramezanali, G. Scalia, N. L. Diamant, A. M. Tseng, S. Levine, and T. Biancalani (2024, 21\\u201327 Jul). Feedback efficient online fine-tuning of diffusion models. In R. Salakhutdinov, Z. Kolter, K. Heller, A. Weller, N. Oliver, J. Scarlett, and F. Berkenkamp (Eds.), Proceedings of the 41st International Conference on Machine Learning, Volume 235 of Proceedings of Machine Learning Research, pp. 48892\\u201348918. PMLR.\",\n            \"extracted_paper_title\": \"Feedback efficient online fine-tuning of diffusion models\",\n            \"fetched_paper_id\": \"6a225bb2454f66d1b106bbae7e5129d6569aa260\",\n            \"fetched_paper_title\": \"Feedback Efficient Online Fine-Tuning of Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Uehara, M., Y. Zhao, E. Hajiramezanali, G. Scalia, G. Eraslan, A. Lal, S. Levine, and T. Biancalani (2024). Bridging model-based optimization and generative modeling via conservative fine-tuning of diffusion models. In The Thirty-eighth Annual Conference on Neural Information Processing Systems.\",\n            \"extracted_paper_title\": \"Bridging model-based optimization and generative modeling via conservative fine-tuning of diffusion models.\",\n            \"fetched_paper_id\": \"8053f1079767d3d6cc6ffd90c885b513acc6af5f\",\n            \"fetched_paper_title\": \"Bridging Model-Based Optimization and Generative Modeling via Conservative Fine-Tuning of Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wainwright, M. J. (2019). High-dimensional statistics: A non-asymptotic viewpoint, Volume 48. Cambridge university press.\",\n            \"extracted_paper_title\": \"High-dimensional statistics: A non-asymptotic viewpoint\",\n            \"fetched_paper_id\": \"47628dde478a58668ea8ba1ea9a432c5f5ddb652\",\n            \"fetched_paper_title\": \"High\\u2010dimensional Statistics: A Non\\u2010asymptotic Viewpoint, Martin J.Wainwright, Cambridge University Press, 2019, xvii 552 pages, \\u00a357.99, hardback ISBN: 978\\u20101\\u20101084\\u20109802\\u20109\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Wu, L., B. Trippe, C. Naesseth, D. Blei, and J. P. Cunningham (2024). Practical and asymptotically exact conditional sampling in diffusion models. Advances in Neural Information Processing Systems 36.\",\n            \"extracted_paper_title\": \"Practical and asymptotically exact conditional sampling in diffusion models\",\n            \"fetched_paper_id\": \"79531b47bb27cb18022891eb2ab1fcb41745fca6\",\n            \"fetched_paper_title\": \"Practical and Asymptotically Exact Conditional Sampling in Diffusion Models\",\n            \"priority\": \"P0\"\n        },\n        {\n            \"citation_text\": \"Wu, X., K. Sun, F. Zhu, R. Zhao, and H. Li (2023). Better aligning text-to-image models with human preference. arXiv preprint arXiv:2303.14420.\",\n            \"extracted_paper_title\": \"Better aligning text-to-image models with human preference\",\n            \"fetched_paper_id\": \"14c3cf58192774b9b6fc6188df99efd6ab5fc739\",\n            \"fetched_paper_title\": \"Better Aligning Text-to-Image Models with Human Preference\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xie, E., L. Yao, H. Shi, Z. Liu, D. Zhou, Z. Liu, J. Li, and Z. Li (2023). Difffit: Unlocking transferability of large diffusion models via simple parameter-efficient fine-tuning. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pp. 4230\\u20134239.\",\n            \"extracted_paper_title\": \"Difffit: Unlocking transferability of large diffusion models via simple parameter-efficient fine-tuning\",\n            \"fetched_paper_id\": \"721f9afcfe45c70ba0a98f8aed833e28b278b275\",\n            \"fetched_paper_title\": \"DiffFit: Unlocking Transferability of Large Diffusion Models via Simple Parameter-Efficient Fine-Tuning\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Xu, J., X. Liu, Y. Wu, Y. Tong, Q. Li, M. Ding, J. Tang, and Y. Dong (2023). Imagereward: Learning and evaluating human preferences for text-to-image generation. arXiv preprint arXiv:2304.05977.\",\n            \"extracted_paper_title\": \"ImageReward: Learning and evaluating human preferences for text-to-image generation\",\n            \"fetched_paper_id\": \"1b2355c3c674b26a977768a91a164384ad51bbb1\",\n            \"fetched_paper_title\": \"ImageReward: Learning and Evaluating Human Preferences for Text-to-Image Generation\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Yellapragada, S., A. Graikos, P. Prasanna, T. Kurc, J. Saltz, and D. Samaras (2024). Pathldm: Text conditioned latent diffusion model for histopathology. In Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision, pp. 5182\\u20135191.\",\n            \"extracted_paper_title\": \"PathLDM: Text conditioned latent diffusion model for histopathology\",\n            \"fetched_paper_id\": \"eb40c436d18f8e657cf2626fe94507c7d8f462ec\",\n            \"fetched_paper_title\": \"PathLDM: Text conditioned Latent Diffusion Model for Histopathology\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhang, L., A. Rao, and M. Agrawala (2023). Adding conditional control to text-to-image diffusion models. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pp. 3836\\u20133847.\",\n            \"extracted_paper_title\": \"Adding conditional control to text-to-image diffusion models\",\n            \"fetched_paper_id\": \"efbe97d20c4ffe356e8826c01dc550bacc405add\",\n            \"fetched_paper_title\": \"Adding Conditional Control to Text-to-Image Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhang, Z., L. Han, A. Ghosh, D. N. Metaxas, and J. Ren (2023). Sine: Single image editing with text-to-image diffusion models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 6027\\u20136037.\",\n            \"extracted_paper_title\": \"Sine: Single image editing with text-to-image diffusion models\",\n            \"fetched_paper_id\": \"a6ad30123bef4b19ee40c3d63cfabf00d211f0ef\",\n            \"fetched_paper_title\": \"SINE: SINgle Image Editing with Text-to-Image Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhao, S., D. Chen, Y.-C. Chen, J. Bao, S. Hao, L. Yuan, and K.-Y. K. Wong (2024). Uni-controlnet: All-in-one control to text-to-image diffusion models. Advances in Neural Information Processing Systems 36.\",\n            \"extracted_paper_title\": \"Uni-controlnet: All-in-one control to text-to-image diffusion models\",\n            \"fetched_paper_id\": \"a483ff9557f29d21fe780b3dd969a037a3ffc3ed\",\n            \"fetched_paper_title\": \"Uni-ControlNet: All-in-One Control to Text-to-Image Diffusion Models\",\n            \"priority\": \"P1\"\n        },\n        {\n            \"citation_text\": \"Zhengwentai, S. (2023, March). clip-score: CLIP Score for PyTorch. https://github.com/ taited/clip-score. Version 0.1.0.\",\n            \"extracted_paper_title\": \"clip-score: CLIP Score for PyTorch\",\n            \"fetched_paper_id\": \"e4cd5c96db19ec214799839adcd62e764c7d8254\",\n            \"fetched_paper_title\": \"\\u2207NABLA: Neighborhood Adaptive Block-Level Attention\",\n            \"priority\": \"P0\"\n        }\n    ],\n    \"all_ids\": [\n        \"942deb7d865b7782c03176d95e3a0d56cb71009e\",\n        \"b46dc46fdfe55811d9ed350fc44ddb289fdba68c\",\n        \"e4cd5c96db19ec214799839adcd62e764c7d8254\",\n        \"79531b47bb27cb18022891eb2ab1fcb41745fca6\",\n        \"d65ce2b8300541414bfe51d03906fca72e93523c\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"9695824d7a01fad57ba9c01d7d76a519d78d65e7\",\n        \"61e46884567be7cad12e999365b16a8d3414b678\",\n        \"2cd605106b88c85d7d8b865b1ef0f8c8293debf1\",\n        \"174df7d2cc8d49f219d8899c7d75bc929f3a57c7\",\n        \"aa59b834711645f768e58b904a3585c2ba935973\",\n        \"7bbe0235f583b27f96c0f288043876f86795d6c2\",\n        \"14c3cf58192774b9b6fc6188df99efd6ab5fc739\",\n        \"6a225bb2454f66d1b106bbae7e5129d6569aa260\",\n        \"a483ff9557f29d21fe780b3dd969a037a3ffc3ed\",\n        \"b59c9904994204f76f9863cb86d19093df10edb8\",\n        \"fbebb1a5d72aec2a6b13fc909f781f6ba9b04925\",\n        \"47628dde478a58668ea8ba1ea9a432c5f5ddb652\",\n        \"efbe97d20c4ffe356e8826c01dc550bacc405add\",\n        \"a553bf27d801d09f667fe121c0ba9632257f364b\",\n        \"2dcef55a07f8607a819c21fe84131ea269cc2e3c\",\n        \"d24b4f34197df0257390b57f02537e6ce3284f2e\",\n        \"187308ff437755641bcc0bd14b08a7c365d88253\",\n        \"d8c78221e4366d6a72a6b3e41e35b706cc45c01d\",\n        \"c7a5128b45edb4db9105ec5167210b887617ddf2\",\n        \"a673ef39237e227381fccf5b1d154d96de428f1d\",\n        \"1e4b6567ff66de6cdcbe58c863538241e2f62b45\",\n        \"6f870f7f02a8c59c3e23f407f3ef00dd1dcf8fc4\",\n        \"eb40c436d18f8e657cf2626fe94507c7d8f462ec\",\n        \"3c476a73a4d99fc39fb4e3aa857efa4f373c6732\",\n        \"37232ccce1cfafbe9b9918557f0b6cdf80e5b83a\",\n        \"7002ae048e4b8c9133a55428441e8066070995cb\",\n        \"a6ad30123bef4b19ee40c3d63cfabf00d211f0ef\",\n        \"5aabe3a210270711c72bddaa0290c4edd3db7720\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"19f4d1533d8f7c4c13e9732c36fb374edd5ad470\",\n        \"721f9afcfe45c70ba0a98f8aed833e28b278b275\",\n        \"a2d2bbe4c542173662a444b33b76c66992697830\",\n        \"a8ca46b171467ceb2d7652fbfb67fe701ad86092\",\n        \"ad5fb88450fef465332327541351e9e5fae03210\",\n        \"a395f1c0910a5622f6faaefb5b27e87bb1617759\",\n        \"64ea8f180d0682e6c18d1eb688afdb2027c02794\",\n        \"1b2355c3c674b26a977768a91a164384ad51bbb1\",\n        \"8053f1079767d3d6cc6ffd90c885b513acc6af5f\",\n        \"a2cad4e4fd946adf6cc87e483b2ba18579de1264\",\n        \"dce6f9d4017b1785979e7520fd0834ef8cf02f4b\",\n        \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n        \"54ca116f1e9a45768a3a2c47a4608ff34adefa0c\",\n        \"1206b05eae5a06ba662ae79fb291b50e359c4f42\",\n        \"f61e9fd5a4878e1493f7a6b03774a61c17b7e9a4\",\n        \"9c81be0c478bfc0a48eedb8769326fe289a11acc\",\n        \"014576b866078524286802b1d0e18628520aa886\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"cbeca8850c37cb3cca794091c888b00a193c2b59\",\n        \"69f29341e91e2a205d5e37a1dcf08c43d1368aaa\",\n        \"8899a55b0db3d1305ad380db5cbe8408972cf294\"\n    ],\n    \"all_ids_count\": 56,\n    \"p0_ids\": [\n        \"a553bf27d801d09f667fe121c0ba9632257f364b\",\n        \"e4cd5c96db19ec214799839adcd62e764c7d8254\",\n        \"c10075b3746a9f3dd5811970e93c8ca3ad39b39d\",\n        \"79531b47bb27cb18022891eb2ab1fcb41745fca6\",\n        \"19f4d1533d8f7c4c13e9732c36fb374edd5ad470\",\n        \"61e46884567be7cad12e999365b16a8d3414b678\",\n        \"174df7d2cc8d49f219d8899c7d75bc929f3a57c7\",\n        \"187308ff437755641bcc0bd14b08a7c365d88253\",\n        \"d8c78221e4366d6a72a6b3e41e35b706cc45c01d\",\n        \"7bbe0235f583b27f96c0f288043876f86795d6c2\",\n        \"014576b866078524286802b1d0e18628520aa886\",\n        \"a395f1c0910a5622f6faaefb5b27e87bb1617759\",\n        \"a673ef39237e227381fccf5b1d154d96de428f1d\",\n        \"6f870f7f02a8c59c3e23f407f3ef00dd1dcf8fc4\",\n        \"3c476a73a4d99fc39fb4e3aa857efa4f373c6732\",\n        \"64ea8f180d0682e6c18d1eb688afdb2027c02794\",\n        \"a2cad4e4fd946adf6cc87e483b2ba18579de1264\"\n    ],\n    \"p0_ids_count\": 17,\n    \"p1_ids\": [\n        \"942deb7d865b7782c03176d95e3a0d56cb71009e\",\n        \"b46dc46fdfe55811d9ed350fc44ddb289fdba68c\",\n        \"d65ce2b8300541414bfe51d03906fca72e93523c\",\n        \"633e2fbfc0b21e959a244100937c5853afca4853\",\n        \"9695824d7a01fad57ba9c01d7d76a519d78d65e7\",\n        \"2cd605106b88c85d7d8b865b1ef0f8c8293debf1\",\n        \"aa59b834711645f768e58b904a3585c2ba935973\",\n        \"14c3cf58192774b9b6fc6188df99efd6ab5fc739\",\n        \"a483ff9557f29d21fe780b3dd969a037a3ffc3ed\",\n        \"6a225bb2454f66d1b106bbae7e5129d6569aa260\",\n        \"b59c9904994204f76f9863cb86d19093df10edb8\",\n        \"fbebb1a5d72aec2a6b13fc909f781f6ba9b04925\",\n        \"47628dde478a58668ea8ba1ea9a432c5f5ddb652\",\n        \"efbe97d20c4ffe356e8826c01dc550bacc405add\",\n        \"2dcef55a07f8607a819c21fe84131ea269cc2e3c\",\n        \"d24b4f34197df0257390b57f02537e6ce3284f2e\",\n        \"c7a5128b45edb4db9105ec5167210b887617ddf2\",\n        \"eb40c436d18f8e657cf2626fe94507c7d8f462ec\",\n        \"1e4b6567ff66de6cdcbe58c863538241e2f62b45\",\n        \"37232ccce1cfafbe9b9918557f0b6cdf80e5b83a\",\n        \"7002ae048e4b8c9133a55428441e8066070995cb\",\n        \"a6ad30123bef4b19ee40c3d63cfabf00d211f0ef\",\n        \"5aabe3a210270711c72bddaa0290c4edd3db7720\",\n        \"5c126ae3421f05768d8edd97ecd44b1364e2c99a\",\n        \"721f9afcfe45c70ba0a98f8aed833e28b278b275\",\n        \"a2d2bbe4c542173662a444b33b76c66992697830\",\n        \"a8ca46b171467ceb2d7652fbfb67fe701ad86092\",\n        \"ad5fb88450fef465332327541351e9e5fae03210\",\n        \"1b2355c3c674b26a977768a91a164384ad51bbb1\",\n        \"8053f1079767d3d6cc6ffd90c885b513acc6af5f\",\n        \"dce6f9d4017b1785979e7520fd0834ef8cf02f4b\",\n        \"54ca116f1e9a45768a3a2c47a4608ff34adefa0c\",\n        \"1206b05eae5a06ba662ae79fb291b50e359c4f42\",\n        \"f61e9fd5a4878e1493f7a6b03774a61c17b7e9a4\",\n        \"9c81be0c478bfc0a48eedb8769326fe289a11acc\",\n        \"d07284a6811f1b2745d91bdb06b040b57f226882\",\n        \"cbeca8850c37cb3cca794091c888b00a193c2b59\",\n        \"69f29341e91e2a205d5e37a1dcf08c43d1368aaa\",\n        \"8899a55b0db3d1305ad380db5cbe8408972cf294\"\n    ],\n    \"p1_ids_count\": 39\n}",
+   "note": "the original paper's citations (the citation scorer's ground truth)"
+  }
+ ],
+ "conditions": [
+  {
+   "name": "RW-opus",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-sonnet",
+   "system": "researchworld",
+   "agent": "claude-code",
+   "provider": null,
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container"
+    },
+    "model": {
+     "provider": "anthropic-claude-code",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "RW-mixed",
+   "system": "researchworld",
+   "agent": null,
+   "provider": null,
+   "model": null,
+   "effort": null,
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "researchworld",
+     "version": "hutian 4.2.0 (commit 8a79c3608fe2)",
+     "description": "HuTian ResearchWorld 4.2.0, this project's own install (images :rwe-v4.2.0)",
+     "upstream": {
+      "repository": "a-green-hand-jack/HuTian (private)",
+      "commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168"
+     }
+    },
+    "agent": {
+     "kind": "mixed",
+     "name": "Antigravity (Gemini) + Claude Code + Codex CLI",
+     "version": "antigravity agy_acp_server 1.4.1; claude-code @anthropic-ai/claude-agent-sdk 0.3.300; codex @openai/codex 0.163.0",
+     "how": "one agent per role through acpx's ACP adapter in the role's sandbox container; roles use antigravity, claude-code, codex"
+    },
+    "model": {
+     "provider": "per role",
+     "model": "per role",
+     "effort": "per role"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "budget.total_seconds": 7200
+     }
+    },
+    "resources": {
+     "cpus": null,
+     "memory_gb": null,
+     "gpus": null
+    },
+    "network": {
+     "shield": "proxy",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [],
+     "search": "the shared search tool (MCP server rwe-search in every sandbox) through the same shield",
+     "web_access": "every request of every role through the run's shield proxy, HuTian's mandatory upstream proxy with the shield's CA: the same URL, keyword, id and date rules as the other systems, the shield logs each URL; no direct way out, server-side search and remote tools off (Issue #73)"
+    },
+    "tools": {
+     "permissions": "acpx --approve-all --non-interactive-permissions fail: every tool call the agent asks for is approved; the role's sandbox container is the boundary",
+     "settings": {}
+    },
+    "environment": {
+     "image": "researchworld-worker:rwe-v4.2.0",
+     "system_image": "researchworld:rwe-v4.2.0",
+     "official_task_image": false,
+     "task_image": null,
+     "mode": null,
+     "preinstalled": {
+      "zh": "HuTian 的 system image researchworld:rwe-v4.2.0 和 worker image researchworld-worker:rwe-v4.2.0（acpx 与各 agent 的 ACP 适配、researchworld 包的 Python、Node.js）",
+      "en": "HuTian's system image researchworld:rwe-v4.2.0 and worker image researchworld-worker:rwe-v4.2.0 (acpx and each agent's ACP adapter, Python with the researchworld packages, Node.js)"
+     }
+    },
+    "roles": [
+     {
+      "role": "idea-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "story-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "experiment-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "figtab-repo",
+      "agent": "claude-code",
+      "agent_name": "Claude Code",
+      "agent_version": "@anthropic-ai/claude-agent-sdk 0.3.300",
+      "how": "claude-agent-acp",
+      "provider": "anthropic-claude-code",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+     },
+     {
+      "role": "paper-repo",
+      "agent": "antigravity",
+      "agent_name": "Antigravity (Gemini)",
+      "agent_version": "agy_acp_server 1.4.1",
+      "how": "agy_acp_server",
+      "provider": "google-antigravity",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+     },
+     {
+      "role": "internal-review-repo",
+      "agent": "codex",
+      "agent_name": "Codex CLI",
+      "agent_version": "@openai/codex 0.163.0",
+      "how": "codex-acp",
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+     }
+    ],
+    "world": {
+     "hutian_version": "4.2.0",
+     "hutian_commit": "8a79c3608fe28cf27d43ee7948fbb2ca826b0168",
+     "digest": null,
+     "budget": {
+      "total_seconds": 7200
+     },
+     "edges": [],
+     "roles_listed": true,
+     "entry": "agent"
+    },
+    "notes": {},
+    "derived": "shipped settings",
+    "missing": [
+     "resources.cpus"
+    ],
+    "reasons": {
+     "resources.cpus": "world.json sets no resources: each role's sandbox gets HuTian's defaults"
+    }
+   }
+  },
+  {
+   "name": "CC-opus",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CC-sonnet",
+   "system": "coding-agent",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.308",
+     "how": "one headless `claude -p` run in the system container"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--permission-mode bypassPermissions; WebSearch denied; MCP search tools only (--strict-mcp-config)",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "--max-budget-usd 1000.0 (client-side estimate), --max-turns 100000",
+     "key_exposure": "ANTHROPIC_API_KEY is visible to the agent's Bash tool: Claude Code's subprocess env scrub (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) needs a bubblewrap namespace that unprivileged Docker refuses, so it is off; the container can only reach the shield proxy",
+     "permissions": "--permission-mode bypassPermissions (container and shield are the boundary)",
+     "extra_model_calls": "WebFetch runs a secondary extraction model call inside Claude Code; counted in modelUsage",
+     "telemetry": "telemetry, error reporting and nonessential traffic disabled; this also stops feature-flag fetching"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-astra",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6-astra",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6-astra",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "CX-sol",
+   "system": "coding-agent",
+   "agent": "codex",
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "coding-agent",
+     "version": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "description": "Claude Code or Codex CLI as a research agent (B1)",
+     "upstream": null
+    },
+    "agent": {
+     "kind": "codex",
+     "name": "Codex CLI",
+     "version": "0.164.0",
+     "how": "one headless `codex exec` run in the system container"
+    },
+    "model": {
+     "provider": "openai",
+     "model": "gpt-6.1-sol",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": 1000.0,
+     "turns": 100000,
+     "tokens": null,
+     "caps": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded"
+    },
+    "tools": {
+     "permissions": "--sandbox danger-full-access, approval_policy=never; web_search disabled; apps, plugins, browser and computer use disabled; MCP search tools",
+     "settings": {
+      "max_budget_usd": 1000.0,
+      "max_turns": 100000,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-coding-agent:cc2.1.308-cx0.164.0-7caade4536ec",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "node:22 bookworm 基础镜像；Claude Code 和 Codex CLI（固定版本）、TeX Live 子集（ICML/ICLR/NeurIPS）、python3 + uv、git、共用的受控搜索 MCP 服务",
+      "en": "node:22 bookworm base; Claude Code and Codex CLI (pinned), a TeX Live subset (ICML/ICLR/NeurIPS), python3 + uv, git, the shared controlled-search MCP server"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "driver": "no scaffold: one headless CLI invocation; it stops when the model stops (no /goal or loop)",
+     "search": "provider server-side search disabled; shared controlled search offered as MCP tools search_literature / search_web",
+     "web_access": "WebFetch and Bash network stay on, but only through the shield proxy: URL blocklist applies, OpenAlex/S2/Tavily API calls are date-bounded, arbitrary fetched pages are not date-bounded",
+     "venue": "chosen by the agent from the task text; detected from LaTeX at collect time",
+     "wall_clock": "enforced by the runner; the entrypoint turns its SIGTERM into SIGINT so the CLI can end cleanly",
+     "native_caps": "none: codex exec has no budget or turn cap; only the wall-clock limit applies",
+     "permissions": "--sandbox danger-full-access (container and shield are the boundary)",
+     "model_access": "the project's own ChatGPT (Codex) login through codex-api  (account ): a Codex custom provider (Responses API) at the one host address the shield lets through",
+     "key_exposure": "none: the container holds only a placeholder in RWE_CODEX_API_KEY (also excluded from shell tool environments); the shield proxy puts codex-api's local key on its requests and the login stays on the host",
+     "cost": "Codex reports tokens only; on a ChatGPT plan there is no per-token charge, USD from a price list is notional"
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-opus",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "AS-sonnet",
+   "system": "agentic-scientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "agentic-scientist",
+     "version": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "description": "The Agentic Scientist, SakanaAI AI-Scientist-v3 (B1)",
+     "upstream": {
+      "repository": "https://github.com/SakanaAI/AI-Scientist-v3",
+      "commit": "df8313889a004f8a44a472e19a833cd547bb828a"
+     }
+    },
+    "agent": {
+     "kind": "claude-code",
+     "name": "Claude Code",
+     "version": "2.1.285",
+     "how": "one sibling container (rwe-b1-agentic-scientist-agent:df83138) per agent session, started by the orchestrator"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "web_access": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield."
+    },
+    "tools": {
+     "permissions": "upstream's own agent settings; provider web search denied by managed settings (Claude Code permissions.deny WebSearch, Codex web_search=\"disabled\")",
+     "settings": {
+      "phases": "task_drafting,investigation,final_evaluation,paper",
+      "venue": "iclr",
+      "final_outcome_policy": "allow_not_qualified",
+      "max_idea_cycles": 3,
+      "max_program_evals_per_attempt": 1,
+      "task_drafting_timeout_seconds": 57600,
+      "idea_timeout_seconds": 3600,
+      "run_timeout_seconds": 21600,
+      "harness_evaluation_timeout_seconds": 7200,
+      "paper_max_repair_rounds": 10,
+      "paper_min_refs": 25,
+      "paper_max_refs": 30,
+      "draft_design_max_repairs": 8,
+      "draft_contract_max_repairs": 3,
+      "draft_smoke_max_repairs": 3,
+      "draft_alignment_max_repairs": 10,
+      "draft_qualification_max_repairs": 4,
+      "draft_max_attempts": 3,
+      "draft_evaluator_smoke_timeout_seconds": 1800
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-agentic-scientist:df83138-9e5733e294f0",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "编排镜像：上游代码（固定提交、未改）、uv 锁定依赖、docker CLI（经 shim 给兄弟容器加代理和 CA）；agent 镜像：上游自己的 agent-cli Dockerfile",
+      "en": "orchestrator image: upstream code at the pin (unmodified), uv-locked dependencies, the docker CLI (a shim adds proxy and CA to sibling containers); agent image: upstream's own agent-cli Dockerfile"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "benchmark_paths": "A benchmark item's paths are mounted into the agent containers unless upstream mounts the same path itself (/workspace and below, /home/agent-home, /task-source, /run, /tmp): those are left out and listed in logs/sibling-mounts.txt. The agents work in upstream's own /workspace (the run directory), so a deliverable the official prompt names under such a path is not written where the run collects it.",
+     "venue": "paper.paper_format=iclr for every task. The system has only iclr and alife specs and does not choose a venue itself; ICML and NeurIPS templates and a system-chosen venue are unsupported.",
+     "task_input": "Only the `# Goal` and `# Rubrics` sections of task.md are read: all five candidate files are put under `# Goal` with their headings turned into bold lines; `# Rubrics` carries a neutral line. The paradigm is optimisation of a scalar score: the task-drafting phase (documented as experimental) turns the brief into an evaluator and a seed program.",
+     "phases": "execution.phases=task_drafting,investigation,final_evaluation,paper; the system's own default also runs ablations and posthoc; final_evaluation stays because a drafted task requires it before the paper. review/revision (second model) are never selected.",
+     "agent_pool": "agent.pool and agent.models.* are left empty: one model for every phase.",
+     "second_provider": "No OPENAI/GEMINI key is supplied (concept figures stay in deterministic export mode).",
+     "time": "No global wall-clock or token cap exists upstream; the runner enforces time_limit_hours. Native caps used: idea cycles=3, per-phase timeouts from [systems.agentic-scientist].",
+     "network": "Sibling agent containers run on the shield's internal network; the agents keep their CLI WebFetch/Bash network, which go through the shield. Provider hosts are only tunnelled by the shield.",
+     "search": "Provider server-side web search is switched off in every sibling by the agent CLIs' own system settings, bind-mounted read-only by the docker shim: Claude Code /etc/claude-code/managed-settings.json (permissions.deny WebSearch), Codex /etc/codex/config.toml (web_search=\"disabled\") and /etc/codex/requirements.toml (allowed_web_search_modes=[\"disabled\"]). Upstream's own Semantic Scholar client goes through the shield.",
+     "key_exposure": "The provider key is in the environment of the agent containers (upstream env-file mechanism) and therefore visible to commands the agent runs. Claude Code's CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 was tried and aborts: it needs bubblewrap, which the unmodified upstream agent image lacks.",
+     "gpu": "gpus=1 is wired (container.gpu_count, harness GPU evaluation) but was not exercised.",
+     "docker_socket": "The orchestrator container has the host docker socket (root-equivalent on the host)."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-opus",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-opus-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "ARC-sonnet",
+   "system": "autoresearchclaw",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "autoresearchclaw",
+     "version": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "description": "AutoResearchClaw (B1)",
+     "upstream": {
+      "repository": "https://github.com/aiming-lab/AutoResearchClaw",
+      "commit": "be4ba4755bf1b52220f25e13b2293b5956590070"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no coding agent: a 23-stage prompt-chain pipeline over the Anthropic Messages API"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "llm_timeout_sec": 600,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "no tool calls (requests carry model, messages, max_tokens); generated experiments run as plain subprocesses in the container",
+     "settings": {
+      "target_conference": "iclr_2026",
+      "topic": "",
+      "literature_sources": [
+       "openalex",
+       "semantic_scholar"
+      ],
+      "max_results_per_query": 40,
+      "inter_query_delay_sec": 1.5,
+      "pass_search_keys": false,
+      "llm_timeout_sec": 600,
+      "omit_temperature": true,
+      "experiment_time_budget_sec": 3600,
+      "max_iterations": 10,
+      "repair_max_cycles": 3,
+      "exec_fix_max_iterations": 3,
+      "hard_validation_max_repairs": 4,
+      "code_review_max_rounds": 2
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-autoresearchclaw:be4ba47-706bd124c744",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "python:3.11 bookworm；上游代码按 PYTHONPATH 使用；pdflatex + bibtex；CPU 版 PyTorch 和 numpy、scipy、scikit-learn、pandas、matplotlib 等（constraints.txt 固定）",
+      "en": "python:3.11 bookworm; upstream code via PYTHONPATH; pdflatex + bibtex; CPU PyTorch with numpy, scipy, scikit-learn, pandas, matplotlib and more (pinned by constraints.txt)"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "model": "claude-sonnet-5-5 through the Anthropic Messages API (llm.provider=anthropic), no fallback models, reviewer model = same model. Requests carry model, messages and max_tokens only (no tools, no thinking parameter); ARC's per-stage temperature is not sent because the model rejects it, so the API default applies.",
+     "agent": "ARC is not a tool-using coding agent: its 23-stage pipeline, its own code agent and its reviewers are prompt chains over plain chat completions. conditions.agent=claude means only that the provider is Anthropic; Claude Code is not involved. Generated experiments run as a plain subprocess in the container.",
+     "effort": "ARC has no effort setting; usage-log.patch sends output_config.effort='high' with every request. Haiku 5.5 thinks by default and ARC's per-stage max_tokens (for example 4096) is shared with the thinking tokens, so long outputs can still be cut short.",
+     "venue": "Not chosen by the system: export.target_conference=iclr_2026 comes from [systems.autoresearchclaw].",
+     "tokens": "ARC records no usage. A logging-only patch (usage-log.patch) appends each Messages API `usage` block to anthropic-usage.jsonl; cost is not computed. The same patch carries the RWE_OMIT_TEMPERATURE and RWE_EFFORT switches.",
+     "time": "No global wall-clock or budget cap in ARC; only the runner's limit applies. Per experiment run 3600 s, refinement iterations 10, repair cycles 3.",
+     "input": "Chinese pack text goes verbatim (candidate files concatenated, with <!-- file --> markers) into prompts.extra_prompts of 18 stages. ARC takes one topic string and checks generated code against it, so research.topic is the candidate TASK.md verbatim with whitespace collapsed. Literature queries come from the stage-3 model plan; ARC's ASCII keyword splitter and its whitespace-based query expansion yield a few useless queries from the Chinese text. Starter papers are guidance text only: ARC cannot ingest seed papers.",
+     "search": "Web search, crawling, GitHub, HF Hub, Gemini and OpenCode are off. Literature search in stage 4 uses ['openalex', 'semantic_scholar'] through ARC's own clients behind the shield proxy; stages 8, 17, 22 and 23 (novelty, citation verification) always also query arXiv, CrossRef and DataCite; the shield date-bounds those API calls like the others (a late DOI answers 403).",
+     "server_side_search": "Not reachable: every request to api.anthropic.com is built in researchclaw/llm/anthropic_adapter.py:136-148 and carries only model, messages, max_tokens, optional temperature, output_config.effort and system, never a tools or web_search field; the OpenAI-compatible client (OpenRouter :online / plugins) is not used (llm.provider=anthropic), web_search.enabled=false, Gemini is only used by the disabled figure_agent.nano_banana. Provider hosts are only tunnelled by the shield, so such a path would be invisible to the audit.",
+     "secrets": "Generated experiment code inherits the container environment, including the API keys (ARC offers no switch to scrub it).",
+     "profile": "project.profile=ml_generic is fixed for all tasks; research.domains is left empty because the literature screen rejects papers outside the stated domain (a theory task failed with domains=[machine-learning])."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-opus",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  },
+  {
+   "name": "EVO-sonnet",
+   "system": "evoscientist",
+   "agent": "claude",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5-5",
+   "effort": "high",
+   "pending": [],
+   "setup": {
+    "schema": 1,
+    "system": {
+     "name": "evoscientist",
+     "version": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "description": "EvoScientist with EvoSkills (B1)",
+     "upstream": {
+      "repository": "https://github.com/EvoScientist/EvoScientist",
+      "commit": "e2eef1487963f77abca3dbdae5d739eda73c6e71"
+     }
+    },
+    "agent": {
+     "kind": "none",
+     "name": "none",
+     "version": null,
+     "how": "no external coding agent: EvoScientist's in-process sub-agents (LangChain deepagents)"
+    },
+    "model": {
+     "provider": "anthropic",
+     "model": "claude-sonnet-5-5",
+     "effort": "high"
+    },
+    "limits": {
+     "time_limit_hours": 2.0,
+     "budget_usd": null,
+     "turns": null,
+     "tokens": null,
+     "caps": {
+      "recursion_limit": 1000000,
+      "execute_timeout_s": 300
+     }
+    },
+    "resources": {
+     "cpus": 4,
+     "memory_gb": 16,
+     "gpus": 0
+    },
+    "network": {
+     "shield": "controlled",
+     "offline": false,
+     "blocklist": "blocklist.json",
+     "passthrough_hosts": [
+      "api.anthropic.com",
+      "api.openai.com",
+      "chatgpt.com",
+      "generativelanguage.googleapis.com",
+      "openrouter.ai",
+      "api.deepseek.com"
+     ],
+     "search": null,
+     "web_access": null
+    },
+    "tools": {
+     "permissions": "think_tool, deepagents built-ins, EvoSkills skills and an execute shell; skill_manager not registered; no search tool",
+     "settings": {
+      "enable_async_subagents": false,
+      "recursion_limit": 1000000,
+      "auto_mode_retry_wait_s": 1800,
+      "execute_timeout_s": 300,
+      "collect_max_file_mb": 100
+     }
+    },
+    "environment": {
+     "image": "rwe-b1-evoscientist:0.3.8-c9eb30e6fa7d",
+     "system_image": null,
+     "official_task_image": false,
+     "task_image": "",
+     "mode": null,
+     "preinstalled": {
+      "zh": "上游锁定依赖（uv sync --frozen）加兼容补丁 compat.patch；TeX Live（含 fonts-extra、latexmk）；给 agent 用的研究 Python 环境 /opt/research",
+      "en": "upstream's locked dependencies (uv sync --frozen) plus compat.patch; TeX Live (with fonts-extra and latexmk); a research Python environment for the agent in /opt/research"
+     }
+    },
+    "roles": [],
+    "world": null,
+    "notes": {
+     "agent": "No external coding agent: EvoScientist runs its own in-process planner/research/code/debug/writing sub-agents (LangChain deepagents) on the one configured model. conditions.agent only selects the provider; Claude Code and Codex are not used.",
+     "model": "Main agent, sub-agents and EvoScientist's auxiliary calls (tool selector, memory workers, summariser, graders) all use the configured model; auxiliary_model and model_fallbacks are empty.",
+     "effort": "Upstream hard-wires effort=max and max_tokens=128000 for Anthropic models. compat.patch makes the effort come from EVOSCIENTIST_REASONING_EFFORT (= conditions.effort); max_tokens stays 128000 (a cap, not a cost driver). Adaptive thinking (display=summarized) is upstream and not switchable.",
+     "paper": "The core writes a Markdown report (final_report.md); the EvoSkills paper-writing skill gives a generic LaTeX `article` skeleton with no ICML/ICLR/NeurIPS style and no compile step. The image has TeX Live (latexmk, fonts-extra) but no venue style files; the task asks for an official template, so a venue-formatted PDF depends on the agent obtaining the style through the shield. No extra pipeline stage was added; absent items are listed in result.missing.",
+     "tools": "skill_manager (git clone of any repository as a skill) is not registered (compat.patch); the Tavily key is not set so tavily_search does not exist; LANGGRAPH_CLI_NO_ANALYTICS=1; EvoSkills is baked in at its pinned commit. The execute shell and the EvoSkills paper-navigator scripts reach the world only through the shield; S2_DATE_CUTOFF is not set (the shield bounds dates).",
+     "server_side_search": "Not reachable: EvoScientist binds no provider-side search tool to any model (its only tools are think_tool, tavily_search when TAVILY_API_KEY is set, MCP tools from mcp.yaml, deepagents built-ins and skills; EvoScientist/EvoScientist.py:671-672 and 754-755 at the pin; the one bind_tools call is the tool selector's own output schema, middleware/tool_selector.py:166). TAVILY_API_KEY is not passed and the image has no mcp.yaml, so no search tool exists. Anthropic/OpenAI hosts are only tunnelled by the shield, so a provider-side search would be invisible to the audit.",
+     "credentials": "The provider key is in the process environment and EvoScientist's execute shell inherits the environment (upstream has no switch); the key is therefore visible to the agent's shell. It is a run-scoped copy and is not logged by this adapter.",
+     "memory": "A fresh data dir per run (baked skills, empty memory). Memory workers, skill synthesis and the scheduler stay at upstream defaults, so their LLM calls count in the usage log.",
+     "limits": "async sub-agents off (README advice for scripted runs); recursion_limit=1000000; model retry wait in auto-mode 1800 s (time without progress counts as wall time); execute timeout 300 s per command. No token or cost budget exists."
+    },
+    "derived": "shipped settings",
+    "missing": [],
+    "reasons": {}
+   }
+  }
+ ],
+ "batches": [],
+ "runs": []
+}

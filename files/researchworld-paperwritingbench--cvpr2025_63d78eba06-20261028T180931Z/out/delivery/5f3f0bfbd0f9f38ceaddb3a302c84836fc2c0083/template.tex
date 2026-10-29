@@ -1,0 +1,205 @@
+% CVPR 2025 Paper Template; see https://github.com/cvpr-org/author-kit
+
+\documentclass[10pt,twocolumn,letterpaper]{article}
+\usepackage{cvpr}           
+
+\input{preamble}
+
+% It is strongly recommended to use hyperref, especially for the review version.
+% hyperref with option pagebackref eases the reviewers' job.
+\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
+
+\def\paperID{12345678}
+\def\confName{CVPR}
+\def\confYear{2025}
+
+%%%%%%%%% TITLE - PLEASE UPDATE
+\title{Source-Free Instance Unlearning by Estimating the Retain Hessian\\from Random Perturbations}
+
+\author{Ambitious AI Researcher\\
+AI Research Institute\\
+123 AI Avenue, ML City\\
+{\tt\small researcher@institute.ai}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+%%%%%%%%% ABSTRACT %%%%%%%%%
+Machine unlearning removes the influence of specific training samples from a trained model, but most methods assume that the remaining training data is still available, which is often not the case under privacy regulation, storage limits, or proprietary restrictions.
+Existing zero-shot methods avoid this assumption, but are typically limited to forgetting whole classes or lose utility when more data is removed.
+We study \emph{source-free instance unlearning} for linear and linearized models: given only the trained weights and the samples to forget, remove those samples without touching the retained data.
+Our approach performs a Newton-style unlearning step whose only unavailable ingredient, the Hessian of the retained data, is estimated by perturbing the optimal weights with Gaussian noise and solving a semi-definite program.
+On CIFAR-10 with a linear classifier on ImageNet-pretrained ResNet-18 features and a 10\% forget set, our source-free model reaches 70\% test accuracy and a membership-inference score of 51.4\% (ideal: 50\%), against 72\% and 50\% for retraining from scratch, while four source-free baselines drop to between 20.6\% and 52.1\% test accuracy.
+Results are close to those of the variant that uses the exact retained Hessian on four datasets, and the gap to retraining shrinks with more perturbations and stronger L2 regularization, but widens markedly for large forget sets (14 points of test accuracy at 15\% forgetting).
+All results are single runs, and we discuss the limitations of the evidence.
+%%%%%%%%% ABSTRACT %%%%%%%%%
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+%%%%%%%%% INTRODUCTION %%%%%%%%%
+Trained models can retain information about individual training samples, which may be private or copyrighted. Regulation such as the GDPR~\cite{gdpr2016} gives individuals the right to request deletion, and the model owner must then remove the influence of the corresponding samples. The reference solution is to retrain from scratch on the remaining data, but this is expensive, and \emph{unlearning} algorithms try to approximate its outcome more cheaply~\cite{cao2015towards,bourtoule2021machine,ginart2019making}.
+
+Most unlearning algorithms use the remaining (retained) training data during the forgetting step, for example to fine-tune the model, to repair utility, or to compute second-order statistics~\cite{golatkar2020eternal,guo2020certified,sekhari2021remember,mehta2022deep,kurmanji2023towards}. This assumption is frequently violated: the training set may have been deleted for privacy or storage reasons, or may be proprietary. We call this the \emph{source-free} setting, in which only the trained model and the samples to be forgotten are available. Zero-shot methods exist for this setting~\cite{chundawat2023zero,foster2024information,cha2024learning}, but they are often restricted to forgetting entire classes or lose utility as more data is removed, and they lack guarantees on how completely the data is removed.
+
+We take a different route for linear and linearized models. Newton-style unlearning based on influence functions~\cite{koh2017understanding,guo2020certified} moves the weights by a step that requires the Hessian of the \emph{retained} loss. We observe that every quantity this step needs, other than that Hessian, is computable from the trained weights and the forget samples alone. We therefore estimate the missing Hessian from the response of the model to small random perturbations of the optimal weights. The estimate is the solution of a semi-definite program (SDP)~\cite{boyd2004convex}, and the resulting unlearning procedure never reads the retained data.
+
+\noindent\textbf{Contributions.} (i)~We formulate source-free \emph{instance-level} unlearning for linear and mixed linear models, and derive a Newton unlearning step in which every term except the retain Hessian depends only on the trained weights and the forget set (\cref{sec:method}). (ii)~We propose a perturbation-based, SDP-formulated estimator of the retain Hessian (\cref{sec:hess}), and state the qualitative dependence of its error on the forget-set size, the number of perturbations, and the L2 regularization that our experiments are consistent with. (iii)~We evaluate on CIFAR-10, CIFAR-100, Stanford Dogs, and Caltech-256 against retraining, against the same update with the exact Hessian (Unlearned(+)), and against four source-free baselines (\cref{sec:experiments}). The method is close to retraining for small forget sets and clearly better than the baselines in utility, but it degrades for larger forget sets; we report this and other limitations in \cref{sec:conclusion}.
+%%%%%%%%% INTRODUCTION %%%%%%%%%
+
+\section{Related Work}
+\label{sec:related_work}
+%%%%%%%%% RELATED WORK %%%%%%%%%
+\noindent\textbf{Exact and certified unlearning.} The reference for unlearning is a model retrained without the forgotten samples. Exact approaches restructure learning so that deletion is cheap, either through summation-form statistics~\cite{cao2015towards} or by sharding the data~\cite{bourtoule2021machine}; deletion for specific models such as $k$-means is studied in~\cite{ginart2019making}. Certified removal for convex models applies a Newton step to the weights and perturbs the objective to obtain guarantees~\cite{guo2020certified}; generalization guarantees for unlearning are given in~\cite{sekhari2021remember}. These methods use the Hessian of the retained (or full) training loss, which needs data access; influence functions~\cite{koh2017understanding} provide the underlying second-order approximation. Our work keeps this Newton structure but replaces the retained-data Hessian by an estimate.
+
+\noindent\textbf{Approximate unlearning in deep networks.} Selective forgetting in deep networks was approached with Fisher-information-based scrubbing~\cite{golatkar2020eternal}, and with mixed linear networks whose last layers are linearized~\cite{golatkar2021mixed}, a setting we also use. Other approaches use conditionally independent Hessian approximations~\cite{mehta2022deep}, influence-based updates for features and labels~\cite{warnecke2023machine}, teacher--student schemes~\cite{chundawat2023can}, a noise-based impair-and-repair procedure~\cite{tarun2023fast}, or an objective that moves away from the forget set while staying close to the original model on the retained data~\cite{kurmanji2023towards}. The factors that influence approximate unlearning of SGD-trained models are analyzed in~\cite{thudi2022unrolling}. Most of these methods use retained data in the forgetting step.
+
+\noindent\textbf{Zero-shot and source-free unlearning.} Zero-shot machine unlearning~\cite{chundawat2023zero} removes class information without access to the training data, using synthesized samples. JiT~\cite{foster2024information} smooths the learned function around forget points through a Lipschitz-based regularizer; selective synaptic dampening~\cite{foster2024fast} avoids retraining by dampening important parameters; and the instance-wise approach of~\cite{cha2024learning} combines adversarial examples with weight importance. We compare against NegGrad, Random Labels, JiT, and the adversarial method. In contrast to this line of work, our update is an (estimated) Newton step with an explicit estimator of the missing curvature, applied to specific instances rather than classes.
+
+\noindent\textbf{Evaluation.} Following common practice we measure accuracy on test, retained, and forget data, and a membership inference score~\cite{shokri2017membership}, where 50\% means that forget samples cannot be distinguished from non-members.
+%%%%%%%%% RELATED WORK %%%%%%%%%
+
+\section{Methodology}
+\label{sec:method}
+%%%%%%%%% METHOD %%%%%%%%%
+\subsection{Problem setting}
+\label{sec:setting}
+Let $\mathcal D=\{z_i\}_{i=1}^{n}$, $z_i=(x_i,y_i)$, be the training set of $n$ samples, and let $\mathcal D_f\subset\mathcal D$ with $n_f=|\mathcal D_f|$ be the \emph{forget set}; $\mathcal D_r=\mathcal D\setminus\mathcal D_f$ is the \emph{retain set} with $n_r=n-n_f$ samples. The model is linear in its parameters $w\in\mathbb R^{p}$: either a linear classifier on fixed features, or a \emph{mixed linear} network in which the last layers are linearized around a pre-trained solution $w_0$, $f(x;w)\approx f(x;w_0)+\nabla_w f(x;w_0)^\top(w-w_0)$~\cite{golatkar2021mixed,lee2019wide}, while the earlier layers are frozen. With a quadratic (squared-error) per-sample loss $\ell(w;z)$ the risk is convex and quadratic in $w$. For a sample set $S$ we write the regularized risk
+\begin{equation}
+  L(w;S)=\frac1{|S|}\sum_{z\in S}\ell(w;z)+\frac\lambda2\|w\|^2,
+  \label{eq:risk}
+\end{equation}
+with $\lambda\ge 0$ the L2 regularization parameter. The trained model is $w^*=\arg\min_w L(w;\mathcal D)$, and the target of unlearning is the retrained model $w^*_r=\arg\min_w L(w;\mathcal D_r)$. In the \emph{source-free} setting the unlearning algorithm receives $w^*$, $\mathcal D_f$, and the scalar $n$ (the training-set size), but not $\mathcal D_r$. We write $H_r=\nabla^2L(w^*;\mathcal D_r)=\frac1{n_r}\sum_{z\in\mathcal D_r}\nabla^2\ell(w^*;z)+\lambda I$, which is positive definite whenever $\lambda>0$.
+
+\subsection{Newton unlearning with a forget-set-only gradient}
+\label{sec:newton}
+Because $w^*$ minimizes $L(\cdot;\mathcal D)$, we have $\sum_{z\in\mathcal D}\nabla\ell(w^*;z)+n\lambda w^*=0$. Splitting the sum into $\mathcal D_r$ and $\mathcal D_f$ gives the gradient of the \emph{retain} risk at the trained weights,
+\begin{equation}
+  \nabla L(w^*;\mathcal D_r)=-\frac1{n_r}\,g_f,\qquad g_f=\sum_{z\in\mathcal D_f}\nabla\ell(w^*;z)+n_f\lambda\, w^*,
+  \label{eq:gf}
+\end{equation}
+which depends only on $w^*$, $\mathcal D_f$, $\lambda$, and the sizes $n_f,n_r$. Since $L(\cdot;\mathcal D_r)$ is quadratic, a single Newton step from $w^*$ reaches its minimizer exactly in the idealized setting in which $w^*$ is the exact minimizer of $L(\cdot;\mathcal D)$:
+\begin{equation}
+  w_u \;=\; w^*-H_r^{-1}\nabla L(w^*;\mathcal D_r)\;=\;w^*+\frac1{n_r}H_r^{-1}g_f \;=\; w^*_r .
+  \label{eq:newton}
+\end{equation}
+\Cref{eq:newton} is an identity for the idealized setting only. In the experiments, the model is a classifier trained by finite optimization with a quadratic loss, and the mixed linear networks are linearizations of a deep network; Unlearned(+), which applies \cref{eq:newton} with the exact $H_r$, does not reproduce Retrained exactly there (2--7 points lower in accuracy in \cref{fig:main} and \cref{tab:mixed}). The experimental records do not say which of these departures causes the deviation, so Unlearned(+) rather than Retrained is the natural reference for the effect of the Hessian estimate alone. \Cref{eq:newton} is the influence-function / Newton removal update~\cite{koh2017understanding,guo2020certified} written so that everything except $H_r$ is available. This is the update of Unlearned(+) when $H_r$ is computed from the retained data; the source-free variant, Unlearned(-), replaces $H_r$ by an estimate $\widehat H_r$ and is the subject of the next subsection. For the mixed linear models the same update is applied to the linearized parameters.
+
+\subsection{Estimating the retain Hessian from perturbations}
+\label{sec:hess}
+For a quadratic loss, the retain risk around $w^*$ satisfies exactly
+\begin{equation}
+  L(w^*\!+\!\delta;\mathcal D_r)-L(w^*;\mathcal D_r)=-\frac{1}{n_r}g_f^\top\delta+\tfrac12\,\delta^\top H_r\,\delta,
+  \label{eq:quad}
+\end{equation}
+so $H_r$ is identified by the loss change in random directions $\delta$, if that change were observable. It is not, because $\mathcal D_r$ is unavailable. We therefore draw $K$ Gaussian perturbations $\delta_k\sim\mathcal N(0,\sigma^2 I)$, $k=1,\dots,K$, and replace the unobservable retain loss change by a surrogate $\hat\Delta_k$ built from the forget set:
+\begin{equation}
+  \hat\Delta_k=\frac1{n_f}\sum_{z\in\mathcal D_f}\big[\ell(w^*\!+\!\delta_k;z)-\ell(w^*;z)\big]+\frac\lambda2\big(\|w^*\!+\!\delta_k\|^2-\|w^*\|^2\big).
+  \label{eq:surrogate}
+\end{equation}
+The motivation is a local smoothness assumption: if $\ell(\cdot;z)$ is $\Lambda$-Lipschitz in $w$ in the neighborhood of $w^*$ that the perturbations explore, then for every sample $|\ell(w^*\!+\!\delta_k;z)-\ell(w^*;z)|\le\Lambda\|\delta_k\|$, so the average data-term change over the forget set and the one over the retain set differ by at most $2\Lambda\|\delta_k\|$. (The regularizer term in \cref{eq:surrogate} is exact because it does not depend on the data.) This bound is first order in $\|\delta_k\|$, whereas the curvature signal $\frac12\delta_k^\top H_r\delta_k$ is second order, so for small perturbations the bound does not by itself guarantee that \cref{eq:sdp} identifies $H_r$. We therefore regard \cref{eq:surrogate} as a heuristic surrogate whose accuracy is judged empirically in \cref{sec:experiments}, and \cref{eq:surrogate,eq:sdp} as our formulation of the estimator; the solver and the perturbation scale $\sigma$ are not recorded in the experimental records and are not specified here. The Hessian estimate is the solution of the convex problem
+\begin{equation}
+  \widehat H_r=\arg\min_{H\succeq\lambda I}\;\sum_{k=1}^{K}\Big(\hat\Delta_k+\tfrac1{n_r}g_f^\top\delta_k-\tfrac12\,\delta_k^\top H\,\delta_k\Big)^2 .
+  \label{eq:sdp}
+\end{equation}
+The objective is a convex quadratic function of $H$ because $\delta_k^\top H\delta_k=\langle H,\delta_k\delta_k^\top\rangle$ is linear in $H$, and the constraint is a linear matrix inequality, so \cref{eq:sdp} is a semi-definite program~\cite{boyd2004convex} that can be solved by any SDP solver after an epigraph reformulation. The lower bound $\lambda I$ encodes the known contribution of the regularizer to $H_r$. The unlearned weights are then $\hat w_u=w^*+\frac1{n_r}\widehat H_r^{-1}g_f$.
+
+\noindent\textbf{Procedure.} (1)~Compute $g_f$ from $w^*$ and $\mathcal D_f$ (\cref{eq:gf}). (2)~Draw $K$ perturbations and evaluate the forget-set loss at $w^*+\delta_k$ to obtain $\hat\Delta_k$ (\cref{eq:surrogate}). (3)~Solve \cref{eq:sdp} for $\widehat H_r$. (4)~Apply the Newton update of \cref{eq:newton} with $\widehat H_r$. No step reads $\mathcal D_r$.
+
+\noindent\textbf{What can be said about the error.} The error of $\hat w_u$ with respect to $w^*_r$ is governed by the error of $\widehat H_r$ through $H_r^{-1}$, whose smallest eigenvalue is at least $\lambda$. The expectation that guides our experiments is that the estimation error shrinks with more perturbations, grows with the number of forgotten samples $n_f$, and that a gradient-norm bound in our analysis scales inversely with $\lambda^2$. We state no theorem here: these three dependencies are qualitative expectations that \cref{sec:ablations} compares with the observed trends, the observations are only \emph{consistent with} them, and the constants and the functional form are not tested. In addition, when $K$ is smaller than the number of free entries of $H$, \cref{eq:sdp} has many minimizers and we impose no structure beyond $H\succeq\lambda I$.
+%%%%%%%%% METHOD %%%%%%%%%
+
+\section{Experiments}
+\label{sec:experiments}
+%%%%%%%%% EXPERIMENTS %%%%%%%%%
+\subsection{Setup}
+\label{sec:setup}
+\noindent\textbf{Datasets.} CIFAR-10~\cite{krizhevsky2009learning} (60{,}000 RGB images, 10 classes, 6{,}000 per class), CIFAR-100~\cite{krizhevsky2009learning} (100 classes, 600 images per class), Stanford Dogs~\cite{khosla2011novel} (20{,}580 images, 120 breeds, a fine-grained task), and Caltech-256~\cite{griffin2007caltech} (30{,}607 images, 256 categories). Forget sets are random subsets of the training data of size 5\%, 10\%, 15\%, or 20\%.
+
+\noindent\textbf{Models.} Features are extracted with a ResNet-18~\cite{he2016deep} pre-trained on ImageNet~\cite{deng2009imagenet}. \emph{Linear classifiers} are trained on these features; \emph{mixed linear networks} linearize the last few layers of ResNet-18 (\cref{sec:setting}). We use a differentiable convex (quadratic) loss and Newton updates. The retain Hessian is estimated from the forget data and the trained model by Gaussian perturbations around the optimal weights (\cref{sec:hess}); we vary the number of perturbations $K\in\{250,500,1000\}$ and the L2 parameter $\lambda$. The perturbation scale is small and was not varied. All experiments ran on a single NVIDIA RTX 3090 GPU.
+
+\noindent\textbf{Metrics.} Test accuracy, remaining accuracy (on $\mathcal D_r$), forget accuracy (on $\mathcal D_f$), and a membership inference attack (MIA) score~\cite{shokri2017membership}; a score near 50\% means the forget samples are indistinguishable from non-members. The \emph{performance gap} is the absolute difference of a metric between a method and a reference model. The retrained model is the gold standard, so smaller gaps to it are better.
+
+\noindent\textbf{Compared models.} \emph{Retrained}: trained from scratch on $\mathcal D_r$. \emph{Unlearned(+)}: \cref{eq:newton} with the exact $H_r$ (needs the retained data). \emph{Unlearned(-)}: ours, with $\widehat H_r$ from \cref{eq:sdp}. Source-free baselines: \emph{NegGrad} (fine-tuning on the forget data only, with gradient steps that increase the loss), \emph{Random Labels} (randomly relabeling the forget samples and fine-tuning), \emph{JiT}~\cite{foster2024information} (Lipschitz regularization for stable outputs), and \emph{Adversarial}~\cite{cha2024learning} (adversarial examples combined with weight importance).
+
+\noindent\textbf{Reporting.} All numbers below are the recorded experimental values, one run per configuration; there are no repeated runs, so no confidence intervals are available. Accuracies in the linear-classifier ablations are recorded at integer-percent resolution. Entries marked ``derived'' are differences computed from logged values. Because the Retrained model is re-trained for every table, its numbers vary slightly across tables (test accuracy 72--73\%, MIA 49.4--50\%), which suggests that differences of one to two points are within run-to-run variation.
+
+\subsection{Comparison with retraining and with the exact Hessian}
+\label{sec:main}
+\Cref{fig:main} compares Retrained, Unlearned(+), and Unlearned(-) on the four datasets with 10\% of the training data forgotten. On every dataset the bars of Unlearned(-) lie close to those of Unlearned(+) in all four metrics, i.e.\ the estimated Hessian is nearly as good as the exact one. On CIFAR-10 (linear classifier) the source-free model is within 2 points of Retrained on test accuracy (70\% vs.\ 72\%), 3 on remaining accuracy (71\% vs.\ 74\%), 4 on forget accuracy (68\% vs.\ 72\%), and 1.4 points on MIA (51.4\% vs.\ 50\%). On CIFAR-100, Stanford Dogs, and Caltech-256 the unlearned models sit visibly below Retrained in test and forget accuracy (by roughly 4--7 points of test accuracy, values read from \cref{fig:main} to within about 1 point; they are not otherwise tabulated), while the MIA scores stay close to 50\%. Unlearned(-) is not worse than Unlearned(+) on test and forget accuracy there. Hence, ``comparable to retraining'' holds tightly for CIFAR-10 and only approximately in accuracy on the other three datasets. The CIFAR-100 panel (Retrained at roughly 56\% test accuracy) differs from the mixed linear CIFAR-100 results of \cref{tab:mixed} (62.2--63.7\%), so the two come from different settings (the model of the CIFAR-100, Stanford Dogs, and Caltech-256 panels is not recorded; we presume a linear classifier on frozen features, as for CIFAR-10, whose panel agrees with \cref{tab:ablations}).
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/figure_1.png}
+  \caption{Performance of Retrained, Unlearned(+) (exact retain Hessian), and Unlearned(-) (estimated Hessian, \cref{sec:hess}) on CIFAR-10, CIFAR-100, Stanford Dogs, and Caltech-256, with 10\% of the training data randomly selected as forget samples. Unlearned(-) tracks Unlearned(+) closely on all four datasets; relative to Retrained it is within about 2 points of test accuracy on CIFAR-10 and about 4--7 points lower in accuracy on the other three, with the MIA score (ideal: 50\%) near 50\% throughout. Single run, no error bars.}
+  \label{fig:main}
+\end{figure*}
+
+\subsection{Comparison with source-free baselines}
+\label{sec:baselines}
+\Cref{tab:baselines} compares Unlearned(-) with the source-free baselines on CIFAR-10 (linear classifier, 10\% forget data). The three fine-tuning-style baselines lose about 20 points of test accuracy relative to Retrained (NegGrad 51.9\%, JiT 52.1\%, Adversarial 51.5\%), and Random Labels collapses to 20.6\%, whereas Unlearned(-) loses 2 points (70\%). Remaining and forget accuracy follow the same pattern. On MIA, the picture is more nuanced: Adversarial (50.0\%) and JiT (49.1\%, 0.9 from the ideal) are closer to 50\% than Unlearned(-) (51.4\%, 1.4 from the ideal), and NegGrad and Random Labels (48\%, 47\%) are 2 and 3 points away. Thus our method is clearly best in utility and competitive, but not uniformly best, in the membership score; the baselines' MIA values are obtained at the price of a large utility loss.
+
+\input{tables/tab_baselines}
+
+\subsection{Mixed linear networks}
+\label{sec:mixed}
+\Cref{tab:mixed} reports ResNet-18 with linearized last layers on CIFAR-100. Unlearned(-) stays close to Unlearned(+): the logged gap between them is 0.1--0.5 points of test accuracy, 2.2--6.6 points of remaining accuracy, 0.0--3.7 points of forget accuracy, and 0.4--1.3 points of MIA across the three forget sizes. Note that the recorded gap rows of this table compare Unlearned(-) with Unlearned(+), not with Retrained. Relative to Retrained (derived), the test-accuracy gap is 0.9--2.2 points, the forget-accuracy gap 0.6--2.7 points, and the MIA gap 0.8--2.3 points. \noindent\textbf{Contrast with the linear classifier.} Mixed linear CIFAR-100 stays within about 1--2 points of Retrained in test accuracy at 15--20\% forgetting, whereas the CIFAR-10 linear classifier breaks down at 15\%. The two differ in dataset, model, and the number of free parameters, and each is a single run, so we cannot attribute the contrast to any one factor, and we do not claim that mixed linear networks tolerate larger forget sets in general. One anomaly deserves attention: at 20\% forgetting, the remaining accuracy of Unlearned(-) (70\%) is \emph{higher} than that of Retrained (65.7\%) and of Unlearned(+) (63.4\%); the records give no evidence on why, and we only note that the estimated Hessian does not reproduce the exact-Hessian result on this metric.
+
+\input{tables/tab_mixed_linear}
+
+\subsection{Ablations on CIFAR-10}
+\label{sec:ablations}
+All ablations use a linear classifier on CIFAR-10; \cref{tab:ablations} lists the metric in \% with the logged absolute gap to Retrained below each setting, and \cref{fig:gaps} plots the gaps.
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.95\linewidth]{figures/fig_ablation_gaps.pdf}
+  \caption{Gap to Retrained (percentage points) of Unlearned(-) on CIFAR-10 (linear classifier) against the forget-set size (left), the number of perturbations (middle), and the L2 parameter $\lambda$ (right), for the four metrics of \cref{sec:setup}. Single run per setting; the perturbation and $\lambda$ axes are categorical (three values each) and the forget-set size axis has three values. Values are the gaps logged in \cref{tab:ablations}.}
+  \label{fig:gaps}
+\end{figure*}
+
+\noindent\textbf{Forget-set size.} \Cref{tab:ablations} (top) shows that the gap grows with the forget fraction. At 5\% Unlearned(-) matches Retrained on all metrics; at 10\% the gaps are 2--4 points (1.4 for MIA); at 15\% they are 14--15 points of accuracy and 5.8 points of MIA, i.e.\ the unlearned model is far from the retrained one, with accuracy falling well below it on all splits. This is consistent with the expected growth of the error with $n_f$ (\cref{sec:hess}); the breakdown is sharp between 10\% and 15\%, and the three-point trend does not allow us to test the functional form. It is also the main limitation of the current method.
+
+\input{tables/tab_ablations}
+
+\noindent\textbf{Number of perturbations and regularization.} \Cref{tab:ablations} (middle) varies the number of perturbations $K$. With 250 perturbations the model is far from retraining (15--16 points of accuracy, 6.2 of MIA); 500 reduces the gap to 2--4 points; at 1000 the gaps are 0--1 points. More perturbations therefore improve the result in this experiment, consistent with a better Hessian estimate (we do not measure the Hessian error itself). \Cref{tab:ablations} (bottom) varies $\lambda$ (at $\lambda=0$ the lower bound $\lambda I$ in \cref{eq:sdp} is vacuous): larger $\lambda$ reduces the gap to 0--1 points of accuracy at $\lambda=0.001$, and the MIA gap is 0.2--0.9 points for the two non-zero values, compared with 1.4 at $\lambda=0$. The MIA gap is not monotone in $\lambda$ (0.2 at 0.0005, 0.9 at 0.001), but these differences are below the run-to-run variation suggested by the Retrained rows. The $\lambda=0$, $K=500$, and 10\% forget-set settings of \cref{tab:ablations} report identical values, i.e.\ they are the same default configuration rather than independent runs, which also means that the perturbation ablation was run at $\lambda=0$.
+
+
+%%%%%%%%% EXPERIMENTS %%%%%%%%%
+
+\section{Conclusion}
+\label{sec:conclusion}
+%%%%%%%%% CONCLUSION %%%%%%%%%
+We proposed a source-free unlearning method for linear and linearized models: a Newton step whose gradient term is computed from the forget set and the trained weights, and whose retain Hessian is estimated from Gaussian perturbations of the optimal weights through a semi-definite program, with no access to the retained data. With a linear classifier on ResNet-18 features and 10\% forgetting on CIFAR-10, the method stays within 2--4 points of retraining and 1.4 points of the ideal MIA score, while four source-free baselines lose about 20 to 51 points of test accuracy. On four datasets it tracks the variant that uses the exact Hessian, on mixed linear networks it stays within 0.1--0.5 points of test accuracy of that variant, and more perturbations and larger $\lambda$ reduce the gap to retraining.
+
+\noindent\textbf{Limitations.} (i)~The method degrades sharply when too much data is forgotten: at 15\% forgetting the gap to retraining reaches 14--15 points of accuracy on CIFAR-10 with a linear classifier. (ii)~The gap to Retrained on CIFAR-100, Stanford Dogs, and Caltech-256 is visible in \cref{fig:main}, and in the mixed linear setting it is 0.9--2.2 points of test accuracy. (iii)~Our evidence is single-run, at integer resolution for the ablations, with only $K$, $\lambda$, and the forget fraction varied; effects of one to two points cannot be separated from run-to-run variation. (iv)~Our MIA score is not the closest to 50\% among the compared methods (JiT and Adversarial are closer in \cref{tab:baselines}). (v)~The surrogate of \cref{eq:surrogate} rests on a Lipschitz smoothness assumption whose slack is not tight, the SDP is underdetermined for small $K$, and the theoretical dependencies are only tested qualitatively. (vi)~The approach is limited to models that are (or are linearized to be) quadratic in their parameters.
+
+\noindent\textbf{Future work.} Natural directions are tighter estimators that stay accurate for large forget sets, repeated runs with confidence intervals, tests of the predicted dependence on $n_f$, $K$, and $\lambda^2$ over finer grids, and extensions to non-quadratic losses and fully nonlinear networks.
+%%%%%%%%% CONCLUSION %%%%%%%%%
+
+{
+    \small
+    \bibliographystyle{ieeenat_fullname}
+    \bibliography{references}
+}
+
+%%%%%%%%% Appendix %%%%%%%%%
+% If you want to add appendix, uncomment the following lines:
+\appendix
+\section{Supplementary derivations and provenance}
+\label{sec:appendix}
+
+\subsection{Exactness of the Newton step}
+For a loss that is quadratic in $w$, $L(\cdot;\mathcal D_r)$ in \cref{eq:risk} is a quadratic function with constant Hessian $H_r$, so $L(w;\mathcal D_r)=L(w^*;\mathcal D_r)+\nabla L(w^*;\mathcal D_r)^\top(w-w^*)+\frac12(w-w^*)^\top H_r(w-w^*)$ for all $w$. For $\lambda>0$ (or $H_r$ otherwise invertible) the minimizer is $w^*_r=w^*-H_r^{-1}\nabla L(w^*;\mathcal D_r)$, which with \cref{eq:gf} is \cref{eq:newton}. For the first-order condition of \cref{eq:gf}, write $\sum_{z\in\mathcal D_r}\nabla\ell(w^*;z)=-\sum_{z\in\mathcal D_f}\nabla\ell(w^*;z)-n\lambda w^*$ and divide by $n_r$, then add $\lambda w^*$ from the regularizer of $L(\cdot;\mathcal D_r)$, which leaves $-\frac1{n_r}\big[\sum_{z\in\mathcal D_f}\nabla\ell(w^*;z)+(n-n_r)\lambda w^*\big]$ with $n-n_r=n_f$.
+
+\subsection{Error of the loss-change surrogate}
+Let $\Delta_k^{r}=L(w^*\!+\!\delta_k;\mathcal D_r)-L(w^*;\mathcal D_r)$ be the (unobservable) retain risk change. The regularizer contributes the same exactly known term $\frac\lambda2(\|w^*\!+\!\delta_k\|^2-\|w^*\|^2)$ to $\Delta_k^r$ and to $\hat\Delta_k$ in \cref{eq:surrogate}. The remaining data terms are averages over $\mathcal D_r$ and $\mathcal D_f$ of per-sample changes, each of absolute value at most $\Lambda\|\delta_k\|$ under the Lipschitz assumption of \cref{sec:hess}. Their difference is therefore at most $2\Lambda\|\delta_k\|$, and $|\Delta_k^r-\hat\Delta_k|\le2\Lambda\|\delta_k\|$. This is a bound on the residual of \cref{eq:sdp} for each perturbation; it is first order in $\|\delta_k\|$ and not tight relative to the second-order signal, and $\Lambda$ was not measured.
+
+\subsection{Provenance of the reported numbers}
+\Cref{tab:baselines,tab:mixed,tab:ablations} are transcribed from the corresponding tables of the experimental records (comparison against source-free baselines; mixed linear networks on CIFAR-100; effect of the forget-set size; effects of the number of perturbations and of $\lambda$). \Cref{fig:main} is the bar chart of the four datasets at 10\% forgetting provided with the records; its per-bar values are not tabulated, and we describe it qualitatively. The ``derived'' rows of \cref{tab:mixed} are differences of logged values.
+%%%%%%%%% Appendix %%%%%%%%%
+
+\end{document}
