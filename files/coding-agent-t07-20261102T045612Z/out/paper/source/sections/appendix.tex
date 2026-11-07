@@ -1,0 +1,52 @@
+\section{Proof of \cref{prop:unb} and variance estimate}
+\label{app:proof}
+Fix a target $t$ and drop the index. Let $S$ be a uniformly random $k$-subset of $[n]$ and let $(S_1,\dots,S_K)$ be a uniformly random ordered partition of $S$ into parts of fixed sizes $k_1,\dots,k_K$ (sizes depend on $k$ and $K$ only). Then $(T_j,S_j)$, with $T_j=S\setminus S_j$, is uniformly distributed over ordered pairs of disjoint subsets of sizes $(k-k_j,k_j)$. Conditional on $T_j$, hence, $S_j$ is a uniformly random $k_j$-subset of $C_j=[n]\setminus T_j$, $|C_j|=n-k+k_j$.
+The predictions $\hat p^{(-j)}_i$ are a deterministic function of $T_j$, the outcomes $y_{T_j}$ and the source matrix $X$ (nothing from $S_j$ enters the ability estimate, and $X$ is independent of the target's draw). Write $g_i=y_i-\hat p_i^{(-j)}$ for $i\in C_j$. Then
+\[
+\E\Big[\tfrac1{k_j}\sum_{i\in S_j}g_i\,\Big|\,T_j\Big]=\frac1{|C_j|}\sum_{i\in C_j}g_i,
+\]
+and therefore
+\[
+\E[\hat\theta^{(j)}\mid T_j]=\frac1n\Big[\sum_{i\in T_j}y_i+\sum_{i\in C_j}\hat p_i^{(-j)}+|C_j|\cdot\frac1{|C_j|}\sum_{i\in C_j}(y_i-\hat p_i^{(-j)})\Big]=\frac1n\sum_{i=1}^ny_i=\theta .
+\]
+Taking expectations over $T_j$ and averaging over $j$ gives $\E[\hat\theta^{\cf}]=\theta$. \hfill$\square$
+
+The proposition says nothing about variance: $\mathrm{Var}(\hat\theta^{\cf})\approx(1-k/n)\,s_r^2/k$ where $s_r^2$ is the item-level variance of the out-of-fold residuals $y_i-\hat p_i$, to be compared with $s_y^2/k$ for the mean. For binary outcomes $s_r^2\ge\overline{p(1-p)}$ (the Bernoulli noise given the true success probabilities), so gains saturate when the predictor is good. The Wald intervals in \cref{sec:results} use $\hat s_r$ and a finite-population correction.
+
+\section{Data}
+\label{app:data}
+Source: \url{https://github.com/socialfoundations/benchmark-prediction}, commit \texttt{55faff4}, files \texttt{data/scores/*.jbl} (and \texttt{*\_models.jbl} model lists for the Open LLM Leaderboard benchmarks), MIT licence; upstream sources are the Open LLM Leaderboard v2 and HELM. The pickles were converted to \texttt{.npz} with a restricted unpickler that only admits numpy/builtin types (\texttt{code/prep\_data.py}). Duplicate model names (which have identical rows) were removed (first occurrence kept).
+\begin{table}[h]
+\caption{Benchmarks after de-duplication. ``dup.-free models'' = models used; acc.\ = mean accuracy over models; range = min--max model accuracy; ``const.'' = share of items answered identically (all correct or all wrong) by every model.}
+\label{tab:data}
+\centering\footnotesize
+\begin{tabular}{lrrrrrr}
+\toprule
+Benchmark & rows & models & items & acc.\% & range \% & const.\\
+\midrule
+\input{../results/tables/datasets}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Implementation details}
+\label{app:impl}
+\textbf{IRT model.} $z_{ti}=\beta_i+\alpha_i^\top\vartheta_t$ with MAP fit by L-BFGS-B (300 iterations; analytic gradients) on the source matrix; priors $\vartheta_s\sim\mathcal N(0,I)$ and $\alpha_i,\beta_i\sim\mathcal N(0,1/0.5)$; initialisation from the SVD of the centred source matrix. The target ability is a Newton MAP estimate with a $\mathcal N(0,I)$ prior (8 steps, step clipping at 3). $d\in\{1,2,4,8\}$ is selected per split by the held-out log-loss on unobserved items of a random 25\% of the source models given 50 random observed items. gp-IRT's $\hat b^2$ follows the recipe of \citet{maiapolo2024tiny} (fit on 75\% of the sources, held-out source models observe a random half of the items, predict the other half, squared mean absolute error of the predicted accuracy) and $\hat\sigma^2$ is the mean of $\bar y_s(1-\bar y_s)$ over source models. Because $\hat b^2$ is estimated by an IID hold-out of source models, it is small (median $\hat b^2\approx5\times10^{-4}$ across splits, similar in all regimes), giving a median $\lambda\approx0.11$--$0.15$ at $k=50$: gp-IRT puts about 85--90\% of its weight on p-IRT, and under extrapolation this weight is not adapted to the actual bias. The selected latent dimension was $d=1,2,4,8$ in 31\%, 23\%, 30\%, 16\% of splits (larger $d$ on BBH and MMLU-Pro).
+\textbf{Anchors.} $k$-means (one initialisation, 50 iterations, scikit-learn) on a 50-dim SVD embedding of the (centred) item response vectors (exact SVD when $n<2000$, otherwise randomised); representative = item closest to the centroid; weight = cluster share. Anchor-IRT clusters $(\alpha_i,\beta_i)$.
+\textbf{D-optimal.} Greedy maximisation of $\log\det(I+\sum_{i\in S}w_i\alpha_i\alpha_i^\top)$ with $w_i$ the average of $p(1-p)$ over 60 source abilities (rank-one updates).
+\textbf{Ridge / kNN.} \texttt{RidgeCV} (11 penalties from $10^{-2}$ to $10^3$) from the $k$ outcomes to the full-benchmark accuracy of source models; $k$NN uses the 10 nearest source models in Hamming distance.
+\textbf{Recalibrated predictor.} Per-target logistic regression with offset $\beta_i$ and features $(1,\beta_i,\alpha_i)$, ridge penalties $(0.1,1,1)$, 10 Newton steps; used in p-IRT (same combination rule), CF and CF-EB0.
+\textbf{CF.} $K=5$ folds; for the empirical-Bayes step $v_t$ is the fold-corrected variance of the out-of-fold residuals divided by $k$; the \textsc{EB1} trend uses precision-weighted least squares of $\hat\delta_t$ on $\hat\theta^{\mathrm{plug}}_t$ when $T\ge6$.
+
+\section{Full results}
+\label{app:full}
+\cref{tab:relk_iid,tab:relk_up50,tab:relk_up75,tab:relk_fam} give the relative RMSE for all $k$ and all 29 (selector, estimator) combinations, \cref{tab:full_iid,tab:full_up50,tab:full_up75,tab:full_fam} give all metrics at $k=50$, and \cref{tab:spk} the Spearman correlation for all $k$.
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{../figs/fig_heatmap_k50.pdf}
+\caption{Per-benchmark RMSE ratios to Random+mean ($k=50$; mean over 30 splits). Blue: better than random.}
+\label{fig:heat}
+\end{figure}
+\input{sections/app_tables}
+
+\input{sections/app_ablation}

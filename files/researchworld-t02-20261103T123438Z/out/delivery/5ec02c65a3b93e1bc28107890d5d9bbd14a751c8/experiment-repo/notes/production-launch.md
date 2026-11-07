@@ -1,0 +1,7 @@
+# Registered production launch
+
+Actual launch recorded before fresh seeds: 2026-11-03T15:46:38.052725+00:00. Source checkout: 63fe448df810b1f68ef02d38d40a3a7218bbae31; trainer/config hashes are in the fixed deadline ledger. Main-plus-frozen84 runs begin first as two independent one-thread resource jobs. All204 configs remain mandatory. Approval and full attributed feasibility material were read from story-repo origin/main plan/launch-decision.md and notes/supplies/feasibility-v1.md with its cost audit; the frozen Research objective was re-read before launch. Missing idea Brief still holds novelty/context and final reporting, not this unchanged bounded experiment, by the prospective plan-owner settlement.
+
+No optional180k follow-up is approved. At first scheduled completion wake and before follow-on, reprice all remaining registered work plus reserve, reconcile actual statuses/CPU/wall/storage, and preserve44CPUh and the Nov6 experimental target. Scientific outcomes never select a stopped seed or omitted control. The quote helper now refuses to replace any existing ledger; an isolated regression confirms non-null launch, appended refs and all immutable fields are byte-preserved. Benchmark jobs reported by the activation were already delivered and were not repeated.
+
+At launch there are zero fresh measured outcomes. This note is a prospective execution record, not a research conclusion.

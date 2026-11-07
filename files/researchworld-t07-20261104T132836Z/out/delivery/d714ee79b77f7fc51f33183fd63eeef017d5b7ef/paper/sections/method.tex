@@ -1,0 +1,35 @@
+\section{Problem Setting and Methods}
+\label{sec:method}
+
+\paragraph{Setting.}
+A benchmark has $N$ items. We observe a binary matrix $X\in\{0,1\}^{S\times N}$ of correctness of $S$ \emph{source} models on every item.
+A \emph{target} model $t$ is evaluated on a coreset $I\subset[N]$ of $n\ll N$ items only, giving $y_{tj}$, $j\in I$; its full-benchmark score is $a_t=\frac1N\sum_{j=1}^N y_{tj}$.
+A method consists of a \emph{selection} rule that chooses $I$ from $X$ and a seed (never from target data) and a \emph{predictor} $\hat a_t$ of $a_t$ from $\{y_{tj}\}_{j\in I}$ and $X$.
+Quality is judged against the true $a_t$ of held-out target models: MAE, RMSE, bias, and Spearman and Kendall rank correlations across targets.
+Every method gets the same coreset size, source/target split and metrics. Hyperparameters are chosen on source models only.
+
+\subsection{Reference estimators}
+\label{sec:baselines}
+\textbf{Null} predicts every target by the mean source score and uses no target items; it shows how much of the task is prior knowledge about the source pool.
+\textbf{Random mean} averages $y_{tj}$ over a uniform random coreset, an unbiased estimator of $a_t$ with variance $\approx a_t(1-a_t)/n$ (up to the finite-population correction).
+Other baselines are \emph{difficulty-stratified} sampling, \emph{Anchor Points} (weighted)~\citep{vivek2024anchor}, linear \emph{calibration} of the subset mean to the full score learnt on the source models, \emph{ridge} regression of the target's coreset responses on the source models' responses, \emph{IRT} prediction with random and with information-selected (greedy D-optimal) items, anchor-selected IRT, and two forms of AIPW (Section~\ref{sec:mass}).
+The full list with the exact role of each (faithful re-implementation, simplified variant or ablation) is in Appendix~\ref{app:methods}.
+Three published approaches could not be reproduced faithfully with the supplied data and CPU budget and are \emph{not} run: the assessor of \citet{pacchiardi2024100} (needs item embeddings), the learned acquisition policy of \citet{li2025active}, and the GAM of metabench~\citep{kipnis2025metabench}; the information-selected IRT baseline is our own simplified variant and is named as such.
+
+\subsection{Model-assisted sampling and difference estimation (\mass)}
+\label{sec:mass}
+\paragraph{Predictor.}
+We fit a low-rank logistic latent-trait model on the source models, $\operatorname{logit}\Pr(y_{sj}=1)=r_s+c_j+u_s^\top v_j$ (rank $k$), by penalised maximum likelihood. Item parameters $(c_j,v_j)$ are then frozen and a target's trait $(r_t,u_t)$ is estimated by MAP from its coreset responses, giving $\hat p_{tj}$ for all $j\in[N]$.
+The default \textbf{\texttt{mass\_ens}} predictor averages these probabilities (rank $k=4$) with a kernel-weighted average of source models' responses, with weights $\propto\exp(-(d_s-\min_{s'}d_{s'})/\tau)$ where $d_s$ is the Hamming disagreement of source $s$ with the target on the coreset ($\tau=0.05$). The latent-only variant \textbf{\texttt{mass}} uses the first term alone.
+
+\paragraph{Design.}
+Items are ordered by estimated source difficulty $\bar p_j$ and sampled by systematic probability-proportional-to-size (PPS) sampling with inclusion probabilities $\pi_j\propto\sqrt{\overline{p_j(1-p_j)}}$, truncated at 1 and summing to $n$, where the bar denotes the average over source models. Ordering by difficulty acts as implicit stratification; the PPS weights allocate more of the coreset to items whose outcome is uncertain across source models (a Neyman-type allocation for the residual $y_{tj}-\hat p_{tj}$).
+
+\paragraph{Estimator.}
+With weights $w_j=1/\pi_j$ the estimator is the H\'ajek-form difference estimator
+\begin{equation}
+\hat a_t^{\mathrm{MASS}}=\frac1N\sum_{j=1}^N\hat p_{tj}+\frac{\sum_{j\in I}w_j\,(y_{tj}-\hat p_{tj})}{\sum_{j\in I}w_j}.
+\end{equation}
+This is the model-assisted estimator of survey sampling~\citep{sarndal1992model} with the latent-trait model as the assisting model. If $\hat p_{tj}$ did not depend on the sampled responses, the correction term would be design-consistent for the mean residual, so that the estimator would be (asymptotically) design-unbiased for $a_t$ whatever the quality of the predictor: a poor predictor then costs variance, not bias, which is the property relevant to extrapolation to stronger models. \emph{Here the predictor \emph{is} fit on the coreset responses, without cross-fitting, so this guarantee holds only approximately; whether the bias is negligible in practice is an empirical question that we test (bias under extrapolation, Section~\ref{sec:exp}).}
+The same construction with a uniform random coreset and no PPS is the textbook AIPW/prediction-powered mean (\texttt{aipw\_rand}); \texttt{mass\_sel} (design only), \texttt{mass\_ens\_nocorr} (design and predictor, no correction) and \texttt{ens\_rand\_nocorr} (predictor only) isolate the three components.
+\mass{} also reports a standard error from the H\'ajek linearisation (PPS-with-replacement approximation, no finite-population correction); its coverage is checked, not assumed.

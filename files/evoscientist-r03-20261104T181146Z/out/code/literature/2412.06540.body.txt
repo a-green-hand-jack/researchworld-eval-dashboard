@@ -1,0 +1,1073 @@
+
+=== PDF PAGE 1 ===
+
+
+Sloth: scaling laws for LLM skills to predict
+multi-benchmark performance across families
+
+Felipe Maia Polo
+1∗
+, Seamus Somerstep
+1
+Leshem Choshen
+2,3
+Yuekai Sun
+1
+Mikhail Yurochkin
+4
+1
+Department of Statistics, University of Michigan
+2
+MIT-IBM Watson AI Lab, IBM Research
+3
+Computer Science and Artificial Intelligence Laboratory, MIT
+4
+Institute of Foundation Models, MBZUAI
+Abstract
+Scaling laws for large language models (LLMs) predict model performance based
+on parameters like size and training data. However, differences in training config-
+urations and data processing across model families lead to significant variations
+in benchmark performance, making it difficult for a single scaling law to gener-
+alize across all LLMs. On the other hand, training family-specific scaling laws
+requires training models of varying sizes for every family. In this work, we
+propose Skills Scaling Laws (SSLaws, pronounced as
+Sloth
+), a novel scaling
+law that leverages publicly available benchmark data and assumes LLM perfor-
+mance is driven by low-dimensional latent skills, such as reasoning and instruction
+following. These latent skills are influenced by computational resources like
+model size and training tokens, but with varying efficiencies across model fam-
+ilies.
+Sloth
+exploits correlations across benchmarks to provide more accurate
+and interpretable predictions while alleviating the need to train multiple LLMs
+per family. We present both theoretical results on parameter identification and
+empirical evaluations on 12 prominent benchmarks, from Open LLM Leader-
+board v1/v2, demonstrating that
+Sloth
+predicts LLM performance accurately and
+offers insights into scaling behaviors for complex downstream tasks, increased
+test-time compute, and compute-optimal scaling of skills. Our code can be found
+on https://github.com/felipemaiapolo/sloth.
+1 Introduction
+Large Language Model (LLM) scaling laws for benchmarks and downstream tasks efficiently predict
+the performance of an LLM based on its parameter count and training set size. However, variations
+in training configurations and data processing across different model families often lead to significant
+differences in benchmark performance, even for models with comparable compute budgets [Ruan
+et al., 2024]. Consequently, a single scaling law typically fails to predict performance across all
+LLMs accurately [Choshen et al., 2024]. In contrast, creating family-specific scaling laws requires
+training multiple models of increasing size, which is resource-intensive.
+In this work, we propose a new class of scaling laws called
+Sloth
+to solve this dilemma. These
+scaling laws are fitted using publicly available data (e.g., from LLM leaderboards) across multiple
+benchmarks, leveraging information shared among benchmarks and model families to improve
+prediction power and interpretability through parameter efficiency, i.e., fewer parameters without
+hurting performance. Specifically, we utilize the correlations in benchmark scores to simplify the
+
+∗
+Email: felipemaiapolo@gmail.com. Part of this work was developed when Felipe interned at the MIT-IBM
+Watson AI Lab.
+39th Conference on Neural Information Processing Systems (NeurIPS 2025).
+
+arXiv:2412.06540v5  [cs.LG]  1 Dec 2025
+
+=== PDF PAGE 2 ===
+
+
+scaling law in terms of parameter count without harming prediction power by assuming that LLM
+performance is driven by a set of low-dimensional latent skills, such as reasoning and instruction
+following, which can be easily interpreted. Furthermore, we hypothesize that these latent skills
+are similarly influenced by computational resources, such as model size and training tokens, across
+different LLM families, with the key distinction being each family’s efficiency in converting compute
+into skill levels–which can be estimated with only one model per family. In summary, our main
+contributions are
+•
+Introducing a new class of scaling laws,
+Sloth
+, that borrows strength across the available bench-
+marks and LLM families to make more accurate and interpretable performance predictions of
+(hypothetical) LLMs in given benchmarks of interest. Specifically, we assume that benchmark
+performances directly depend on low-dimensional LLM skills, which are influenced by factors
+such as the number of training tokens and the number of parameters.
+•
+Providing a theoretical result regarding the identification of
+Sloth
+’s parameters and empirically
+demonstrating that our scaling laws can (i) accurately predict the performance of large models in
+12 prominent LLM benchmarks and (ii) provide interpretable insights into LLM skills and scaling
+behavior.
+•
+Demonstrating how predicted latent skills and our model can be used to (i) predict model perfor-
+mance in complex downstream tasks that involve coding and emotional intelligence, (ii) predict
+LLM behavior with scaled test-time compute, and (iii) derive optimal-scaling rules for skills.
+1.1 Related work
+Scaling laws for deep neural networks: In recent years, researchers have studied scaling laws
+from different angles. Rosenfeld et al. [2019] provides experimental scaling laws that predict
+model loss as a function of training set size, model width, and model depth. Likewise, Kaplan
+et al. [2020] establishes scaling laws that primarily measure loss (perplexity) and not accuracy on
+downstream tasks or benchmarks. Motivated by the presence of hard limits on the size of trainable
+data sets but a hypothetical unlimited ability to scale models, the authors of Muennighoff et al. [2023]
+establish scaling laws in constrained data settings. They find that perhaps unsurprisingly, increasing
+computing provides diminishing returns if data does not scale. Gadre et al. [2024] addresses the gap
+between the assumptions in scaling laws and how training is performed in practice; in particular, they
+construct scaling laws that both perform well in the over-training regime and predict performance on
+downstream tasks. In a similar but distinct direction, some works try not only to estimate scaling
+laws but also respond to the following strategic question: “Given a fixed FLOPs budget, how should
+one trade-off model size and the number of training tokens?” For example, Hoffmann et al. [2022]
+provides a partial answer, introducing the celebrated family of Chinchilla scaling laws and finding
+that training tokens and parameter size should roughly scale together. This contrasts with the older
+work of Kaplan et al. [2020] that provides a series of power laws that imply that simply increasing
+parameter count will provide good returns. Each of these referenced works trains models with a
+particular pretraining setting (e.g., architecture) at various sizes and ultimately seeks to predict test
+loss. Our focus is distinct, we fit scaling laws on existing benchmark data of multiple model families
+and predict LLM benchmark performance with minimal amount of data on the new family being
+predicted. Even though Allen-Zhu and Li [2024], study how LLMs can retain knowledge depending
+on their scale, the closest related works are Owen [2024], Ruan et al. [2024], Gadre et al. [2024]; we
+will provide a detailed comparison with their work throughout the paper.
+LLMs latent skills: Given that the performance of large language models (LLMs) in different
+and diverse benchmarks is correlated, it makes sense to think that those models have some low-
+dimensional latent skills that are reflected in downstream tasks. In this direction, Ili
+´
+c [2023] extracts
+a general intelligence factor (“g-factor”) for LLMs using the Open LLM Leaderboard [Beeching
+et al., 2023] and GLUE [Wang et al., 2018] using factor analysis. They also verify that this “g-factor”
+positively correlates with model size. In a similar direction Burnell et al. [2023] uses HELM [Liang
+et al., 2022] data to reveal that LLM intelligence may be constituted by three distinct, yet correlated
+factors. They also verify a positive correlation between model size and these latent skills, yet they do
+not propose a formal scaling law. In their study, the authors do not account for the training set size or
+model family information, leading to a poor fit of the regression model; this leaves good extrapolation
+as an open problem we address. In Kipnis et al. [2024], a unidimensional item response theory model
+is applied to each one of the 6 (filtered) benchmarks of the Open LLM Leaderboard. A factor analysis
+on the skill parameters shows that the main factor (carrying 80% of the data variability) is highly
+correlated with the “grand” (average) score of LLMs. In a related but different direction, Maia Polo
+et al. [2024a,b] show that inferring low-dimensional latent skills of LLMs can make model evaluation
+2
+
+=== PDF PAGE 3 ===
+
+
+much more efficient, saving up to 140x in computing power. In this work, we explicitly model LLM
+skills as a function of computing resources, which enables the creation of accurate and interpretable
+scaling laws for benchmark performances.
+2 Scaling laws for benchmark data
+2.1 Problem Statement
+In this section, we describe the setup we work on and what our objectives are. Within a family of
+LLMs
+i
+(e.g., LLaMA 3), our objective is to estimate the performance of a big LLM, e.g., with 70
+billion parameters, in a benchmark
+j
+, e.g., MMLU, given evaluation data from smaller models in
+the same family. Let
+s
+represent the size of the LLM, defined as the number of parameters, and let
+t
+denote the number of training tokens. We define
+Y
+ij
+(s, t) ∈ [0, 1]
+as the score of an LLM from
+family i, with size s and trained on t tokens, on benchmark j. Our goal is to approximate:
+µ
+ij
+(s, t) = m[Y
+ij
+(s, t)]. (2.1)
+Here,
+m[·]
+should be interpreted as a central tendency summary measure of a random variable, such
+as the mean or median
+2
+. Ideally, the model for
+µ
+ij
+will be simple and some of its parameters will be
+shared among model families and benchmarks; in this case, the model becomes more interpretable
+and more data can be used in the fitting process, making the model better estimated. From now on, we
+denote the set of model families as I = {1, · · · , I} and the set of benchmarks as J = {1, · · · , J}.
+2.2 Previous approaches to scaling laws for benchmarks
+The closest works to ours that propose models for
+µ
+ij
+(s, t) (2.1)
+are Owen [2024], Ruan et al. [2024],
+and Gadre et al. [2024]. While Gadre et al. [2024] indirectly model the quantity of interest via the
+LLMs perplexity in specific datasets, which might not be readily available, Owen [2024] and Ruan
+et al. [2024] model
+µ
+ij
+(s, t)
+directly through a regression model connecting compute and benchmark
+performance. One assumption they made is that the performance on benchmarks only depends on s
+and
+t
+through the total amount of training FLOPs, which can be approximated by
+c(s, t) = 6st
+. That
+is, if
+σ : R → [0, 1]
+denotes a fixed activation function, e.g., the standard logistic (sigmoid) function,
+and γ
+j
+∈ [0, 1], then it is assumed that
+µ
+ij
+(s, t) = γ
+j
++ (1 − γ
+j
+)σ(η
+ij
+(s, t)), (2.2)
+where
+η
+ij
+: R
+2
+→ R
+denotes a linear predictor such that
+η
+ij
+(s, t) = α
+ij
++ β
+ij
+log c(s, t)
+, which can
+be easily interpreted. Here,
+γ
+j
+adjusts the lower asymptote of
+µ
+ij
+and accounts for the probability of
+LLMs scoring correctly by chance. Owen [2024], in their best performing models, considers the case
+in which
+γ
+j
+= 0
+(or adds a similar offset parameter to the model) and the parameters
+α
+ij
+and
+β
+ij
+are
+independent of the model family
+i
+. On the other hand, Ruan et al. [2024] consider both
+α
+ij
+and
+β
+ij
+to be family-dependent and, in their most general model, γ
+j
+can assume values in [0, 1].
+The biggest issue with previous approaches when modeling
+µ
+ij
+is that they are either too restrictive
+or too flexible. From the restrictive side, they assume that (i)
+µ
+ij
+depends on
+s
+and
+t
+only through
+FLOPs, (ii) there are no family-dependent parameters, or (iii) the activation function
+σ
+is fixed and
+well-specified. From the flexibility side, Ruan et al. [2024] assume both
+α
+ij
+and
+β
+ij
+to be family
+dependent making estimation hard (or impossible) depending on the number of models we see for
+each family. From Ruan et al. [2024]: “(...) fitting such a scaling law can be tricky, as each model
+family
+f
+and downstream benchmark has its own scaling coefficients
+β
+f
+and
+α
+f
+. This means that
+scaling experiments, especially for post-training analysis, are often fitted on very few (3-5) models
+sharing the same model family (...).” Thus, in their experiments, they consider a different problem
+setting, where a large LLM has been trained and evaluated on some benchmarks and use their method
+to predict its performance on other benchmarks.
+At the end of the day, Owen [2024] and Ruan et al. [2024] end up working in different setups: Owen
+[2024] does not use family information at prediction time, making their scaling law less accurate
+but more generalizable, and Ruan et al. [2024] assume families are important at prediction time but
+consider that the target model has already been trained, making their scaling law less applicable in
+practice and more interesting from an interpretability point of view. In this work we wish to instead
+predict the performance of a larger LLM without having to train it but taking family information into
+
+2
+Because we minimize the Huber loss in this paper, we aim to approximate the median
+3
+
+=== PDF PAGE 4 ===
+
+
+account, thus allowing practitioners to make decisions regarding investing resources into training
+large LLMs. Moreover, our formulation also allows interpretable insights from the data. Despite
+different setups, we make comparisons with Owen [2024] and Ruan et al. [2024] throughout this
+work by considering their applications/adaptations as baselines.
+3 Scaling laws for LLMs skills with Sloth
+3.1 Model architecture
+We present a novel scaling law called
+Sloth
+, which introduces several modifications to
+(2.2)
+. The
+key innovation of
+Sloth
+lies in its explicit modeling of the correlation structure between benchmarks,
+resulting in improved predictive accuracy and interpretability. Moreover,
+Sloth
+proposes that (i)
+LLM capabilities should scale with computing resources similarly across families up to an efficiency
+factor, (ii) benchmark performance can depend on
+s
+and
+t
+not only through the total number of
+FLOPs, and (iii) that the function
+σ
+can also be learned in cases in which predictive performance is
+important. We detail these points.
+Inspired by the latent skills (e.g., reasoning, language modeling, instruction following) inferred from
+benchmark data in Burnell et al. [2023], Ili
+´
+c [2023], Ruan et al. [2024], Gor et al., Kipnis et al.
+[2024], Maia Polo et al. [2024a,b], we propose creating a scaling law for LLMs skills by leveraging
+the correlation structure of the benchmarks; for example, we model how the construct “reasoning”
+scales with compute instead of modeling benchmarks scores directly. The two major advantages
+of this approach are better performance prediction since we have fewer parameters to fit (reducing
+overfitting) and extra interpretability/insights. Concretely, we model
+η
+ij
+(s, t)
+’s simultaneously for
+benchmarks
+j ∈ J
+as each being a linear combination of the same low-dimensional latent skills
+θ
+i
+(s, t) ∈ R
+d
+plus a bias term
+b ∈ R
+J
+, where
+d ≪ J = |J |
+. Denote
+η
+i
+(s, t) ∈ R
+J
+as the vector of
+{η
+ij
+(s, t)}
+j∈J
+. Mathematically, we have
+η
+i
+(s, t) = Λθ
+i
+(s, t) + b. (3.1)
+One can see that
+Λ ∈ R
+J×d
+encodes the correlation structure between the benchmarks; in particular,
+it tells us which benchmark measures overlapping (or distinct) skills. Interestingly, our model has a
+strong connection with factor analysis (FA) models, which we elaborate on in detail in Appendix C.
+In FA, the matrix Λ is known as factor loadings while θ
+i
+(s, t) are known as factors.
+Next, we propose a model for
+θ
+i
+(s, t)
+. Inspired by models used in Economics, we use the family of
+translog production functions from stochastic frontier analysis [Kumbhakar and Lovell, 2003]:
+θ
+ik
+(s, t) = α
+ik
++ β
+⊤
+k
+x(s, t); 1 ≤ k ≤ d, (3.2)
+x(s, t) = (log(s), log(t), log(s) log(t)) .
+Note that (i) the intercept parameter
+α
+ik
+is indeed family-dependent while each skill slope is shared
+across families and (ii)
+θ
+i
+can depend on
+s
+and
+t
+not only through
+c(s, t)
+. In economic terms, the
+intercept term
+α
+ik
+can be interpreted as an efficiency measure of the family
+i
+in converting compute
+to performance for skill k and, in practice, will absorb all hidden factors specific to family i such as
+data quality, post-training factors, etc.. We note that the interaction term in (
+log(s) log(t)
+) accounts
+for the fact that the impact of
+log(s)
+and
+log(t)
+on skills might depend on each other; in Appendix D,
+we show some evidence that this is indeed the case. Additionally to the changes in
+η
+ij
+, we propose
+making the activation function
+σ
+trainable and specific to each benchmark
+j
+if needed. To that end,
+we adopt a semi-parametric single-index model using neural networks [Bietti et al., 2022]. To make
+the results more behaved if (out-of-support) generalization is needed, we assume
+σ
+j
+: R → [0, 1]
+is
+given by a monotonic (increasing) neural network, which can be achieved by constraining its weights
+to be non-negative [Sill, 1997] and its last activation function to be sigmoid. We note, however,
+that one can always forgo training of the link function and instead assume a sigmoid structure as
+this simplifies model fitting and may make the model more interpretable. We give more details
+about model fitting in Section 3.2. Since
+Sloth
+is a simple neural network, both model fitting and
+prediction are done within seconds by a commercial laptop.
+4
+
+=== PDF PAGE 5 ===
+
+
+3.2 Model fitting
+Assume that for each model family
+i
+we observe a set of tuples
+(s, t)
+’s denominated by
+E
+i
+. Then, we
+fit the model by solving the following minimization problem
+(ˆγ, ˆσ,
+ˆ
+b,
+ˆ
+Λ, ˆα,
+ˆ
+β) = arg min
+γ
+j
+∈[0,1], for j∈J
+σ
+j
+:R→[0,1] increasing , for j∈J
+b
+j
+∈R, for j∈J ;Λ∈R
+J×d
+α
+ik
+∈R, for i∈I and 1≤k≤d
+β
+k
+∈R
+3
+, for 1≤k≤d
+X
+i∈I
+X
+(s,t)∈E
+i
+X
+j∈J
+ℓ
+δ
+(µ
+ij
+(s, t), Y
+ij
+)
+where
+ℓ
+δ
+is given by the Huber loss with hyperparameter
+δ = .01
+and
+µ
+ij
+(s, t)
+denotes the most
+general version of our model. We minimize the loss function via gradient descent using the Adam
+optimizer [Kingma and Ba, 2017] with a decaying learning rate. We parameterize
+γ
+j
+using the
+sigmoid transformation to guarantee the constraints are satisfied. Similarly, we truncate the weights of
+the two-hidden-layer neural network
+σ
+j
+to ensure the trainable function is increasing. If one desires,
+σ
+j
+’s can be set to fixed functions, e.g., sigmoid, and
+γ
+j
+’s can be fixed beforehand. Unfortunately, the
+minimization problem is not convex as expected when fitting factor-analysis-like models; multiple
+initializations of the optimizer can be applied to guarantee a better fit.
+3.3 Interpretability and practical considerations post model fitting
+Ideally, to make reasonable interpretations of models like
+Sloth
+, we need its parameters to be identi-
+fiable, i.e., the map connecting
+η
+ij
+(s, t)
+’s and model parameters should be bijective. Unfortunately,
+as in all exploratory factor models, this is not the case. However, we theoretically show in Appendix
+A that the model parameters are identifiable up to some parameter transformations. This observation
+allows us to find a configuration that makes the model more interpretable by mirroring a standard
+approach used in factor analysis, e.g., in Chen et al. [2019]’s applications. The main idea is that we
+fit
+Sloth
+without any constraints and then find a configuration of skills (using factor rotation) that
+makes results interpretable. We detail the applied process in Appendix A.1.
+4 Sloth in practice
+In this section, we present experimental results that provide evidence of the usefulness of
+Sloth
+. We
+perform experiments on a set of twelve benchmarks and state-of-the-art LLM families, including
+LLaMa 3 [Dubey et al., 2024], Qwen 2 [Yang et al., 2024], and Yi 1.5 [Young et al., 2024]. We
+explore the following applications: (i) benchmark performance prediction for larger models from
+a specific LLM family, (ii) interpretability of the scaling of skills (can help practitioners allocate
+resources based on the skills of interest), and (iii) downstream tasks performance prediction.
+4.1 Data
+We expand the dataset made available by Ruan et al. [2024], including more models from the
+HuggingFace Open LLM leaderboard v1 [Beeching et al., 2023] and v2 [Fourrier et al., 2024]. In our
+extended dataset, we have a total of 30 families
+3
+, which 28 are on v1 of the Open LLM Leaderboard
+and 17 families measured on v2 of the Open LLM Leaderboard. Furthermore, there are 15 families
+at the intersection of the two versions. Furthermore, we collect data and present results on the
+performance of a variety of instruction-tuned versions of the base models we consider. As far as we
+are aware, our dataset is the most comprehensive among prior works on benchmark data scaling laws.
+Please check Appendix G for details on the included models.
+4.2 Comparing scaling laws in terms of prediction errors
+In this section, we compare the predictive power of different scaling laws in predicting LLM
+performance in all the considered benchmarks; we focus on the two versions of the Open LLM
+Leaderboard, which include 12 benchmarks: GSM8k [Cobbe et al., 2021], MATH Lvl 5 [Hendrycks
+et al., 2021], MMLU [Hendrycks et al., 2020], MMLU-PRO [Wang et al., 2024], BBH [Suzgun
+et al., 2022], GPQA [Rein et al., 2023], MUSR [Sprague et al., 2023], TruthfulQA [Lin et al., 2021],
+HellaSwag [Zellers et al., 2019], Winogrande [Sakaguchi et al., 2019], ARC [Clark et al., 2018],
+and IFEval [Zhou et al., 2023]. We apply a leave-one-out cross-validation algorithm to obtain test
+errors for each family of models. We consider base models and instruct models to belong to distinct
+
+3
+If we consider that instruct and base models are from different families, we end up with 53 families.
+5
+
+=== PDF PAGE 6 ===
+
+
+Figure 1: The figure shows the average (across LLM families) mean-absolute-error (MAE) (within a family)
+for different methods.
+Sloth
+performs competitively, with errors similar to or lower than the “Size and Tokens”
+variant, indicating its effective inductive bias.
+families (they will not share the same intercept in our model, for example), but we do not include the
+instruct (resp. base) family in the training set when the corresponding base (resp. instruct) family is
+in the test set. Moreover, we do not test older versions of recent families if they are available in the
+training set, e.g., we do not include LLaMa 2 in the set of test families if LLaMa 3 is present in the
+training set. In this section, we present results for the two leaderboards separately; in Figures 12 and
+17 of the Appendix, we also present results for the intersection of the two leaderboards.
+In the first set of experiments, we consider the case in which only the smallest model of the test
+family is observed at training time. Because of that reason, we cannot fit the general scaling law in
+(2.2)
+in which both the intercept and slope are family dependent. In this scenario, we consider our
+main baselines to be (i) the model in
+(2.2)
+with shared intercept and slope [Owen, 2024] (“FLOPs
+(shared intercept)”), (ii) the same model but only with shared slope (“FLOPs”), (iii) a version of the
+PCA idea
+4
+proposed by Ruan et al. [2024] in which we predict the principal components using the
+FLOPs model with shared slope that are then mapped to the benchmark scores (“PCA + FLOPs”),
+(iv) and our model with trainable activation function but assuming
+Λ
+is identity (“Size and Tokens”;
+implies
+d = J
+). Moreover, we include two versions of
+Sloth
+. In the “basic” one, we fix
+σ
+to be
+sigmoid, and
+γ
+j
+’s are given by the
+100%
+over the number of alternatives in the case of multiple-choice
+benchmarks
+5
+and 0 otherwise, except for TruthfulQA, which we compute the first percentile of the
+scores coming from the full Open LLM Leaderboard and fix the lower asymptote to that value. In
+previous sections, we mentioned that
+Sloth
+is parameter efficient; we include a parameter count
+analysis in Appendix F where we compare our model with other well-performing baselines.
+
+4
+We include more details about this approach in Appendix E.
+5
+When the benchmark has subsections with a different number of alternatives, we compute the asymptote
+parameters per subsection and then compute an overall asymptote using a weighted average in which the weights
+are proportional to the number of examples in each subsection.
+6
+
+=== PDF PAGE 7 ===
+
+
+Figure 2: Needed skills for each benchmark. In this figure, we report the estimated loadings
+Λ
+and, based on
+their values, we give them appropriate names.
+
+Figure 4: In this figure, we plot the skill levels (output) subtracted by the family-specific intercept terms against
+inputs in the x and y-axis. From these plots, we can see how each one of the inputs can differently affect the
+production of skills. For example, “Reasoning” showed to be more affected by model size than tokens when
+compared to other skills. Moreover, “Knowledge” is more influenced by inputs (level curves are steeper) in
+general, while the other skills should be more sensitive to other family-dependent factors.
+
+Figure 3: Running
+Sloth
+with shared
+intercept can offer a great way to
+model scaling laws that are family-
+independent.
+Figure 1 gives the results for the first set of experiments. It
+depicts the average mean absolute error of all methods when
+predicting LLM benchmark performance, which is measured
+in percentage points. It shows the competitiveness of
+Sloth
+in
+terms of prediction quality. One important thing to notice is that
+Sloth
+errors are similar or lower than the “Size and Tokens”
+variant, suggesting that the assumed low-dimensional structure
+between benchmarks results is a good inductive bias. We high-
+light that the analysis includes recent families like LLaMa 3,
+Qwen 2, and Yi 1.5. For more details on the tested models and
+extra related results, including model-specific results, please
+check Appendix H.2. The extra results are qualitatively similar
+to the ones in Figure 1, in which
+Sloth
+often beats the baselines. In a second set of experiments, we
+consider the case in which the two smallest models of the test family are observed at training time.
+In this way, we can fit
+(2.2)
+making both parameters family dependent. The results are qualitatively
+similar to the one presented on Figure 1 and are presented in Appendix H.3. Moreover, we include
+Figure 10 in the appendix, which is a version of Figure 1 in which Mean Absolute Percentage Error
+(MAPE) is used instead of MAE; results are qualitatively similar.
+In an extra set of experiments, we show that family-specific intercept models are not always needed;
+we can still get good prediction results for some benchmarks even if we consider a shared intercept
+between families. The advantage of this approach is that we can claim for a general scaling law that
+holds for all families. Figure 3 shows us a subset
+6
+of Figure 12 in the appendix and it is built under
+the same conditions as Figure 1. It is possible to see that, for a subset of benchmarks
+Sloth
+with
+shared intercept is a strong alternative to the FLOPs model used by Owen [2024]. In some cases, it
+gets similar prediction errors relative to more complete versions of Sloth.
+
+6
+We selected the best d for both versions of Sloth.
+7
+
+=== PDF PAGE 8 ===
+
+
+Figure 5: We compare the skills of base (x-axis) and instruction-tuned models (y-axis); if a model lies on the
+45-degree line, it means that the model has the same skill level in its base and instruct versions. Gains from
+instruction tuning (IT) for different families on three latent skills. Findings include a large and positive impact
+on “Instruction Following” and that provides much larger variations in this skill when compared to inputs seen in
+Figure 4. Moreover, IT had a moderate and negative effect on “Reasoning” and mixed effects on “Knowledge”.
+4.3 Interpreting the latent skills
+In this section, we use the intersection between the two leaderboards, aiming to get more insights
+from the combined data. Since we have an identifiability result for the “basic” version of
+Sloth
+,
+in which we fix the lower asymptotes
+γ
+j
+’s and the link function to be sigmoid (see Section A), we
+opt for interpreting that version of the model. We set
+d = 3
+as that model version achieved the best
+prediction results in Figure 12. Figure 2 illustrates the model loadings,
+Λ
+, from which we assign
+names to the three dimensions based on our subjective interpretation. We include the loadings for
+d = 2
+and
+d = 4
+in Appendix I. To complement our exploration, we include Figure 4, which gives
+us the level curves of different skills (disregarding the family-specific intercept term), and Figure
+5 in the appendix that compares the skills of base and instruction-tuned models; in this figure, we
+include LLM families with more number of models. In both figures, the numbers are given in terms of
+standard deviations as the skills are standardized to have a zero mean and unitary standard deviation.
+Reasoning skill: The first dimension, with strong loadings from benchmarks such as GSM8K,
+MATH, GPQA, MMLU(-PRO), BBH, and MUSR, is labeled “Reasoning.” The benchmarks GSM8k
+and MATH Lvl 5 consist entirely of mathematical word problems while MMLU/MMLU-PRO and
+GPQA also contain mathematical and advanced science questions. On the other hand, BBH includes
+logic deduction and linguistic reasoning puzzles. The strong dependence of BBH on the “Reasoning”
+skill suggests that in language models, there is an association between logical reasoning, general
+linguistic ability, and mathematical ability. Finally, MuSR is a benchmark that evaluates “multistep
+soft reasoning tasks specified in a natural language narrative” [Sprague et al., 2023]. Figure 4 shows
+that Reasoning is primarily a function of model size, with a small dependence on the number of
+training tokens used. Moreover, the first plot of Figure 5 in the appendix compares base models
+versus their instruction-tuned versions in terms of Reasoning, and we found that there is no clear rule:
+instruction tuning can either increase or decrease the ability of an LLM to reason. These findings are
+robust for different values of d as we can see in the figures of Appendix I.
+Knowledge skill: The second dimension is positively loaded on ARC, HellaSwag, and Wino-
+grande. These three benchmarks measure the ability of LLMs to remember common sense and basic
+knowledge; we denominate this skill as “Knowledge”. More specifically, ARC consists of grade
+school-level science questions, HellaSwag is meant for sentence completion for common scenarios,
+and Winogrande common sense pronoun resolution problems. Contrasting with Reasoning, Figure
+4 shows that Knowledge is highly influenced by both model size and number of training tokens.
+Moreover, we can see that the range of standard deviations in the middle plot is much greater than in
+the other two plots, giving us evidence that this skill might be more sensitive to increases in compute
+resources and less dependent on the LLM families themselves. On the other hand, Figure 5 in the
+appendix does not show any strong evidence of the effect of instruction tuning on this skill. These
+findings are similar to the ones reported in Appendix I for different values of d.
+Instruction following skill: IFEval, which is positively and heavily loaded in this skill, measures
+how well language models produce answers that follow a verifiable set of instructions; for example,
+including a keyword
+x
+number of times in responses. Therefore, we call it “Instruction Following”.
+An interesting fact is that instruction tuning has a strong positive effect on this skill for all depicted
+families we can see in Figure 5 in the appendix. The effect can also be observed in Figure 28 of the
+appendix. When
+d = 2
+, instruction following gets mixed with other skills and we are not able to see
+8
+
+=== PDF PAGE 9 ===
+
+
+this effect. Regarding Figure 4, we see that Instruction Following depends on both model size and
+tokens. Unfortunately, this interpretation does not hold when d = 4 as seen in Appendix I.
+4.4 Predicting LLM performance on downstream tasks
+Another useful application of
+Sloth
+, which is inspired by Ruan et al. [2024], is to pre-
+dict the performance in a downstream task for a large model from a relatively small num-
+ber of prior performance observations from that task. We use
+Sloth
+to estimate the la-
+tent skills of hypothetical LLMs and then use them to predict the performance of those
+LLMs in downstream tasks. With this approach, we expand on the experiments of
+Ruan et al. [2024], which do not consider performance prediction of hypothetical LLMs.
+
+Figure 6: Predicting model per-
+formance in complex downstream
+tasks like code completion (“HE”) for
+LLaMa 3 70B (base/instruct). In the
+first step, we fit
+Sloth
+without in-
+cluding LLaMa 3 70B (base/instruct)
+in the training set. In the second
+step, we fit a regression model con-
+necting skills and downstream perfor-
+mance. Finally, we predict LLaMa 3
+70B (base/instruct) performance from
+their predicted Sloth skills.
+The basic prediction pipeline is as follows. First, use standard
+LLM leaderboards to fit a scaling law for skills using
+Sloth
+.
+Second, use existing LLM performance on the downstream task
+to model how performance can be predicted from latent skills.
+Third, use
+Sloth
+to predict the skills of a (hypothetical) LLM
+of interest, e.g., a larger version of an existing LLM. Finally, use
+the model fitted in the second step to predict the performance
+of the hypothetical model in the downstream task.
+We evaluate this pipeline on two downstream tasks,
+predicting the performance of
+meta-llama-3-70B
+and
+meta-llama-3-70B-instruct
+on code comple-
+tion and
+meta-llama-3-70B-instruct
+on emotional
+intelligence tasks. We fit the same model shown in
+Section 4.3, but do not include
+meta-llama-3-70B
+or
+meta-llama-3-70B-instruct
+in the training set (see Figure
+32 for the loadings of the latent skills, which is similar to
+Figure 2). Next, using either HumanEval [Chen et al., 2021]
+or EQ bench data [Paech, 2024], we fit a regression model with
+logistic link using latent skills as features and performance
+on the downstream task as target. Together, this provides us
+with sufficient information to predict the performance of the
+held-out models on both tasks with decent accuracy. Figure 6
+depicts this logistic curve and the actual values for HumanEval;
+EQ bench results can be found in Appendix J. Moreover, we can see that “Reasoning” is by far the
+most important skill in predicting coding ability while a mixture of “Reasoning” and “Knowledge” is
+needed for emotional intelligence (see Figure 32 for a more accurate interpretation of the loadings).
+In Appendix J, a similar test is provided for agentic capability measured by AgentBench [Liu et al.,
+2023], although to avoid overfitting, in this case, we must fit
+Sloth
+with no family-specific intercept.
+4.5 Predicting performance behavior with scaled inference compute
+In this section, we demonstrate how our method,
+Sloth
+, combined with concepts like Item Response
+Theory (IRT) [Reckase, 2009], can predict how the performance of an LLM scales with increased
+inference through repeated sampling [Brown et al., 2024]. For this experiment, we utilize the MATH
+dataset [Hendrycks et al., 2021], made available by Brown et al. [2024], which evaluates 10 LLMs
+also included in our dataset. These models are part of the LLaMa 3 Instruct, Gemma, and Pythia
+families. The process is:
+1.
+Train
+Sloth
+on our full dataset of 12 benchmarks, excluding the largest models in the LLaMa 3
+Instruct, Gemma, and Pythia families.
+2.
+Fit a logistic regression model for each MATH question in Brown et al. [2024]’s data, using the
+skills
+θ
+i
+(s, t)
+of the 7 training LLMs as covariates to predict the probability of correctly solving
+those problems.
+3.
+Estimate the skills for the three test models using our scaling law, then predict their probabilities of
+answering each MATH question correctly via the logistic regressions, and then predict the pass@
+k
+metrics for the 3 test models using those probabilities. The predicted pass@
+k
+metric for a certain
+LLM is given by the average of
+1 − (1 − ˆp
+j
+)
+k
+’s (across
+j
+’s) if
+ˆp
+j
+is the predicted probability of
+the LLM of interest getting question j correct.
+9
+
+=== PDF PAGE 10 ===
+
+
+Figure 7 illustrates that
+Sloth
+can accurately predict test-time scaling behavior for these models.
+Note that unlike scaling law in Brown et al. [2024],
+Sloth
+can predict inference compute gains
+for hypothetical LLMs before committing resources to training them. This highlights a practical
+application where practitioners can estimate the potential performance of a hypothetical model at test
+time, given a computational budget.
+4.6 Compute-optimal scaling of skills
+
+Figure 7:
+Sloth
+can accurately
+predict test-time scaling behavior for
+LLaMa 3 Instruct, Gemma, and Pythia
+models for MATH performance when
+coupled with Item Response Theory.
+One relevant question is: given a certain budget in FLOPs, how
+do we invest it to maximize one skill of interest? This type
+of analysis is novel for skills and it has only been carried out
+for validation loss (e.g., by Kaplan et al. [2020], Hoffmann
+et al. [2022]). A summary of the mathematical formulation of
+this question is given in the following and exposed in detail in
+Appendix B. For each model family i and skill k, we have
+θ
+ik
+(s, t) = α
+ik
++ β
+k0
+log(s) + β
+k1
+log(t) + β
+k2
+log(s) log(t).
+Define
+u = log(s)
+,
+v = log(t)
+, and
+l = log(c) − log(6)
+. For
+simplicity, here we consider a simple, but widely used [Kaplan
+et al., 2020, Hoffmann et al., 2022], compute budget constraint
+6st = c
+, which is equivalent to
+u + v = l
+. We add extra
+constraints on
+u
+and
+v
+based on the training data support to
+avoid unreasonable out-of-support predictions. We optimize
+max
+u,v
+α
+ik
++ β
+k0
+u + β
+k1
+v + β
+k2
+uv subject to u + v = l, u ∈ [u
+
+,
+
+u], v ∈ [v
+
+,
+
+v].
+Substituting
+v = l − u
+reduces this to a quadratic function
+g
+ik
+(u)
+, whose maximizer, within the
+observed range
+U = [max(l −
+
+v, u
+
+), min(l − v
+
+,
+
+u)]
+, determines the optimal allocation. Our analysis
+indicates that the optimal values for
+s
+and
+t
+do not depend on the model family. Table 1 reports our
+results for instruction following; a table with results for the other two skills is shown in Appendix B.
+5 Conclusion
+
+FLOPs (1e19)
+
+Instruction Following
+
+Params (B) Tokens (T)
+
+100
+
+0.16 1.04
+578
+
+0.30 3.24
+3346
+
+0.72 7.78
+19360
+
+2.15 15.0
+112005
+
+12.44 15.0
+648000
+
+72.0 15.0
+
+Table 1: Optimal parameter and token allocation.
+In conclusion, we have introduced the
+Sloth
+scaling laws as a novel approach to predicting
+the performance of large language models across
+benchmarks and model families. By leveraging
+the correlations between benchmark scores and
+assuming that LLM performance is governed
+by a set of interpretable, low-dimensional latent
+skills, our approach offers a more efficient and
+flexible framework for understanding and pre-
+dicting LLM behavior. The ability to estimate
+model performance across a variety of bench-
+marks and tasks, even with minimal data from individual model families, highlights the practical
+utility of
+Sloth
+scaling laws. Our empirical results demonstrate that
+Sloth
+can accurately predict
+the performance of LLMs across multiple benchmarks while providing insights into the relationship
+between computational resources and model capabilities.
+Limitations. From the predictive side of
+Sloth
+, we believe that the main limitation is that the model
+is still dependent, most of the time, on seeing data from at least one LLM from the LLM family
+of interest. Moreover, we train the link function in the best version of
+Sloth
+using flexible neural
+networks, which can interpolate data very well, but have no guarantee of extrapolation when the
+(hypothetical) LLM of interest is very different from others in the training set. From the interpretability
+side, we only understand the identification problems, such as transformations in the latent space, that
+can arise in a simple instance of
+Sloth
+: fixed activation function
+σ
+and
+γ
+j
+’s. This fact limits our
+understanding and interpretability of the most advanced versions of the model.
+6 Acknowledgements
+This paper is supported by the National Science Foundation (NSF) grants DMS-2027737, DMS-
+2113373, DMS-2414918, and a gift from OpenAI.
+10
+
+=== PDF PAGE 11 ===

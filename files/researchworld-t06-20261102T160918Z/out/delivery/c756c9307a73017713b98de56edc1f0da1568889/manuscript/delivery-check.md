@@ -1,0 +1,13 @@
+# Integrated report verification
+
+The frozen objective, deliverable requirements and context Brief were re-read before this delivery. The paper answers a declared outcome-reversal question on crowd, human, model-judge and sports observations, with exact-refit evidence, uncertainty, baselines, matched controls and specification limitations. No additional experiment, invented result or synthetic placeholder is used in the report.
+
+The complete build uses the unchanged official NeurIPS 2026 style in default anonymous review mode. The delivered PDF is 21 pages: substantive main text and three figures occupy pages 1–7; references begin on page 8; appendices include the complete numerical tables and season panel; all 16 completed checklist questions begin on page 15. This is within the nine-page main-content limit. The original official style/shell/checklist hashes pass their supplied SHA256SUMS. The completed manuscript copy retains the official questions/guidelines and has no TODO answers.
+
+The build passes using latexmk 4.79, BibTeX and pdfTeX; GNU Make 4.4.1 invokes the root build. There are no unresolved citations/references, LaTeX warnings or overfull boxes in the final build. All README-relative links exist, every manuscript figure/table import resolves, and PDF internal link destinations are valid. Bibliographic URLs are the permitted source-specific versions and the pinned public sports source.
+
+All four figures were opened at final full text width, and all six table fragments were inspected in the integrated PDF. Their captions preserve uncertainty types, integer/all-row budgets, post-hoc reference selection and found-upper-bound qualifications. The caption correction distinguishes the fact that original leading-pair reversal displaces the original leader from the separate question of who becomes the new winner. Every displayed asset maps to presentation/render.py and hashed source slices through presentation/README.md and provenance.json.
+
+The delivered numerical-method checks passed at lambda 0.1, 1 and 10. The analysis and independent-review supplies separately report raw-data hash, exact-refit witness and summary reconstruction checks. The report itself does not claim to rerun the entire study. Processed witness rows are intentionally included, while raw conversations/full source datasets are excluded. The source consultation record is manuscript/source-record.md; the seven paper citations use the context owner's verified consulted-source metadata. The inaccessible original Bradley–Terry article is not cited.
+
+These checks support offering the assembled artifact for independent exact-head review; they do not substitute for that approval or assert conference acceptance.

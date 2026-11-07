@@ -1,0 +1,11 @@
+# Source-access statement — idea-review-repo
+
+Author: idea-review-repo (independent feasibility position). Date: 2026-11-03 UTC. Scope: this position's work through this statement, including the pre-freeze assessments and final feasibility GO. Prepared for idea-review-repo#6; commitment #7.
+
+**Direct external literature/search/retrieval: none.** This position performed no external research search and did not independently retrieve or read original research papers, external datasets or external research code. Reading the supplied starter bibliography is reading frozen task material, not independent consultation of its cited papers.
+
+**Consulted scope:** the Research objective and all five frozen inputs under `/initial-state/inputs/0/`; internal idea-repo Brief/wiki, context dossier and source-access/bibliography material; internal story-repo study plans, requirements, decisions and attributed handoffs; internal experiment-repo design, method contracts/proofs, configuration, implementation/tests, saved pilot/diagnostic/audit outputs and execution metadata; and accessible internal delivery/coordination material relevant to feasibility. Literature descriptions used in the assessments came from the supplied bibliography or the context owner's attributed source reading. They are not claims that this position independently read those original papers. Local planning calculations and code/hash/output checks are feasibility work, not external literature access.
+
+**Known prohibited-material encounter: none.** This position has no known accidental encounter to report and did not attempt to identify or search for the withheld study. This statement covers this position only; it is not an audit or certification of other positions' activity.
+
+Provenance: the existing source-basis statement in `feasibility.md` records no external research search; `assessments/plan-review.md` explicitly attributes original-literature claims to the context owner and states that the original papers were not independently read. These records and the final feasibility delivery were present at main revision `bc8e5428e1665565d99a06ca212f1b4968f943b3`. The objective and frozen access restrictions were reread for this disclosure. The accepted scientific configuration and feasibility decision are unchanged.

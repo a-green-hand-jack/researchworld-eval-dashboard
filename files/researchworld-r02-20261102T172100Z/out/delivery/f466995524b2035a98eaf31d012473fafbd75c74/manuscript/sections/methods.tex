@@ -1,0 +1,53 @@
+\section{Prediction target and calibration}
+\label{sec:methods}
+Let $\Delta^{K-1}=\{y\in[0,1]^K:\sum_j y_j=1\}$, with interior $\Delta^{K-1}_+$. We observe independent training and calibration samples of pairs $(X,Y)$ and predict a fresh composition $Y$. A fitted center $\hat p(x)\in\Delta^{K-1}_+$ and positive scale $\hat s(x)$ use training data only. For a scalar nonconformity score $S$, let
+\begin{equation}
+ k=\lceil(n+1)(1-\alpha)\rceil,\qquad
+ q=S_{(k)},\qquad C(x)=\{y:S(x,y)\le q\},
+ \label{eq:rank}
+\end{equation}
+where $S_{(k)}$ is the $k$th smallest calibration score and $q=+\infty$ if $k>n$. Finite regions are restricted to their stated simplex domain; the implementation explicitly defines an infinite threshold as a whole-simplex fallback, including boundary points. Conditional on training data, exchangeable calibration and test pairs give $\Pr\{Y\in C(X)\}\ge1-\alpha$. With no score ties the probability is $k/(n+1)$, capped at one. This probability averages over calibration data and the new pair. It does not assert coverage conditional on a realized calibration set or at each $x$.
+
+\paragraph{Scores and controls.}
+Raw L2 uses $\|y-\hat p(x)\|_2$; raw max uses $\|y-\hat p(x)\|_\infty$. For positive compositions, $\operatorname{clr}(y)_j=\log y_j-K^{-1}\sum_\ell\log y_\ell$. Aitchison uses $\|\operatorname{clr}(y)-\operatorname{clr}(\hat p(x))\|_2$. Scaled Aitchison divides this score by the training-fitted $\hat s(x)$. These are joint scores: one calibration rank controls inclusion of the whole composition. Orthonormal ilr coordinates give exactly the same norm and region as clr, so they are not a separate baseline.
+
+Mondrian Aitchison uses a separately ranked threshold $q_g$ within each predeclared, observed group $G=g$. Conditional on the group calibration count, the same rank argument applies within that group when its calibration and test laws agree; an insufficient count returns an unbounded threshold. Learned scaling alone has no analogous group guarantee. Two coordinatewise controls calibrate $|Y_j-\hat p_j(X)|$ separately: naive calibration uses error $\alpha$ per coordinate, and Bonferroni uses $\alpha/K$. Their regions intersect all coordinate constraints with the simplex. Only the latter receives the union-bound joint guarantee. Simplex dependence does not generally turn the naive control into a joint-$1-\alpha$ method.
+
+\paragraph{Prior-work score supplements.}
+Matched-seed supplements use total variation $\frac12\sum_j|y_j-\hat p_j(x)|$ and forward KL $\sum_j y_j\log(y_j/\hat p_j(x))$, with the same split ranking. Forward KL is asymmetric and is not a metric; zero response terms, when evaluated, use $0\log0=0$ with strictly positive predicted components. At $K=3$, the sum-zero residual has one sign represented by a single component, so half its L1 norm equals its maximum absolute component. Total variation therefore duplicates raw max in this dimension and cannot count as independent evidence. It differs at $K=10$.
+
+\paragraph{Known-ratio shift reference.}
+An oracle weighted Aitchison baseline uses the exact covariate density ratio of the synthetic shift, $w(X)=4$ for $G=1$ and $w(X)=0.25$ for $G=0$, with unit weights in the iid environment. At candidate feature $x$, the threshold is the $(1-\alpha)$ quantile of
+\begin{equation}
+ \frac{\sum_{i=1}^n w(X_i)\delta_{S_i}+w(x)\delta_{+\infty}}
+ {\sum_{i=1}^n w(X_i)+w(x)}.
+\end{equation}
+The test-point mass at infinity is part of the construction. This baseline uses generator knowledge; it is not an estimated-ratio deployment method. Its shifted marginal guarantee needs the stated covariate shift and correct ratios, and does not give arbitrary subgroup coverage.
+
+\paragraph{Geometry and efficiency.}
+Coverage uses direct region membership. At $K=3$, efficiency is the expected fraction of Euclidean simplex area occupied by the region, estimated using independent feature anchors and common uniform-simplex candidates across methods. This makes comparisons between raw and clr regions meaningful under one declared measure. It does not make Euclidean area an application-independent utility. Finite radii may be reported as within-geometry diagnostics, with infinite thresholds retained explicitly; radii are never ranked across raw and log-ratio units. We do not estimate cross-geometry volume at $K=10$.
+
+\section{Experimental design}
+\label{sec:design}
+\paragraph{Controlled response model.}
+Features are $X=(G,Z_1,Z_2,Z_3)$, where $G\sim\operatorname{Bernoulli}(0.2)$ and the $Z_j$ are independent standard normals, independent of $G$. With $\phi(X)=(1,G,Z_1,Z_2,Z_3,Z_1Z_2,Z_1^2)$ and a fixed, dimension-specific coefficient matrix $B$, generate
+\begin{equation}
+ Y=\operatorname{softmax}\{\phi(X)B+\sigma(X)(a\odot E)\},
+ \quad E\sim N(0,I_K).
+ \label{eq:dgp}
+\end{equation}
+The positive axis weights $a$ increase linearly from $0.65$ to $1.35$ before normalization to mean square one. One coefficient matrix per dimension is fixed across replications; the study does not average over coefficient draws. Homogeneous noise has $\sigma(X)=0.45$. Heterogeneous noise has $\sigma(X)=0.18\exp(0.15Z_1)$ for $G=0$ and $0.95\exp(0.15Z_1)$ for $G=1$. This deliberately creates a known high-noise minority group. All constants and coefficient seeds are fixed in the executable generator.
+
+The predictor fits ridge regression of clr responses on $\phi$, using 1,000 independent training observations and penalty $10^{-3}$ on every coefficient except the intercept. Its predicted composition is the softmax of fitted logits. A second training-only ridge regression predicts log squared clr-residual norm, whose clipped half-exponential gives the positive scale (Appendix~\ref{app:details}). The predictor estimates a clr center; it is not generally the conditional arithmetic mean of $Y$. The correctly specified log-ratio mean structure favors this modeling approach and limits extrapolation to misspecified predictors.
+
+\paragraph{Matrix and shift.}
+The prespecified main matrix crosses $K\in\{3,10\}$, calibration size $n\in\{99,499\}$ and homogeneous/heterogeneous noise, at $\alpha=0.1$. Each cell uses 100 fresh training/calibration/test repetitions, separate from implementation-pilot seeds, and 5,000 test observations per environment. Methods share observations within a repetition. The shifted environment changes only $\Pr(G=1)$ from $0.2$ to $0.8$, preserving the joint feature/response law within each group. It therefore challenges global calibration while preserving the assumptions of observed-group calibration. It does not represent arbitrary covariate or concept shift.
+
+\paragraph{Design chronology.}
+The seven core scores/calibration controls were fixed after an implementation/runtime pilot and before the main run. The known-ratio reference was proposed before confirmatory outcomes. The plan owner requested TV and forward-KL after the core job started for relevance to newly supplied permitted prior work, without inspecting core outcomes. Analysis had inspected core/oracle outcomes when freezing and implementing that supplement, but had not inspected TV/KL outcomes. These are source-driven matched-seed additions, not original-core prespecification or a fully blind extension; all original core results are retained.
+
+\paragraph{Focused scope checks.}
+A separate rank experiment varies calibration size and nominal error with continuous and tied scores, including ranks that require an infinite threshold. A boundary sensitivity censors small components to exact zeros and compares original-target raw calibration with consistently transformed clr calibration on $T_\epsilon(Y)$. It uses 50 fresh repetitions per dimension, $n=499$, the heterogeneous mechanism and $\epsilon\in\{10^{-8},10^{-4},10^{-2}\}$. The same original data are shared across replacements. A separately labeled diagnostic applies transformed-calibrated clr regions to original responses; it has no original-target nominal guarantee. An explicit inverse-image region instead inherits transformed coverage for original responses by exact event equivalence. Appendix~\ref{app:details} specifies both membership conventions.
+
+\paragraph{Uncertainty and reporting.}
+The unit of uncertainty is an independently generated full dataset repetition, not an individual test observation. We report pointwise 95\% Student-$t$ intervals for mean metrics and paired differences between methods using the same repetition. These intervals include training, calibration and finite-test variability; they are not simultaneous intervals over all comparisons. Test-estimated coverage distributions additionally describe realized-calibration variation, without certifying population coverage for individual calibration sets. Efficiency estimates use separate feature anchors; candidate Monte Carlo precision is retained separately from across-repetition variation. The main area estimate uses 32 new feature anchors and 8,192 candidates per anchor and environment. Unresolved tiny areas do not establish zero volume or a reliable ranking.

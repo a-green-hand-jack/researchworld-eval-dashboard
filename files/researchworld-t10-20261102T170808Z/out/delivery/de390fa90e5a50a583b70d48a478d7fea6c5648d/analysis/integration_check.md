@@ -1,0 +1,9 @@
+# Integrated statistical check
+
+Checked root paper.pdf and manuscript sources at paper-repo revision 6b88264f1ac03b593f35dc181a932674dc9e3a21. Re-read the frozen objective and settled context boundary before this check. This is the analysis owner's component check, not the independent release review.
+
+The crossfit remainder error from paper-repo#12 is corrected: coefficient consistency is o_p(1), while the product with the feature-mean difference is o_p(n^-1/2). The appendix supplies the actual fold-weighted remainder, finite-moment/stability/nondegeneracy assumptions, variance consistency and Slutsky argument. The deterministic-control variance identity, nested projection formula, empirical-population target, EB ranges/two-tail allocations/training conditioning, and exact-versus-asymptotic distinctions agree with analysis/proofs.md.
+
+The integrated numeric prose matches the delivered outputs: quadratic 47.5% Wald shortening with coverage compatible with .95, no practical real-data improvement, rare-event coverage failures, retained extreme-width tails, finite-N limitation, and 28.7% label-EB shortening in the designed bounded supplement. The exact/full-label EB negative comparisons remain explicit. All six numeric source files checked in the root are byte-identical to this repository (summary, paired, coverage diagnostics, theory, tail diagnostics, empirical-population provenance). No empirical nonrejection is described as a finite-sample certificate; no superiority over unimplemented stratified/poststratified controls is claimed.
+
+The report owner states empirical figure integration is still pending. The current statistical prose and rendered analytical table have no remaining analysis correction. Subsequent changes to figures or numeric claims remain subject to the presentation owner's checks and independent final review; this component check does not approve a release or claim the overall delivery is finished.

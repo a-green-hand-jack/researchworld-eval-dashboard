@@ -1,0 +1,233 @@
+\documentclass{article}
+\usepackage{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts,amsmath,amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{placeins}
+
+\input{quoted_numbers}
+
+\title{How Many Comparisons Does It Take to Change a Leaderboard?\\
+       Stability of Bradley--Terry Rankings Across Evaluation Designs}
+\author{Anonymous Authors}
+
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Public leaderboards rank models from pairwise comparisons by fitting a Bradley--Terry (BT) model, but how much of the data a ranking claim depends on is rarely reported. We define the \emph{flip budget} of a claim (top-1 identity, an adjacent pair, the top-$k$ set) as the number of comparisons whose removal, addition or relabelling reverses it. An influence-guided search finds it and an exact refit \emph{verifies} it, so each budget is an upper bound on the true minimum (checked against exhaustive enumeration and randomised restarts). We study $\ell_2$-regularised BT scores, ties as half a win, on frozen snapshots of four real datasets: crowd votes (Chatbot Arena), expert labels and an LLM judge (MT-Bench), and NBA seasons. Budgets are governed by how well the data resolve a claim. The Arena top-1 claim rests on a $\ArenaGapElo$-Elo margin ($z=\ArenaConeZ$) and flips after $\ArenaConeB$ comparisons (dataset-level 95\% interval \biArenaConeRange); random removal needs $\nzArenaCone$ to flip it with probability 5\%. The median adjacent-rank claim needs $\ArenaCtwoMed$ comparisons on Arena and $\NBAsCtwoMed$ games in an NBA season. Where claims are well separated (MT-Bench, $z$ of $\MTHConeZ$ and $\MTGConeZ$) the top-1 claim needs $\MTHConeB$ (human) and $\MTGConeB$ (GPT-4 judge) comparisons, $\MTHConeFrac$ and $\MTGConeFrac$ of the data, and survives random removal of half of it. Budgets grow roughly in proportion to the margin, as a first-order argument predicts, yet a line fitted on NBA seasons under-predicts other datasets' budgets by a factor of $\oosArenaFold$--$\oosMTHFold$, while the parameter-free first-order estimate is within a factor of two for $\oosMTGKhatTwo$--$\oosMTHKhatTwo$ of the claims. An adversary restricted to comparisons involving its target needs $\conMTGRatioAdd$--$\conNBARatioAdd\times$ the removal budget (additions), and a targeted set is $\nzNBAsRatio$--$\nzArenaRatio\times$ more effective than random noise. We state the claim sets, estimator and tie conventions these results hold for, and find no evidence of a design effect beyond the participant set, with limited power.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+Public leaderboards for generative models are often built by aggregating many pairwise comparisons (``which of $A$, $B$ is better?'') and fitting a Bradley--Terry (BT) model \citep{bradley1952rank} to obtain a score, a rank and a confidence interval for every participant \citep{chiang2024arena}. The rankings are used for model selection, for announcements and as a reference in research. How much a ranking statement depends on a small part of the comparisons, whether the change comes from noise or from someone's deliberate action, is not obvious.
+
+We study this with one operational question: \emph{how many comparisons must be changed before a statement about the ranking changes, and how does this depend on the evaluation design that produced the comparisons?} We ask it for crowd votes, expert labels, LLM-judge labels and sports results, using real public data (Section~\ref{sec:data}).
+Our contributions are: (i) a definition of ranking claims and of a \emph{flip budget} with several size scales (fraction of $N$, share of the claim's own comparisons, the statistical margin $z$, and the number of random removals that does the same as the adversary); (ii) a search whose output is an exact-refit \emph{verified} upper bound, checked against heuristics, exhaustive search on small instances and randomised restarts; (iii) an empirical comparison of noise and worst-case perturbations on four real datasets from three kinds of evaluation design, including an adversary restricted to its own target's comparisons and claims on what a leaderboard publishes (confidence intervals, rank intervals), with dataset-level intervals; (iv) a first-order prediction of the budget that explains the dependence on the margin and a test of how far a fitted budget--margin line transfers across datasets; (v) controls that separate the number of comparisons from the participant set. Headline findings: how many comparisons a ranking claim depends on is set by how well the data resolve it. The top-1 claim of Arena is not resolved (a $\ArenaGapElo$-Elo margin) and flips after $\ArenaConeB$ comparisons, whereas the resolved MT-Bench top-1 claims survive random removal of half the data and need $\MTHConeFrac$--$\MTGConeFrac$ of the comparisons to be changed by a targeted set. We make no causal claim about ``design'' because it is confounded with the dataset.
+
+\section{Related Work}
+\label{sec:related}
+\textbf{Pairwise-comparison leaderboards.} The BT model \citep{bradley1952rank} is the standard probabilistic model of paired comparisons; maximum-likelihood fitting and extensions (ties, ordered outcomes) are surveyed by \citet{hunter2004mm}. Chatbot Arena \citep{chiang2024arena} collects crowd votes between anonymous models and ranks them by a BT fit with bootstrap intervals; MT-Bench \citep{zheng2023judging} releases expert and GPT-4 judgments on the same question set. \citet{ameli2024statistical} propose a statistical framework for Arena-type data with an explicit tie model and covariance between competitors, and \citet{boubdir2023elo} study the reliability of Elo-based rankings of language models under reordering and hyperparameters. These works make the estimator or its sampling variability the object; we instead ask how many \emph{data points} a ranking statement depends on.
+
+\textbf{Uncertainty of ranks.} Rank uncertainty is classically expressed by confidence sets for ranks \citep{mogstad2020inference}; the leaderboards' bootstrap intervals and rank intervals are of this kind. They describe sampling noise under resampling of all comparisons. A flip budget is a different, complementary quantity: it is the size of the smallest \emph{structured} change (a worst-case subset) that reverses a given statement, and we relate it to the interval-based margin $z$.
+
+\textbf{Influence and data-dropping robustness.} Classical case-influence diagnostics \citep{cook1977detection} consider single observations; influence functions \citep{koh2017influence} approximate the effect of removing a training point on fitted parameters, and \citet{broderick2020automatic} turn this into a finite-sample robustness metric: the smallest fraction of the data whose removal changes a conclusion, found by ranking points by their first-order influence. For linear regression, \citet{kuschnig2021hidden} show that influential \emph{sets} are missed by one-at-a-time diagnostics. We apply the first-order route to BT scores, replace its linearised answer by a search with exact refits that returns a verified witness, and extend it to additions and relabellings.
+
+\textbf{Manipulation and evaluation practice.} \citet{min2025rigging} study vote-rigging strategies against Arena-style rankings, and \citet{singh2025illusion} analyse Arena's evaluation practices (private testing, unequal sampling and data access). We use the former as the reference for the adversarial setting and the latter as motivation for non-uniform comparison graphs. We do not claim priority over other work on the stability of leaderboard rankings; our contribution is the verified flip-budget formulation, the comparison across four real evaluation designs and the controls in Section~\ref{sec:exp}.
+
+
+
+\section{Method}
+\label{sec:method}
+\paragraph{Bradley--Terry fit.} A comparison is a triple $(i,j,o)$ with outcome $o\in\{i\text{ wins},\text{tie},j\text{ wins}\}$. We model $P(i\succ j)=\sigma(\theta_i-\theta_j)$ and fit $\theta$ by maximising the log-likelihood with a ridge penalty $\tfrac{\lambda}{2}\lVert\theta\rVert^2$ ($\lambda=1$), where a tie counts as half a win for each side. The penalty makes the optimum unique without a normalisation constraint. The fit is computed on aggregated cell counts (participant pair $\times$ outcome), so a perturbation is a change of integer counts. Scores are reported on the Elo scale ($\theta\cdot400/\ln 10$). The fitter agrees with an independent scikit-learn L-BFGS logistic-regression fit to a maximum score difference of at most $1.0\times10^{-5}$ (natural-log units) with identical rankings on all four units (\texttt{results/validation\_fitter.csv}). Intervals come from 1000 bootstrap resamples of the comparisons. We study this estimator; online Elo, style-control covariates and anchoring are different estimators (Section~\ref{sec:limits}).
+
+\paragraph{Ranking claims.} Claims concern a \emph{window} of the base ranking $\pi(1),\dots,\pi(e)$: all participants for MT-Bench, the participants ranked 1--20 by the base fit for Arena and for NBA all seasons, with every participant as a challenger. We test (C1) $\pi(1)$ is the top-scoring participant; (C2$_r$) $\theta_{\pi(r)}>\theta_{\pi(r+1)}$ for each adjacent pair of the window; (C3$_k$) the set of the $k\in\{3,5,10\}$ best participants is unchanged; and, for random perturbations only, (C4) the Kendall $\tau$ between the base and the perturbed scores. A claim is \emph{flipped} if it is false for the refit scores. Adjacent-pair claims share participants and are not independent. We also test claims on what a leaderboard \emph{publishes}: (C2$^{\rm CI}$) the 95\% bootstrap interval of $\theta_{\pi(r)}-\theta_{\pi(r+1)}$ excludes zero, and (C1$'$) the top participant has rank interval $[1,1]$; these are re-bootstrapped (200 resamples) for every candidate perturbation.
+
+\paragraph{Perturbations.} \emph{Random removal} deletes $\lceil fN\rfloor$ comparisons uniformly at random, \emph{random label flips} relabel each comparison with probability $f$, and the \emph{bootstrap} resamples $N$ comparisons (\nSeeds{} seeds per $f$). \emph{Adversarial removal} searches for a small set of comparisons whose deletion flips a pair $\theta_a>\theta_b$; the budget of a claim is the minimum over its candidate pairs. Following the influence-function route \citep{koh2017influence,broderick2020automatic}, we linearise the fitted model around the current fit, rank cells (pair, outcome) by their first-order effect on $\theta_a-\theta_b$, remove them in chunks, refit \emph{exactly} after every chunk, bisect on the chunk that flips, and polish by a swap/drop local search. Every reported budget is therefore a \emph{verified upper bound}: the perturbed data were refit and the claim flips, but minimality is not proven. If no flipping set exists the claim is censored. The first-order estimate $\hat k$ (the linearised number of cells needed, before any refit) is kept as a parameter-free prediction of the budget. We also run adversarial additions and relabellings, the setting of vote rigging \citep{min2025rigging}, unconstrained and \emph{constrained} to the target: all added or relabelled comparisons involve the target (the participant pushed down or up), with opponents allocated in proportion to the target's observed pair frequencies, and no third-party votes.
+
+\paragraph{Size scales.} A budget $k$ is an integer number of comparisons. Since $N$ ranges from $2.4\times10^3$ to $5.7\times10^4$ and $K$ from 6 to 64, we report $k/N$, the share of the comparisons involving the claim's two participants, and relate $k$ to the statistical margin $z=\text{gap}/SE_{\text{boot}}$. Because comparisons are not independent draws (an MT-Bench question is judged for many model pairs, an NBA week is one schedule), we also report $z_{\rm cl}$ with the standard error of a cluster bootstrap that resamples whole questions (MT-Bench), weeks (NBA seasons), seasons (NBA all seasons) or identical prompts (Arena; the file has no user identifier). As a reference for noise we use the \emph{noise-equivalent budget} $k_{\rm noise}$: the smallest number of random removals that flips the claim in at least 5\% of 200 draws; $k_{\rm noise}/k$ says how many times more effective a targeted set is than noise. A ``leverage'' (gap over the SD of the gap shift under random removal of the same $k$) is $\approx z\sqrt{(N-k)/k}$ (median ratio $0.98$--$1.04$ on every dataset, \texttt{results/README.md}), so it re-expresses $z$ and $k/N$ and is not used as a separate scale.
+
+\section{Experiments}
+\label{sec:exp}
+\subsection{Data, claim sets and protocol}
+\label{sec:data}
+We use four real public comparison sets, one or more per evaluation design (versions and checksums in the reproduction notes). \emph{Crowd votes:} Chatbot Arena human preference, 57{,}477 battles among 64 models, of which 31\% are ties (apache-2.0). \emph{Expert labels:} MT-Bench human judgments, 3{,}355 comparisons among 6 models, 23\% ties (cc-by-4.0). \emph{LLM judge:} the GPT-4 pairwise judgments on the same MT-Bench questions, 2{,}400 comparisons among the same 6 models, 25\% ties. \emph{Sports:} NBA game results from the FiveThirtyEight Elo file (CC-BY-4.0), de-duplicated to one row per game, regular season only, franchises as participants: 59{,}124 games among 53 franchises, no ties. NBA is analysed as $\nSeasons$ separate seasons, which are the leaderboards of that sport; the franchise ranking pooled over all regular seasons (``NBA all seasons'') mixes eras and is reported only for reference; ``NBA seasons'' below means the single seasons. Table~\ref{tab:data} summarises the data.
+\begin{table}[t]
+\caption{The four datasets. $K$: participants (in brackets: those in the claim window, ranks 1--20 of the fit, for Arena and NBA all seasons); $N$: comparisons; Ties: share of ties; Pairs seen: participant pairs compared at least once; last column: comparisons per compared pair (min / median / max). Source: \texttt{results/dataset\_summary.csv}.}
+\label{tab:data}
+\centering\small
+\input{../tables/table1_datasets.tex}
+\end{table}
+
+\emph{The claim window on Arena.} The Arena leader (gpt-4-1106-preview, $\ArenaLeaderN$ comparisons) and runner-up (gpt-4-0125-preview, $\ArenaRunnerN$) are $\ArenaGapElo$ Elo apart, with bootstrap SEs of $\ArenaLeaderSE$ and $\ArenaRunnerSE$ Elo. A window of the 20 most-compared models would miss the runner-up, and claims about all 64 models are dominated by tail models with few comparisons. We therefore take the window to be ranks 1--20 of the fit, with every model as a challenger for C1 and C3. The window is a convention and Appendix~\ref{app:window} varies it: the C1 budget is $\winArenaSTenCone$ for every score window, while the median adjacent budget falls from $\winArenaSTenCtwo$ (window 10) to $\winArenaSTwentyCtwo$ (20) and $\winArenaSThirtyCtwo$ (30) and stays between $\winArenaSFortyCtwo$ and $\winArenaSAllCtwo$ for larger windows. With the 20 most-compared models the C1 budget is $\winArenaCTwentyCone$, because the runner-up is outside the set.
+
+\paragraph{Protocol.} All numbers are produced by the code in \texttt{code/} and read from \texttt{results/} (macros generated by \texttt{paper/quoted\_numbers.py}). For each dataset we compute the base fit with bootstrap intervals (Fig.~\ref{fig:lb}); the survival of claims C1--C3 under random removal and label flips ($\nSeeds$ seeds per size $f$) and the bootstrap (1000 resamples); and the verified adversarial budget of every claim, with 95\% dataset-level intervals from resampling the comparisons and searching again ($\biResamplesMT$ resamples for MT-Bench, $\biResamplesArena$ for Arena and NBA all seasons). In total $\nClaims$ claims are searched, of which $\nExactTie$ are exact ties of the base fit and are excluded from the regressions.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{../figures/fig1_leaderboards.pdf}
+\caption{Bradley--Terry scores (Elo scale) with 95\% bootstrap intervals ($B=1000$) and 95\% rank intervals; Arena 55k (ranks 1--20 of the 64-model fit) and MT-Bench (human experts, GPT-4 judge). Source: \texttt{results/base\_*.csv}.}
+\label{fig:lb}
+\end{figure}
+
+\subsection{Results}
+\paragraph{Resolved claims survive noise; unresolved ones do not.} Removing half of all comparisons at random leaves the top-1 claim intact with probability $\MTHRemConeHalf$ on MT-Bench human and $\MTGRemConeHalf$ on GPT-4, but only $\ArenaRemConeHalf$ on Arena and $\NBARemConeHalf$ on NBA all seasons; $\ArenaBootCone$ of Arena bootstrap resamples keep it (\texttt{results/random\_survival.csv}). Adjacent-pair claims are less stable: the share that hold in a bootstrap resample is $\ArenaBootCtwo$ (Arena), $\MTHBootCtwo$ (MT-Bench human), $\MTGBootCtwo$ (GPT-4) and $\NBABootCtwo$ (NBA all seasons), and removing 10\% of the comparisons keeps $\ArenaRemCtwoTen$, $\MTHRemCtwoTen$, $\MTGRemCtwoTen$ and $\NBARemCtwoTen$ of them. Figure~\ref{fig:surv} shows the survival curves with the verified adversarial budgets on the same axis.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{../figures/fig2_survival_remove.pdf}
+\caption{Probability that a base-fit claim still holds after removing a random fraction $f$ of the comparisons (\nSeeds{} seeds per $f$): C1 (top-1), C2 (adjacent pairs; line: mean, band: min--max), C3 (top-$k$ set, mean over $k\in\{3,5,10\}$). Narrow panel: bootstrap resamples. Lower strip: verified adversarial removal budgets as a share of $N$, one marker per adjacent pair (rank 1 at the top), star: C1. Budgets are verified upper bounds.}
+\label{fig:surv}
+\end{figure}
+
+\paragraph{The Arena top rank is a $\ArenaGapElo$-Elo margin; the resolved MT-Bench ranks take $2.7$--$6\%$ of the data.} The smallest verified set of removed comparisons that changes the top-1 claim has size $\ArenaConeB$ on Arena ($\ArenaConeFrac$ of $N=\ArenaN$; $z=\ArenaConeZ$; dataset-level 95\% interval \biArenaConeRange), $\MTHConeB$ on MT-Bench human ($\MTHConeFrac$ of $\MTHN$; $z=\MTHConeZ$; \biMTHConeRange) and $\MTGConeB$ on GPT-4 ($\MTGConeFrac$ of $\MTGN$; $z=\MTGConeZ$; \biMTGConeRange). On the $\nSeasons$ NBA seasons (about $\NBAsNgames$ games each) the median is $\NBAsConeMed$ games (maximum $\NBAsConeMax$); the NBA all-seasons ranking needs $\NBAConeB$ games (\biNBAConeRange). Removing the same $\ArenaConeB$ comparisons at random flips the Arena claim in $\ArenaRandFlipAtK$ of draws and no MT-Bench claim. The Arena budget is small because the data do not resolve the claim: random removal flips it with probability 5\% after $\nzArenaCone$ comparisons. Table~\ref{tab:head} summarises the budgets of all claims.
+
+\begin{table}[t]
+\caption{Verified adversarial removal budgets per dataset (exact ties excluded; upper bounds on the minimum), with dataset-level 95\% intervals (outward-rounded; resamples of all comparisons, 100--200, each searched anew; not available for the 69 NBA seasons). C1: top-1 claim; C2: adjacent-pair claims, median [min, max] in comparisons and median share of $N$; $z$: gap$/$bootstrap SE; ``\% of pair's comparisons'': median budget as a share of the comparisons involving either participant of the claim; verified: share of claims for which an exact refit confirmed the flip. On Arena and NBA all seasons the claims concern ranks 1--20 of the fit.}
+\label{tab:head}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/table0_headline.tex}}
+\end{table}
+
+\paragraph{Adjacent-rank claims are fragile when their margin is small, which is most of them outside MT-Bench.} The median budget of an adjacent-pair claim is $\ArenaCtwoMed$ comparisons on Arena (dataset-level interval \biArenaCtwoRange; $\ArenaCtwoFracMed$ of $N$), $\MTHCtwoMed$ (\biMTHCtwoRange) on MT-Bench human, $\MTGCtwoMed$ (\biMTGCtwoRange) on GPT-4, $\NBACtwoMed$ (\biNBACtwoRange) on NBA all seasons and $\NBAsCtwoMed$ games (inter-quartile range \NBAsCtwoQ) on an NBA season. Most of these claims are unresolved to begin with: the median $z$ is $\ArenaCtwoZMed$ on Arena and $\NBAsCtwoZMed$ on NBA seasons, where $\zshArenaIid$ and $\zshNBAsIid$ of the claims have $z<1$; the $\ArenaCtwoLowZ$ of $\ArenaCtwoCount$ Arena claims with $z<2$ need at most $\ArenaCtwoLowZBudMax$ removals. The i.i.d.\ bootstrap overstates $z$ where comparisons are clustered: the cluster bootstrap multiplies the SE by $\zshMTHSeRatio$ for MT-Bench human (clusters are questions) and $\zshNBASeRatio$ for NBA all seasons (seasons), lowering the median $z$ from $\zshMTHMedIid$ to $\zshMTHMedClu$ and from $\zshNBAMedIid$ to $\zshNBAMedClu$, and leaves Arena unchanged (ratio $\zshArenaSeRatio$; only identical prompts can be clustered). The conclusions do not change: MT-Bench claims remain resolved and most Arena and NBA claims do not. A flip at such margins needs no adversary; it is what a little noise does.
+
+\paragraph{Budgets scale with the margin, as a first-order argument predicts, but the fitted line does not transfer.} To first order, removing a cell changes the gap $\theta_a-\theta_b$ by an amount fixed by the cell's influence, so closing a gap $g=z\cdot SE$ takes $k\approx g/\bar\imath$ removals, with $\bar\imath$ the mean influence of the selected cells; $\log k$ is therefore linear in $\log z$ with slope near one if $SE$ and $\bar\imath$ vary little. The regression is a check that the verified search behaves like this model, not an independent discovery. Across adjacent-pair claims the pooled slope is $\slopePool$ (cluster-bootstrap interval $\slopePoolCI$, $R^2=\rsqPool$, $\nregPool$ claims, dataset-specific intercepts) and $\slopeCluPool$ $\slopeCluPoolCI$ with the cluster-bootstrap margin; it is $\slopeArena$ $\slopeArenaCI$ on Arena and $\slopeNBAs$ $\slopeNBAsCI$ on NBA seasons, where budgets are a few games and the integer floor flattens the relation. The pooled fit is carried by the NBA seasons ($\nregNBAs$ of $\nregPool$ claims; Arena $\nregArena$, MT-Bench $\nregMTfit$), so the per-dataset slopes are the more direct evidence. We do not interpret the influence signal-to-noise ratio as a regressor: it is collinear with $\log z$ ($r=\collArena$ on Arena, $\collNBAs$ on NBA seasons).
+
+Two tests show how far this goes (Fig.~\ref{fig:z}a and b). First, the line fitted on NBA seasons alone (slope $\oosSlope$ $\oosSlopeCI$) is unbiased on the seasons but under-predicts the budgets of other datasets: the mean of $\log k$ minus the prediction is $\oosArenaBias$ on Arena, $\oosMTHBias$ on MT-Bench human and $\oosMTGBias$ on GPT-4, i.e.\ budgets $\oosArenaFold\times$, $\oosMTHFold\times$ and $\oosMTGFold\times$ larger than predicted. The margin does not carry the dataset's scale, and since design is confounded with dataset identity we do not attribute the offsets to the evaluation design. Second, the parameter-free first-order estimate $\hat k$ needs no fit: its median ratio to the verified budget is $\oosArenaKhatMed$ on Arena, $\oosNBAsKhatMed$ on NBA seasons, $\oosMTHKhatMed$ on MT-Bench human and $\oosMTGKhatMed$ on GPT-4, and it is within a factor two for $\oosArenaKhatTwo$, $\oosNBAsKhatTwo$, $\oosMTHKhatTwo$ and $\oosMTGKhatTwo$ of the claims. The linearisation overestimates the budget on MT-Bench, where removals interact.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{../figures/fig4_budget_vs_z.pdf}
+\caption{Verified removal budget of each adjacent-pair claim against its margin $z$ (log--log). Solid lines: pooled fit $\log k=a_{\rm dataset}+b\log z$ (slope $\slopePool$, cluster-bootstrap 95\% interval $\slopePoolCI$); dashed: NBA seasons alone ($\slopeNBAs$ $\slopeNBAsCI$); Arena alone gives $\slopeArena$ $\slopeArenaCI$. Pooled NBA is plotted but not in the fit. Budgets are integers $\ge1$, hence the floor. (b) Parameter-free first-order estimate $\hat k$ against the verified budget; the band marks agreement within a factor two.}
+\label{fig:z}
+\end{figure}
+
+\paragraph{A targeted set is $\nzNBAsRatio$--$\nzArenaRatio\times$ more effective than noise, and a rigger limited to its own target is nearly as effective as an unrestricted adversary.} The noise-equivalent budget of an adjacent-pair claim (median over claims) is $\nzArenaMed$ random removals on Arena, $\nzMTHMed$ on MT-Bench human, $\nzMTGMed$ on GPT-4, $\nzNBAMed$ on NBA all seasons and $\nzNBAsMed$ games on NBA seasons: $\nzArenaRatio$, $\nzMTHRatio$, $\nzMTGRatio$, $\nzNBARatio$ and $\nzNBAsRatio$ times the verified targeted budget. On MT-Bench human, random removal does not reach even a 5\% chance of flipping $\nzMTHNever$ of the claims. The constrained adversary needs a median of $\conArenaAdd$ added or $\conArenaRel$ relabelled comparisons on Arena (removal: $\ArenaCtwoMed$), $\conMTHAdd$ and $\conMTHRel$ on MT-Bench human ($\MTHCtwoMed$), $\conMTGAdd$ and $\conMTGRel$ on GPT-4 ($\MTGCtwoMed$), $\conNBAAdd$ and $\conNBARel$ on NBA all seasons ($\NBACtwoMed$) and $\conNBAsAdd$ and $\conNBAsRel$ on NBA seasons ($\NBAsCtwoMed$): $\conMTGRatioAdd$--$\conNBARatioAdd\times$ the removal budget for additions and $\conMTGRatioRel$--$\conArenaRatioRel\times$ for relabellings (Table~\ref{tab:add}; noise-equivalent budgets in Appendix Fig.~\ref{fig:noise}). The unconstrained adversary needs about as many additions as removals and about half as many relabellings. This is vote rigging \citep{min2025rigging} on a frozen snapshot; we do not simulate the platform's sampling or defences.
+
+\begin{table}[t]
+\caption{Verified budgets to reverse adjacent-pair claims by removing, adding or relabelling comparisons (medians over claims; ratio to removal as median [IQR]), unconstrained and constrained to the target (all added or relabelled comparisons involve the target). Noise-equivalent budgets: Fig.~\ref{fig:noise}.}
+\label{tab:add}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/table5_additions.tex}}
+\end{table}
+
+\paragraph{Claims on the published output are cheaper to flip, and the estimator matters.} Only $\pubArenaSep$ of the $\pubArenaPairs$ adjacent Arena pairs are separated at base by the 95\% bootstrap interval ($\pubArenaSepShare$), against $\pubMTHSep$ of $\pubMTHPairs$ on MT-Bench human and $\pubMTGSep$ of $\pubMTGPairs$ on GPT-4. For these pairs the removal needed to make the re-bootstrapped interval include zero has a median of $\pubArenaBud$ comparisons on Arena (against $\pubArenaPoint$ for the same pairs' point gap to reverse), $\pubMTHBud$ on MT-Bench human ($\pubMTHPoint$) and $\pubMTGBud$ on GPT-4 ($\pubMTGPoint$): a claim of significance is cheaper to flip than a claim of order, by a factor of $1.3$--$2.9$. The claim that the top participant has rank interval $[1,1]$ holds at base on MT-Bench only (\pubMTHCprime{} and \pubMTGCprime{} claims; Arena: probability of rank 1 $\pubArenaPone$) and fails after $\pubMTHCprimeBud$ (human) and $\pubMTGCprimeBud$ (GPT-4) removals (Appendix Table~\ref{tab:pub}). The tie convention changes who is first: dropping ties makes \texttt{\estArenaDropTiesTop} the Arena top-1 model (Kendall $\tau=\estArenaDropTiesTau$ with the base ranking on the window) and moves the C1 budget from $\estArenaBaseCone$ to $\estArenaDropTiesCone$; counting a tie as one win and one loss gives $\estArenaTieWLCone$. On MT-Bench the C1 budget is $\estMTHDropTiesCone$ (human) and $\estMTGDropTiesCone$ (GPT-4) without ties, against $\estMTHBaseCone$ and $\estMTGBaseCone$. A practically unregularised fit ($\lambda=10^{-6}$) changes them by at most a few comparisons (Arena C1 $\estArenaUnregCone$, GPT-4 $\estMTGUnregCone$; Appendix Table~\ref{tab:est}).
+
+\paragraph{Same questions, different labeller.} MT-Bench human and GPT-4 judgments agree on $\mtAgreeAll$ of the $3{,}355$ human judgments ($\mtAgreeNonTie$ when both are non-ties). Over the 15 model pairs, budgets under the two labellers are strongly rank-correlated (Spearman $\mtMASpB$ on the $\mtMAKeys$ keys the files share; $\mtMOSpB$ on the $\mtMOKeys$ keys that also match in presentation order), as are the $z$-gaps ($\mtMASpZ$, $\mtMOSpZ$), and the median ratio of GPT-4 to human budget is $\mtMARatioMed$ ($\mtMORatioMed$), range $\mtMARatioMin$--$\mtMARatioMax$ ($\mtMORatioMin$--$\mtMORatioMax$); the largest ratios belong to near-ties under human judgment. At equal participant set and size we find no evidence that the labeller changes fragility beyond its effect on the margin; with 15 pairs and one dataset per labeller the comparison has limited power (Appendix Fig.~\ref{fig:match}).
+
+\paragraph{The search is verified and not beaten by exhaustive search or restarts.} Every budget above comes from an exact refit. A one-shot ranking of cells by influence is within $1.01\times$ everywhere, and the greedy search before polishing matches the final budget in all but $\mvUnpolImproved$ of $\mvUnpolN$ checked claims (Appendix Table~\ref{tab:valid}). On $\exInst$ random MT-Bench human subsamples (\exMs{} comparisons, six models) we enumerated all removal sets of up to $\exKmax$ comparisons for each of the $\exClaims$ adjacent-pair claims: the exact minimum was at most $\exKmax$ for $\exExactN$ claims, and the search with polishing returned exactly that minimum on $\exPolishEq$ of them (the unpolished greedy on $\exGreedyEqPct$, the one-shot ranking on $\exOneshotEqPct$); on the other $\exCensN$ claims no set of $\exKmax$ or fewer exists and the search returned $\exCensMinPolish$ or more. On the large instances we reran the search $\rsPer$ times per claim with random chunk sizes and noisy gain orders for $\rsClaims$ budget-defining pairs: no restart found a smaller set ($\rsBeat$ claims; $\rsAllEq$ of $\rsClaims$ identical, at most $\rsMaxRatio\times$ larger). This is evidence, not a certificate: the budgets of the main datasets remain upper bounds, and we have no lower bounds.
+
+\paragraph{Controls: size, design and model structure.} \emph{Synthetic data} (labelled as such in \texttt{results/controls.csv}) with the real pair counts and tie shares and outcomes drawn from the BT model fitted to each real dataset give median budgets of $\ctlSynArenaB$ (real: $\ctlRealArenaB$), $\ctlSynMTHB$ ($\ctlRealMTHB$), $\ctlSynMTGB$ ($\ctlRealMTGB$) and $\ctlSynNBAB$ ($\ctlRealNBAB$) on Arena, MT-Bench human, GPT-4 and NBA all seasons, so the real budgets are close to what a well-specified BT model with the same counts predicts. \emph{N-matched subsampling} shows that size alone does not explain the datasets' differences: a random subsample of $3{,}355$ Arena comparisons (the size of MT-Bench human) has a median budget of $\ctlSubArenaMTHNB$ ($\ctlSubArenaMTHNFrac$ of $N$, median $z=\ctlSubArenaMTHNZ$), against $\ctlRealMTHB$ ($\ctlRealMTHFrac$) for MT-Bench human. Restricting Arena to the six MT-Bench models at $N=1{,}367$ gives a median share of $\ctlSixShare$ of $N$ over $\ctlSixDraws$ draws (95\% interval $\ctlSixLo$--$\ctlSixHi$), against $\ctlMTHSixShare$ ($\ctlMTHSixLo$--$\ctlMTHSixHi$) for $\ctlSixDraws$ MT-Bench human subsamples of the same size: a ratio of $\ctlSixRatio$ $\ctlSixRatioCI$. With five claims treated as independent draws the test detects a ratio of $\ctlSixMinDet$ or more, but only $\ctlSixMinDetClaim$ if claims are the unit, so the comparison shows no difference between labellers at equal participant set and size and does not bound one. The gap between Arena and MT-Bench is consistent with the participant set (64 models whose adjacent ranks differ by a fraction of a standard error, against six models separated by about eight) rather than with the number of comparisons or with crowd versus expert labels (Fig.~\ref{fig:ctl}).
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{../figures/fig6_controls.pdf}
+\caption{Controls (adjacent-pair claims, removal budgets, verified upper bounds). Synthetic data drawn from the BT fit of each real dataset with the real pair counts, and random subsamples at matched $N$ (Arena restricted to the six MT-Bench models, $\ctlSixDraws$ draws).}
+\label{fig:ctl}
+\end{figure}
+
+\section{Discussion and Limitations}
+\label{sec:limits}
+\textbf{What the evidence says.} How sensitive a ranking claim is depends on how well the data resolve it. A resolved statement (large $z$, MT-Bench) survives noise and takes a targeted change of $\MTHConeFrac$--$\MTGConeFrac$ of the comparisons for the top rank, i.e.\ about a hundred comparisons, which a random perturbation of the same size does not do (and at least $\nzMTGRatio\times$ more random removals are needed). An unresolved statement (the Arena top rank at $\ArenaGapElo$ Elo, most adjacent Arena and NBA pairs) is fragile under the leaderboard's own bootstrap and flips after a handful of comparisons; reporting a rank without its margin hides this. Budgets grow with the margin, as first-order theory says, but how many comparisons a given margin costs depends on the dataset (a factor $\oosArenaFold$--$\oosMTHFold$ here), whereas the first-order estimate $\hat k$ tracks the budget without a fit. We see no sign of a labeller effect beyond the margin (limited power), and the controls make the number of comparisons an unlikely explanation of the Arena--MT-Bench difference. Evaluation design is confounded with dataset in our data (one crowd, one expert, one LLM-judge set, one sport), so we make no causal claim about design.
+
+\textbf{Conditions of applicability.} The results are for BT scores fitted by $\ell_2$-regularised maximum likelihood ($\lambda=1$, ties as half a win) to frozen public snapshots, for claims defined relative to the base ranking and, on Arena and NBA all seasons, restricted to ranks 1--20 of the fit. Other estimators (online Elo, style-control covariates, anchoring) and platform filters may behave differently; of the choices we ablated, tie handling, the claim window and the claim type (point order versus published interval) change budgets by tens of per cent or more, and the ridge strength and home advantage do not.
+
+\textbf{Limitations.} (1) Budgets are verified witnesses, hence upper bounds; we have no lower bounds, the exhaustive check covers budgets of up to five comparisons on six-model subsamples, and restarts are evidence, not proof. (2) The unconstrained adversary may delete or relabel any comparison; a real attacker controls only their own votes. The constrained adversary respects that but uses a proportional opponent allocation, not an optimised one, and ignores the platform's sampling, deduplication and defences. (3) The margins $z$ use an i.i.d.\ bootstrap; the cluster bootstrap changes them by up to $\zshNBASeRatio\times$ in the SE where clusters exist, and Arena has no usable cluster identifier. Claims within a dataset are not independent, and dataset-level intervals resample the comparisons of one snapshot, not the population of leaderboards. (4) The regressions rest on four datasets and are dominated by NBA seasons; the dataset offsets are descriptive. (5) The Arena--MT-Bench control has five claims per side. (6) The window of 20 is a convention. (7) The NBA all-seasons ranking mixes eras and is reported for reference only; NBA season budgets are a game or two and dominated by the integer floor. (8) Four datasets, one platform per design, no user or session identifiers.
+
+\textbf{Broader impact.} Quantifying how few comparisons can change a ranking can help auditors decide which ranking statements to trust, and can also inform manipulation. We evaluate offline on frozen public data only and do not release tooling that interacts with a live platform.
+
+\paragraph{LLM assistance disclosure.} The study, including planning, code, analysis and drafting of this paper, was carried out by AI agents based on Claude models, working in separate roles under the task's one-week CPU budget; the Bradley--Terry fits and all numbers come from the shipped code, not from a language model. An LLM-judge dataset (MT-Bench GPT-4 judgments) is itself one of the studied labelling designs. Reference lists were checked against the sources we consulted; the authors are responsible for every citation.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\appendix
+\section{Additional results}
+\FloatBarrier
+\subsection{Claim window}
+\label{app:window}
+\IfFileExists{../figures/fig8_window.pdf}{Fig.~\ref{fig:win}}{The sweep} varies the window of claims on Arena and NBA all seasons. By score, the C1 budget on Arena is $\winArenaSTenCone$ for windows of 10, 20, 30, 40 and all 64 participants, because the runner-up is inside every window; the median adjacent budget is $\winArenaSTenCtwo$, $\winArenaSTwentyCtwo$, $\winArenaSThirtyCtwo$, $\winArenaSFortyCtwo$ and $\winArenaSAllCtwo$. By number of comparisons, the top-10, 20, 30 and 40 most-compared models give C1 budgets of $\winArenaCTenCone$, $\winArenaCTwentyCone$, $\winArenaCThirtyCone$ and $\winArenaCFortyCone$: the budget drops to $\winArenaCFortyCone$ only once the runner-up (rank 2, fewer comparisons than the 40th most compared model) enters the set. For NBA all seasons the C1 budget by score is $\winNBASTenCone$ for every window and the median adjacent budget $\winNBASTenCtwo$, $\winNBASTwentyCtwo$, $\winNBASThirtyCtwo$ and $\winNBASFortyCtwo$ for windows of 10, 20, 30 and 40. In the window of 20 by score, $\winArenaInside$ of all comparisons have both participants inside the window and $\winArenaTouch$ involve at least one; $\winArenaGeDirect$ of its 19 adjacent pairs have at least 100 direct comparisons. The window of 20 is thus a convention that keeps the adjacent pairs of the leaderboard's head, where the leaderboard's readers look, without excluding the runner-up.
+
+\IfFileExists{../figures/fig8_window.pdf}{\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{../figures/fig8_window.pdf}
+\caption{Window sweep: C1 budget and median adjacent-pair budget against window size, for windows taken by score and by number of comparisons (Arena, NBA all seasons); the window used is marked.}
+\label{fig:win}
+\end{figure}}{}
+
+\FloatBarrier
+\subsection{Noise-equivalent budgets}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{../figures/fig7_noise.pdf}
+\caption{Targeted verified budget against the number of uniformly random removals that flips the same claim in at least 5\% (a) or 50\% (b) of 200 random draws (shares of $N$, log scales; claims C1 and adjacent pairs). Points on the dashed top line never reach that level by random removal. Diagonal: equal.}
+\label{fig:noise}
+\end{figure}
+
+\FloatBarrier
+\subsection{Per-rank budgets and regression}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{../figures/fig3_budgets.pdf}
+\caption{Verified removal budgets of adjacent-pair claims by rank of the pair, per dataset (Arena: ranks 1--20 of the fit).}
+\label{fig:rank}
+\end{figure}
+\begin{table}[h]
+\caption{Regression of $\log k$ on $\log z$ with dataset-specific intercepts (cluster bootstrap by claim, stratified by dataset, $B=2000$). The signal-to-noise models are not reported: $\log z$ and $\log$ SNR are collinear (Section~\ref{sec:exp}).}
+\label{tab:reg}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/table2_regression.tex}}
+\end{table}
+
+\FloatBarrier
+\subsection{Search validity}
+\begin{table}[h]
+\caption{Verified budget of simpler heuristics relative to the final search (median, max over claims) and first-order estimate $\hat k$. Source: \texttt{results/method\_validity.csv}.}
+\label{tab:valid}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/table3_method_validity.tex}}
+\end{table}
+\begin{table}[h]
+\caption{Exhaustive search on small MT-Bench human subsamples: share of claims on which each search variant returns the exact minimum.}
+\label{tab:exh}
+\centering\scriptsize
+\input{../tables/table3b_exhaustive.tex}
+\end{table}
+Restarts: $\rsPer$ randomised searches per claim for $\rsClaims$ budget-defining pairs found no smaller set than the deterministic search; $\rsAllEq$ matched it exactly and the largest restart/deterministic ratio is $\rsMaxRatio$.
+
+\FloatBarrier
+\subsection{Claims on the published output and estimator variants}
+\begin{table}[h]
+\caption{Left: share of adjacent pairs with margin $z<1$ under the i.i.d.\ bootstrap SE and a cluster bootstrap SE (clusters: MT-Bench question; Arena identical prompt text; NBA week, season for the all-seasons fit); SE ratio: median cluster$/$i.i.d. Right: the claim that the 95\% bootstrap interval of the score difference excludes 0: share of pairs for which it holds at base and, for those pairs, the median removal budget after which it fails when the perturbed data are re-bootstrapped, against the point-gap budget of the same pairs. C$_1^\prime$: the top participant has rank interval $[1,1]$ at base, and the median removal budget after which it fails.}
+\label{tab:pub}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/table6_published.tex}}
+\end{table}
+\IfFileExists{../tables/table7_estimator.tex}{\begin{table}[h]
+\caption{Estimator variants: C1 and median C2 budget, top-1 identity and Kendall $\tau$ on the claim window.}
+\label{tab:est}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/table7_estimator.tex}}
+\end{table}}{}
+
+\FloatBarrier
+\subsection{Labeller comparison}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{../figures/fig5_matched.pdf}
+\caption{The 15 MT-Bench model pairs under two labellers at equal size ($N=1814$ matched keys). x: GPT-4 judge; y: one human judgment per key (median over 20 draws; bars: min--max). (a) margin $z$; (b) verified removal budget. Diagonal: equal.}
+\label{fig:match}
+\end{figure}
+
+\FloatBarrier
+\subsection{Ablation of modelling choices}
+\begin{table}[h]
+\caption{Median verified removal budget (comparisons) of the adjacent-pair claims under modelling variants; in brackets the 95\% percentile interval of the median budget as a \% of $N$ (claim-level bootstrap, $B=2000$; claims within a dataset are not independent, MT-Bench has five per judge). $\dagger$: median over all single-season claims with the home-advantage parameter, no interval available. ``--'': variant not run on that dataset. The Arena claim-set rows change the claim set and are not comparable claim by claim with the 19 baseline claims. Source: \texttt{results/ablations\_summary.csv}.}
+\label{tab:abl}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/table4_ablations.tex}}
+\end{table}
+
+\FloatBarrier
+\input{checklist}
+\end{document}

@@ -1,0 +1,75 @@
+\section{Problem Setting, Methods and Protocol}
+\label{sec:method}
+
+\paragraph{Setting.}
+A benchmark has $n$ items. We have a binary \emph{source matrix} $X\in\{0,1\}^{m\times n}$ with the item-level correctness of $m$ source models.
+A \emph{cohort} of $T$ target models is evaluated on a subset $S\subset[n]$ of $k\ll n$ items, giving $Y_{t,S}$, and the goal is to predict each target's full-benchmark accuracy $\theta_t=\frac1n\sum_{i=1}^n y_{ti}$.
+Metrics are computed over the cohort against the true $\theta_t$: MAE, RMSE, signed bias, Spearman $\rho$ and Kendall $\tau$.
+A \emph{method} is a pair (selector, estimator); the selector sees only $X$ (and may use randomness), the estimator sees $X$, $S$ and $Y_{\cdot,S}$.
+Evaluating all targets on the same $S$ mirrors leaderboard or checkpoint-comparison use.
+
+\subsection{Item selectors}
+\textbf{Random} (simple random sampling, SRS).
+\textbf{Stratified} (a standard survey-sampling device that we add as a baseline): items are sorted by their source-model accuracy and sampled systematically with a random start; every item has inclusion probability $k/n$, so the sample is spread evenly over the source-difficulty range.
+\textbf{Anchor points}~\citep{vivek2024anchor}: $k$-means over items, each item represented by its response vector over source models (reduced to a 50-dimensional SVD embedding for speed); the item closest to each centroid is the anchor, weighted by cluster size.
+\textbf{Anchor-IRT}~\citep{maiapolo2024tiny}: the same, but clustering the IRT item parameters.
+\textbf{D-optimal}: greedy selection maximising $\log\det$ of the Fisher information for the ability vector under the fitted IRT model, averaged over source abilities (an information-based design in the spirit of \citet{kipnis2025metabench}).
+\textbf{Max-variance}: the $k$ items whose source accuracy is closest to $0.5$.
+
+\subsection{Latent-factor (IRT) predictor}
+All model-based estimators share one predictor: a multidimensional two-parameter logistic IRT model
+$P(y_{ti}=1)=\sigma(\beta_i+\alpha_i^\top\vartheta_t)$ with $\vartheta_t\in\mathbb R^d$~\citep{lord1968statistical,reckase2009multidimensional,maiapolo2024tiny}.
+Item parameters $(\alpha_i,\beta_i)$ and source abilities are fit by MAP (L2 priors, L-BFGS) on $X$ only.
+The latent dimension $d\in\{1,2,4,8\}$ is chosen per split by the held-out log-loss of a quarter of the \emph{source} models (never using target data).
+For a target, $\hat\vartheta_t$ is the MAP estimate given $Y_{t,S}$ (standard-normal prior), and $\hat p_{ti}=\sigma(\beta_i+\alpha_i^\top\hat\vartheta_t)$.
+
+\subsection{Estimators}
+\textbf{Mean.} $\hat\theta_t=\sum_{i\in S}w_iy_{ti}$ ($w_i=1/k$, or cluster-size weights for anchors).
+\textbf{Direct regression.} Ridge regression from the $k$ subset outcomes to the full score trained on the source models (the ``random sample + regression'' baseline family, \citealt{zhang2025benchmark}), and a $k$NN estimator averaging the full scores of the 10 source models closest on $S$.
+\textbf{p-IRT / gp-IRT}~\citep{maiapolo2024tiny}: $\hat\theta^{\text{p-IRT}}_t=\frac kn\sum_{i\in S}w_iy_{ti}+\frac{n-k}{n}\,\overline{\hat p_{t,\bar S}}$ (observed items plus mean prediction on the rest); gp-IRT mixes this with the weighted mean using the weight $\lambda=\hat b^2/(\hat\sigma^2/k+\hat b^2)$, where $\hat b$ is an IRT-bias estimate computed on held-out \emph{source} models and $\hat\sigma^2$ the mean Bernoulli variance (divided by 4 for anchor selectors, as in the original recipe).
+
+\subsection{Cross-fitted model-assisted estimators (CF, CF-EB)}
+Plug-in estimators inherit the bias of $\hat p$ when the target is unlike the source models.
+Survey sampling offers a remedy: with a \emph{randomised} $S$, a difference estimator corrects the model-based prediction by the average residual on the sample~\citep{sarndal1992model}, which is unbiased whatever the quality of the model (cf.\ prediction-powered inference, \citealt{angelopoulos2023ppi}).
+Because $\hat p_{t\cdot}$ is fit on the same sampled items, the residuals must be computed out of fold (cross-fitting, \citealt{chernozhukov2018dml}).
+Split $S$ uniformly at random into $K$ folds $S_1,\dots,S_K$ (we use $K=5$); let $T_j=S\setminus S_j$ and let $\hat p^{(-j)}_t$ be the predictions from the IRT ability estimated on $T_j$ only. The fold-$j$ estimator is
+\begin{equation}
+\begin{split}
+\hat\theta_{t}^{(j)}&=\frac1n\Big[\sum_{i\in T_j}y_{ti}+\sum_{i\notin T_j}\hat p^{(-j)}_{ti}\Big]\\
+&\quad+\frac{n-|T_j|}{n}\cdot\frac{1}{|S_j|}\sum_{i\in S_j}\big(y_{ti}-\hat p^{(-j)}_{ti}\big),
+\end{split}
+\label{eq:cf}
+\end{equation}
+and $\hat\theta^{\cf}_t=\frac1K\sum_j\hat\theta_t^{(j)}$. We write $\hat\theta^{\mathrm{plug}}_t$ for the average of the first (plug-in) term over folds, i.e.\ the cross-fitted plug-in, and $\hat\delta_t$ for the averaged residual term, so $\hat\theta^{\cf}_t=\hat\theta^{\mathrm{plug}}_t+\hat\delta_t$.
+
+\begin{proposition}[Unbiasedness]
+\label{prop:unb}
+If $S$ is a simple random sample of size $k$ from the $n$ items and the folds are a uniformly random partition of $S$, then $\E[\hat\theta^{\cf}_t]=\theta_t$ for every target $t$, every item-parameter estimate $(\alpha,\beta)$ computed from $X$ alone, and every (possibly wrong) latent model. The expectation is over the draw of $S$ and the fold assignment, with the target's responses fixed.
+\end{proposition}
+\noindent\emph{Proof sketch.} Given $T_j$ (its items and outcomes), $S_j$ is a uniform random subset of the $n-|T_j|$ remaining items and $\hat p^{(-j)}$ is a fixed function of $T_j$ (and $X$), so $\E[\text{mean residual on } S_j\mid T_j]$ equals the mean residual over the remaining items; adding the observed part $\sum_{T_j} y$ and the predictions on the remaining items recovers $\sum_i y_{ti}$ exactly. Full proof in \cref{app:proof}. \hfill$\square$
+
+Two further facts are used. (i) A Wald interval $\hat\theta^{\cf}_t\pm1.96\,\hat s_t\sqrt{(1-k/n)/k}$, with $\hat s_t$ the standard deviation of the cross-fitted residuals, is a design-based confidence interval whose empirical coverage we test. (ii) $\cf$ is only as good as its variance: it removes the item-sampling variance that $\hat p$ explains but retains the Bernoulli noise of the sampled items, so gains are bounded by $1-R^2$ of the residual variance (\cref{sec:results}).
+
+\paragraph{Cohort-adaptive shrinkage (CF-EB).}
+Unbiasedness has a price: when the plug-in is nearly unbiased (targets similar to sources), the residual term only adds noise.
+Because a cohort of targets shares the same $S$, we can estimate how biased the plug-in is \emph{for this cohort from the cohort's own subset data}. Let $v_t$ be the estimated sampling variance of $\hat\delta_t$. Treating the plug-in's bias $b_t$ as $b_t\sim\mathcal N(0,\tau^2)$ and $\hat\delta_t\mid b_t\sim\mathcal N(b_t,v_t)$, empirical Bayes~\citep{efron1973stein} gives
+\begin{align}
+\hat\theta^{\ebz 0}_t&=\hat\theta^{\mathrm{plug}}_t+\frac{\hat\tau^2}{\hat\tau^2+v_t}\hat\delta_t,\label{eq:eb}\\
+\hat\tau^2&=\max\Big(0,\tfrac1T\textstyle\sum_{t'}\hat\delta_{t'}^2-\tfrac1T\sum_{t'}v_{t'}\Big).\nonumber
+\end{align}
+If the plug-in is systematically biased (extrapolation), $\hat\tau^2\gg v_t$ and the estimator tends to $\cf$; if the plug-in is accurate, $\hat\tau^2\approx0$ and it tends to the plug-in. This is not unbiased (it trades bias for variance, as any shrinkage) and requires a cohort of $T\gtrsim 10$ models sharing $S$. A variant \textsc{CF-EB1} shrinks towards a cohort-level linear trend of $\hat\delta_t$ on $\hat\theta^{\mathrm{plug}}_t$ instead of towards zero.
+When the selector is stratified, \cref{eq:cf} treats the sample as equal-probability; this is exact for SRS and only approximate for systematic sampling, which we check empirically.
+
+\paragraph{Recalibrated predictor.}
+The IRT predictor above fixes how a target's success depends on source-estimated difficulty $\beta_i$. A natural remedy for a target with a different ability range is a per-target recalibration, i.e.\ a logistic fit with a free intercept $a_t$ and difficulty slope $\delta_t$: $\sigma(\beta_i+a_t+\delta_t\beta_i+\alpha_i^\top\vartheta_t)$ with ridge penalties $0.1$ on $a_t$, $1$ on $\delta_t$ and $\vartheta_t$ (a pilot over four penalty settings on three benchmarks, in the Extrap-50 regime, chose these before the main runs; recalibrated results may therefore be mildly optimistic). We use it in p-IRT (``recalibrated p-IRT''), in CF and in CF-EB (suffix ``recal.''). It costs two extra parameters per target.
+
+\subsection{Evaluation protocol}
+\label{sec:protocol}
+For each benchmark we draw 30 independent replicate splits of the models into source and target sets, under four regimes.
+\textbf{IID}: random 50\%/50\% split of models.
+\textbf{Extrap-50}: models are ranked by true full-benchmark accuracy; 80\% (random) of the bottom half are sources and \emph{all} of the top half are targets.
+\textbf{Extrap-25}: sources are 80\% of the bottom 75\%, targets the top 25\%.
+These mimic the practical situation in which the model to be evaluated is newer and better than any model with historical item-level results.
+\textbf{Family hold-out} (Open LLM Leaderboard benchmarks only, 7 of 13): organisations (the prefix of the model name) are drawn at random as targets until they make up $\ge30\%$ of the models; all other models are sources. This tests novelty of the model family without a systematic strength shift.
+In each replicate we fit all source-side components, then for each $k\in\{10,25,50,100,200\}$ ($k\le n/2$) apply each selector once and all estimators to the same $S$, so that comparisons are paired.
+We report accuracies in percentage points. As the headline we use the \emph{relative RMSE}: the geometric mean over benchmarks of $\text{RMSE}(\text{method})/\text{RMSE}(\text{Random+mean})$, each RMSE averaged over replicates; $<1$ is better than the random-subset average (a ratio $r$ is equivalent to using $1/r^{2}$ times as many random items). Confidence intervals are 95\% percentile intervals of a two-level bootstrap (benchmarks, then replicates within benchmark); significance across benchmarks uses the Wilcoxon signed-rank test.

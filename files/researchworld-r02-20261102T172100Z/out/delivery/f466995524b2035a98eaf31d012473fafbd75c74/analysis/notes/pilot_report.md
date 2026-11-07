@@ -1,0 +1,7 @@
+# Timed pilot: implementation milestone only
+
+Actual resource job `job-0af0db362c` succeeded on 2026-11-02. The pilot has two independent replications for each K in {3,10}, calibration size in {99,499}, and scenario in {homogeneous,heterogeneous}, with 2000 test observations per environment. Seven methods are evaluated on the same data, under iid evaluation and a specified group-mixture shift. At K=3 the area estimator uses 32 anchors times 4096 uniform compositions. Raw outputs and environment manifest are in `results/pilot.jsonl` and `results/pilot.manifest.json`; descriptive pilot summaries are in `results/pilot_summary`. The pilot is excluded from planned confirmatory seeds.
+
+The preliminary data expose the intended distinction: unscaled marginal scores can strongly undercover the high-noise subgroup despite acceptable marginal coverage, while group or learned-scale methods behave differently. Two replications cannot establish rankings, uncertainty or reliability. The main analysis must report independent-replication intervals and paired geometry comparisons. A formal claim must not cite these pilot summaries as its completed evidence.
+
+Numerical checks actually passed: rank coverage .90065 over 20000 independent rank trials; uniform-simplex area fraction .036675 compared with analytic .03627598728468436 (200000 draws); Aitchison perturbation invariance; coordinatewise Bonferroni nesting; all membership output shapes. These exact values come from `analysis/checks.py` run with seed 622.

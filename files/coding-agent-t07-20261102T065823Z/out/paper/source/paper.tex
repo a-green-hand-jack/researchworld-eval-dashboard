@@ -1,0 +1,332 @@
+\documentclass{article}
+\usepackage[main,preprint]{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref,url,booktabs,amsmath,amssymb,amsthm,graphicx,microtype,xcolor}
+\usepackage{enumitem}
+\newtheorem{proposition}{Proposition}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\SRS}{\mathrm{SRS}}
+\newcommand{\rrs}{\mathrm{RS}}
+\input{generated/numbers}
+\title{Randomized Residual Strata for Predicting LLM Benchmark Scores:\\Design Guarantees and Empirical Limits}
+\author{Anonymous research artifact}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Historical item-level evaluations can help predict a language model's full-benchmark accuracy from a small subset, but predictive relationships learned from source models need not transfer. We study a simple alternative: cluster items by source-model residual response vectors, sample randomly within each cluster, and correct a source-mean prediction with weighted observed residuals. Conditional on the source data, this estimator is exactly unbiased for every fixed target response vector; its efficiency, rather than its validity, depends on transfer. We evaluate it against random sampling, regression, correlation anchors, and item-response models on thirteen public binary response matrices, with random and two score-extrapolation splits. At a hundred items, MAE falls by \RandomGain\% relative to uniform residual correction under random splits and by \UpperGain\% under upper-tail extrapolation; the lower-tail reduction is uncertain. The method fails at twenty items and does not dominate the strongest regression controls. We also distinguish score calibration from ranking: a shared item-wise control variate can reduce score error while leaving every ranking unchanged. Normal intervals and very small-budget allocation require separate empirical scrutiny.
+\end{abstract}
+
+\section{Introduction}
+Repeatedly evaluating model checkpoints, prompts, and inference settings on full benchmarks can be expensive even when answer labels already exist. The available historical data are unusually useful: a matrix of source-model correctness on every benchmark item. The new target model, however, can answer only a small selected subset. The goal is to estimate its \emph{empirical full-benchmark mean} and recover the ranking that full evaluation would produce.
+
+There are two ways to use this history. One can learn a predictive relationship between subset answers and full scores, or use history to improve a probability sampling design. Anchor Points exploit correlations between item responses \citep{vivek2024}; tinyBenchmarks combines representative items and item response theory (IRT) \citep{polo2024}. Such compression can work well, but the predictive relationship is an additional assumption. In particular, evaluation at a new capability frontier need not resemble interpolation among historical models \citep{zhang2025}.
+
+We examine a deliberately modest alternative, \emph{randomized residual stratification}. First subtract the source correctness rate of each item from every source response. Cluster these residual vectors, allocate a fixed evaluation budget using source within-cluster variances, and sample items uniformly without replacement inside each cluster. Estimate a target score by adding population-weighted sampled residual means to the full source-mean prediction. This is a standard finite-population difference estimator applied to source-informed strata, not a new unbiased-estimation principle. Its practical question is whether the extra structure improves efficiency enough to justify using it.
+
+Our contribution is an auditable application and stress test of that construction. We derive conditional score and pairwise-difference variance identities; implement published correlation anchors and AIPW alongside clearly labeled IRT variants and elementary controls; and compare them on all thirteen supplied LLM matrices. Exact-profile deduplication precedes model splits. Multiple seeds, paired benchmark-block intervals, and additional repeated item draws distinguish prediction error, design variability, and interval coverage. The main comparison is residual stratification against a uniform difference estimator, which already uses the historical item means. This comparison prevents attributing the entire value of a control variate to a sophisticated selector.
+
+The scope is intentionally narrower than a claim of universal compression. Tail splits are retrospective stress tests, not chronological validation. We cannot certify rankings of almost tied models from score unbiasedness, and a source correction shared by all targets cannot change their ranking at all. Our results below therefore assess accuracy, rankings, and uncertainty separately.
+
+\section{Related work}
+\paragraph{Representative subsets and predictive evaluation.}
+Anchor Points clusters source response information using correlations, selects medoids, and estimates scores by cluster weights \citep{vivek2024}. tinyBenchmarks studies stratified sampling, correctness-based clustering, and multidimensional IRT, including a blend of weighted observations with predicted unobserved answers \citep{polo2024}. metabench uses psychometric item information and score reconstruction \citep{kipnis2025}. Generic assessors predict model--instance outcomes from a small reference set, with instance features as additional information \citep{pacchiardi2024}. We use only the binary response matrices; no item text or model embeddings enter any method.
+
+\paragraph{Transfer, adaptive selection, and uncertainty.}
+The permitted benchmark-prediction study documents failures under capability extrapolation and develops an AIPW-inspired regression correction \citep{zhang2025}. We build on its explicitly supplied matrices and fixed repository, rather than treating extrapolation failure itself as a new discovery. Active evaluation acquisition learns dependencies and a policy for target-dependent selection \citep{li2025}. Continuous-score adaptive ranking additionally considers stopping and comparative uncertainty \citep{balkir2026}. Our study is static, fixed-budget, and binary; neither adaptive policies nor stopping rules are evaluated. HELM motivates transparent, multi-scenario evaluation, but the scalar correctness means here cover only part of that objective \citep{liang2023}.
+
+\paragraph{Positioning.}
+The sampling identities below are classical. What we test is whether source-centered response vectors are useful strata once simple item-mean correction, regression, deduplication, and distribution shift are all accounted for. Unlike fixed representatives, random representatives allow design-based inference without a target-response model. Unlike uniform difference estimation, the proposed design can change ranking variance by changing the sampled item distribution. We do not claim to reproduce every component of tinyBenchmarks or to outperform all efficient evaluation systems.
+
+\section{Method and guarantees}
+\label{sec:method}
+Let $X\in\{0,1\}^{M\times N}$ be the source matrix. A fixed target has responses $y_i\in\{0,1\}$ and score $\mu=N^{-1}\sum_{i=1}^N y_i$. Only $k<N$ target responses may be queried. Define the source item mean $p_i=M^{-1}\sum_m X_{mi}$ and source residual vectors
+\begin{equation}
+e_i=(X_{1i}-p_i,\ldots,X_{Mi}-p_i)\in\mathbb R^M.
+\label{eq:embedding}
+\end{equation}
+All source-dependent choices precede every target query. In particular, source row scores and item clusters never use held-out target answers.
+
+\subsection{Residual strata and allocation}
+Run Euclidean $K$-means on $\{e_i\}_{i=1}^N$ to form $H=10$ strata $U_h$, sizes $N_h$, and weights $W_h=N_h/N$. The distortion groups items whose \emph{deviations from their historical difficulty} behave similarly. Subtracting $p_i$ removes a shared easy-versus-hard component; this is distinct from clustering raw response vectors or binning source difficulty. K-means is a heuristic for useful strata, not an optimizer of target variance.
+
+Estimate a variance proxy within each stratum,
+\begin{equation}
+v_h=\max\left\{\frac1M\sum_m\frac{\sum_{i\in U_h}(X_{mi}-p_i-\bar e_{mh})^2}{N_h-1},\ 0.05^2\right\},
+\label{eq:proxy}
+\end{equation}
+where $\bar e_{mh}=N_h^{-1}\sum_{i\in U_h}(X_{mi}-p_i)$. Write $\widetilde v_h$ for this proxy before flooring. It also measures source pairwise variability exactly:
+\begin{equation}
+\frac1{\binom M2}\sum_{a<b}S^2_{X_a-X_b,h}=\frac{2M}{M-1}\widetilde v_h.
+\label{eq:source-pairs}
+\end{equation}
+Thus residual variance is a common source proxy for corrected-score and pairwise-difference variance. This motivates centering for a ranking task, without assuming that the identity transfers source variances to targets. Appendix~\ref{app:proofs} proves the identity. A singleton is censused and has zero variance. Start with $n_h=\min(2,N_h)$; allocate each remaining item to an uncensused stratum with largest
+\begin{equation}
+\frac{N_h^2v_h}{n_h(n_h+1)}.
+\label{eq:allocation}
+\end{equation}
+This greedily minimizes $\sum_h N_h^2v_h/n_h$ subject to the initial minimum counts and capacity constraints, since each stratum's marginal decrease is monotone. The finite-population correction adds only an allocation-independent term to that proxy objective. The variance floor is a fixed hedge against nearly homogeneous source strata, not an assurance of efficiency for unseen targets. At $k=20$, minimum counts consume almost the entire budget; we retain and evaluate that limitation rather than selecting $H$ on target errors.
+
+Independently draw an SRS without replacement $S_h\subseteq U_h$ of size $n_h$. The same queried set is used for every target in a comparison. For residuals $r_i=y_i-p_i$, predict
+\begin{equation}
+\widehat\mu_{\rrs}=\bar p+\sum_h W_h\bar r_{S_h},\qquad
+\bar p=\frac1N\sum_i p_i.
+\label{eq:estimator}
+\end{equation}
+We do not clip this estimate to $[0,1]$, since clipping would change its design bias. All budgets count distinct queried items.
+
+\subsection{Design validity, not guaranteed transfer efficiency}
+\begin{proposition}[Conditional unbiasedness and variance]
+\label{prop:design}
+Condition on any source matrix, any fixed partition, and fixed positive counts $n_h\leq N_h$. For every fixed target vector, independent within-stratum sampling gives
+\begin{align}
+\E_S[\widehat\mu_{\rrs}]&=\mu,\label{eq:unbiased}\\
+\Var_S(\widehat\mu_{\rrs})&=\sum_h W_h^2(1-n_h/N_h)\frac{S_{r,h}^2}{n_h},\label{eq:variance}
+\end{align}
+where $S_{r,h}^2$ is the finite-population sample variance of $\{y_i-p_i:i\in U_h\}$. Replacing $S_{r,h}^2$ by its sampled counterpart gives an unbiased variance estimate whenever a noncensus stratum has $n_h\geq2$.
+\end{proposition}
+The proof uses SRS mean and sample-variance identities, and is given in Appendix~\ref{app:proofs}. No response independence, correct IRT model, or similarity of source and target models is required: responses are fixed and randomness comes from item selection. However, source-derived $v_h$ can poorly predict target residual variability, so variance can exceed uniform sampling. Source data protect neither efficiency nor approximate interval coverage under arbitrary shift.
+
+We report the usual normal interval $\widehat\mu\pm1.96\sqrt{\widehat V}$. An unbiased variance estimate does not make that interval exactly valid. Small strata, discrete responses, and low-accuracy targets can yield skewness or zero sampled variance. Coverage is therefore measured directly with additional item draws.
+
+\subsection{Why score calibration and ranking differ}
+For two targets $a,b$ sharing the same sampled items, let $d_i=y_{ai}-y_{bi}$ and $\Delta=\mu_a-\mu_b$. Their predicted difference satisfies
+\begin{equation}
+\widehat\Delta=\sum_h W_h\bar d_{S_h},\qquad
+\Var_S(\widehat\Delta)=\sum_h W_h^2(1-n_h/N_h)S_{d,h}^2/n_h.
+\label{eq:pair}
+\end{equation}
+The item-wise source offset cancels. For $\Delta>0$, Cantelli's inequality gives $\Pr_S(\widehat\Delta\leq0)\leq V_d/(V_d+\Delta^2)$; a proof is included in the appendix. This bound makes explicit why score unbiasedness alone is insufficient for near-tie ranking.
+
+More strongly, under uniform sampling, the difference estimate is
+\begin{equation}
+\widehat\mu_{\mathrm{diff},m}=\bar y_{m,S}+
+\underbrace{(\bar p-\bar p_S)}_{\text{same for every target }m}.
+\label{eq:rank_identity}
+\end{equation}
+It has exactly the same rankings as the sample mean, regardless of whether its MAE improves. The analogous identity holds between Equation~\eqref{eq:estimator} and uncorrected weighted means using the \emph{same} strata, counts, and items. Any ranking advantage of residual stratification must come from the sampling design and weights, rather than the shared offset. This motivates separate calibration and selection ablations.
+
+\section{Experimental protocol}
+\label{sec:experiments}
+\paragraph{Frozen data and preprocessing.}
+We use all thirteen LLM matrices named in the task, from the MIT-licensed benchmark-prediction repository at commit \texttt{55faff496947789f94e6b5908c77cbc3e84f81ad}. Seven originate from Open LLM Leaderboard evaluations and six from HELM. All entries are finite and binary. Following the repository's reader, we remove \RemovedZeroRows{} all-zero rows; we additionally remove \RemovedDuplicateRows{} exact response-profile duplicates, retaining the first original row. This prevents identical-profile train/test overlap but is not a guarantee of model-family independence. The retained cohorts contain \ModelMin{}--\ModelMax{} models and \ItemMin{}--\ItemMax{} item slots per benchmark (Appendix~\ref{app:data}). Every original column keeps its original weight, including any repeated or overlapping underlying questions. Our estimand is the mean of these frozen matrices, not a reconstructed official leaderboard aggregation.
+
+\paragraph{Splits and budgets.}
+For each benchmark, allocate $\lfloor0.7M\rfloor$ retained models to sources and the remainder to targets. Compare (i) a random permutation, (ii) lowest-scoring sources and highest-scoring targets (upper tail), and (iii) highest-scoring sources and lowest-scoring targets (lower tail). Full target scores are used \emph{only} to construct the retrospective stress cohorts and to evaluate predictions. All fitting and tuning use source data. Seeds $0,\ldots,9$ determine source membership where applicable, tie breaking, clustering, and sampling. Tail source populations are largely fixed across seeds, so repetitions there mostly measure item selection and optimization variability. We use $k\in\{20,50,100,200\}$; $k=100$ is primary. A hundred queries are \BudgetFractionMin{}\%--\BudgetFractionMax{}\% of a benchmark, so the smallest matrices do not support the same compression claim as MMLU-Pro. The $200$-item setting is a sensitivity check.
+
+\paragraph{Comparators.}
+Uniform mean and uniform difference share an SRS, as do score ridge and regression-based estimators. Score ridge maps source subset responses to source full scores; five-fold source-only CV selects $\alpha\in\{0.1,1,10,100\}$. Anchor Points uses source item-correlation dissimilarities, FasterPAM medoids, and population cluster weights, following the permitted implementation. AIPW uses the source-response item regression with $\alpha=10$ and the paper's Equation~(3) \citep{zhang2025}; a separately labeled fixed-repository variant is reported in the appendix because its formula differs. Cross-fitted regression uses half the queried answers to fit item regression and the other half to audit its residuals, exchanges halves, and averages the exactly design-unbiased estimates (Appendix~\ref{app:baselines}).
+
+We also fit a regularized Rasch model and a five-dimensional logistic IRT model, querying uniform items or representatives from latent-parameter clusters. Observed responses contribute exactly and unqueried responses are imputed from fitted target abilities. These are IRT-inspired CPU implementations, \emph{not} full reproductions of tinyBenchmarks' variational fitting, multidataset pooling, or IRT++ blend. Source fitting uses L-BFGS with a $1000$-iteration ceiling and fixed penalties; convergence and the smoke-run correction to the initial ceiling are disclosed in Appendix~\ref{app:implementation}. No target performance selects IRT dimension, penalties, or strata count.
+
+\paragraph{Metrics and uncertainty.}
+For each split, compute target MAE, RMSE, signed bias (percentage points, pp), Spearman $\rho$, and Kendall $\tau_b$. Report benchmark-equal macros, averaging seeds within benchmarks first. Bootstrap intervals resample the thirteen benchmark blocks $10{,}000$ times with seed $20261102$; paired comparisons resample the same identities for both methods. These pointwise $95$\% intervals describe heterogeneity across this collection; shared model pools and related tasks limit an interpretation as independent draws of future benchmarks. Across-seed standard deviations and per-benchmark results are also supplied. Constant predictions have undefined rank correlation. Rank calculations round at twelve decimal places to avoid treating floating-point summation noise as broken ties.
+
+\paragraph{Controls and design diagnostics.}
+We compare source-difficulty quantile strata, raw-response strata without item-mean correction, and residual strata with proportional rather than variance-based allocation. A further, explicitly exploratory ablation removes the offset while retaining the exact residual strata, counts, and sampled items; it isolates Equation~\eqref{eq:rank_identity}. Separately, for each seed-zero source/target split, we draw $200$ additional item sets at $k=20,100$. These fixed-source replications measure coverage and compare empirical variance with the exact finite-population variance, using full answers only for the diagnostic calculation. Source-count experiments use $16,32,64,128$ eligible source rows, five seeds, random and upper-tail protocols, and $k=100$; comparisons at all four source counts use the same seven larger model cohorts.
+
+\section{Results}
+\label{sec:results}
+\begin{table}[t]
+\centering\small
+\caption{MAE at $k=100$ (pp), macro over thirteen benchmarks. Brackets are pointwise $95$\% benchmark-block bootstrap intervals. Ten seeds per benchmark are averaged before bootstrapping. IRT rows are the specified variants, not the original tinyBenchmarks package.}
+\label{tab:main}
+\input{generated/main_mae}
+\end{table}
+
+\subsection{Score accuracy and transfer}
+\input{results_text}
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{../figures/budget_curves.pdf}
+\caption{Error versus query budget. Shading shows pointwise $95$\% benchmark-block intervals for uniform difference and residual strata; all method/metric intervals are in the released CSV. The same fixed strata count is used at every budget. The $200$-item setting consumes a substantial fraction of the shortest benchmarks.}
+\label{fig:budgets}
+\end{figure}
+
+\subsection{Ranking and calibration are separate outcomes}
+\begin{table}[t]
+\centering\small
+\caption{Kendall $\tau_b$ at $k=100$, with the same macro and bootstrap convention as Table~\ref{tab:main}. Uniform mean and uniform difference have identical rankings, as Equation~\eqref{eq:rank_identity} predicts. Spearman correlations and pairwise errors appear in the appendix.}
+\label{tab:ranking}
+\input{generated/main_rank}
+\end{table}
+Uniform mean and uniform difference have equal $\tau_b$ and $\rho$ for every saved split and budget after numerical tie handling, even when their score MAEs differ. The same-strata no-offset ablation likewise preserves the rankings of residual stratification. Its score errors, however, need not coincide (Table~\ref{tab:ablations}). Thus a gain against uniform score MAE cannot by itself establish improved ordering. Residual strata has Kendall $\tau_b=\RandomResidualStrataTau$, $\UpperResidualStrataTau$, and $\LowerResidualStrataTau$ across the three protocols, versus $\RandomUniformTau$, $\UpperUniformTau$, and $\LowerUniformTau$ for uniform sampling. Its upper-tail score improvement therefore does not translate into an upper-tail ranking gain. MIRT with latent anchors ranks better on random splits ($\RandomMirtAnchorTau$) despite its larger score error. We evaluate ranking directly, including rank ties; the appendix also reports inversions restricted to model pairs separated by more than two percentage points.
+
+\subsection{What the source history contributes}
+\begin{table}[t]
+\centering\small
+\caption{Calibration and selection controls at $k=100$. ``Same strata, no offset'' is an exploratory ablation with exactly the proposed method's samples, weights, and counts. Raw-response strata instead changes the clustering as well as removing the offset.}
+\label{tab:ablations}
+\input{generated/ablations}
+\end{table}
+\input{ablation_text}
+
+\subsection{Design variance and uncertainty}
+\input{coverage_text}
+
+\section{Discussion and limitations}
+\label{sec:limitations}
+The experiment separates an estimator's target-transfer assumptions from the source information used to choose a sampling design. Uniform difference and residual stratification remain design-unbiased for an arbitrarily shifted, fixed target. That guarantee does not imply low variance, accurate normal intervals, or reliable near-tie rankings. The mandatory per-stratum samples also make the number of strata a real part of the evaluation budget. Source-validation tuning of the design, adaptive merging, and more conservative intervals are natural next steps, but are not evaluated here.
+
+Our data are a small, related collection of public frozen response matrices. Removing identical response rows mitigates exact-profile leakage; it does not remove shared pretraining, fine-tuning ancestry, or near-duplicate models. Full-profile deduplication changes the model-weighted evaluation population and would not be available as a screening rule for an unseen model; here it defines a retrospective cohort. Conversely, all original columns remain, including potentially overlapping GPQA subsets and repeated response patterns. Model-level and benchmark-level dependence limit bootstrap generalization. Score-tail splits use oracle full scores to define cohorts and conflate response shift with a narrower target score range; they do not establish temporal transfer to future releases or family-level generalization.
+
+The history may also contain evaluation noise, contamination, or failed runs that are not recognizable from binary matrices. We follow the reader's all-zero exclusion but cannot determine whether every excluded run was invalid. The frozen score target is therefore narrower than latent capability or fresh stochastic inference accuracy. Our scalar means do not certify safety, fairness, or performance on unrepresented items. The longest benchmark supports much larger proportional savings than the shortest one, and no token, monetary, or energy savings were directly measured.
+
+Baseline scope matters. Published correlation medoids and the AIPW paper equation are included, but the logistic IRT variants are not exact reproductions of every prior package. We omit text-aware generic assessors, learned adaptive policies, and cross-benchmark pooling. Hence the results support a comparison within the documented CPU protocol rather than a state-of-the-art claim. Remaining optimizer failures are counted and retained, rather than silently excluded. Fixed hyperparameters and one proposed construction also leave open whether a different source-only design would improve the observed tradeoffs.
+
+Reducing evaluation effort could make routine measurement more accessible. Misusing a compressed score as a complete evaluation, or publicly fixing a small subset and optimizing models against it, could instead encourage overfitting and misleading model selection. Random draws and uncertainty reporting help expose sampling error, but neither prevents benchmark contamination or certifies downstream suitability. Full evaluations and scenario-level audits remain useful when consequential deployment or close comparisons demand them.
+
+\section{Conclusion}
+Historical response matrices can be used as sampling-design information as well as prediction-training data. Randomized residual strata provide exact conditional unbiasedness and a transparent variance formula, while their efficiency remains empirical. At a hundred items, it improves mean score error over uniform item-mean correction under random and upper-tail splits; lower-tail gains are uncertain, rankings do not improve consistently, and the fixed design fails at twenty items. Strong regression and simple raw-strata controls remain competitive. A further distinction is exact: shared item-mean correction can improve absolute score calibration without improving any ranking. Practical compressed evaluation should report which of these objectives it actually meets.
+
+\clearpage
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\clearpage
+\appendix
+\section{Proofs and finite-population interpretation}
+\label{app:proofs}
+Condition throughout on source responses, the resulting partition, and the counts. Target responses are arbitrary fixed numbers, not stochastic independent Bernoulli trials. For each stratum, SRS gives
+\begin{equation}
+\E_S[\bar r_{S_h}]=\bar r_{U_h},\qquad
+\Var_S(\bar r_{S_h})=(1-n_h/N_h)S_{r,h}^2/n_h.
+\end{equation}
+Consequently,
+\begin{equation}
+\E_S[\widehat\mu_{\rrs}]=\bar p+\sum_h\frac{N_h}{N}\frac1{N_h}\sum_{i\in U_h}(y_i-p_i)
+=\frac1N\sum_i y_i.
+\end{equation}
+Independent draws across strata eliminate covariance terms, proving Equation~\eqref{eq:variance}. The usual sample variance within an SRS is unbiased for $S_{r,h}^2$ when $n_h\geq2$. A censused stratum contributes zero variance even if it is a singleton. Our minimum-count rule ensures every other stratum has at least two observations. This proves Proposition~\ref{prop:design}.
+
+For Equation~\eqref{eq:pair}, subtract two estimates on the same draw. Every $p_i$ term cancels, leaving an SRS estimate of the fixed stratum means of $d_i$. The same identities then apply to $d_i$. To obtain the one-sided bound without additional distributional assumptions, put $Z=\widehat\Delta-\Delta$, so $\E Z=0$ and $\E Z^2=V_d$. For any $t\geq0$, on $\{Z\leq-\Delta\}$ one has $(Z-t)^2\geq(\Delta+t)^2$. Thus
+\begin{equation}
+\Pr(Z\leq-\Delta)\leq\frac{V_d+t^2}{(\Delta+t)^2}.
+\end{equation}
+Taking $t=V_d/\Delta$ gives $V_d/(V_d+\Delta^2)$; the zero-variance case follows directly. No claim is made that this generally loose bound yields useful small-budget certification.
+
+Finally, subtracting any fixed $p_i$ and adding back its known population mean changes a common-design vector of target predictions by a single scalar. Equations~\eqref{eq:rank_identity} and its stratified counterpart follow by distributing the sums. They require the same item set and weights across targets; they need not hold if each target is sampled independently or selected adaptively. The reported protocol shares subsets across targets.
+
+The greedy allocation rule follows from separability: adding the next observation in stratum $h$ decreases $N_h^2v_h/n_h$ by Equation~\eqref{eq:allocation}. These decreases form a nonincreasing sequence per stratum, so repeatedly taking the largest available decrease selects the best feasible prefix collection. This proves optimality only for the fixed source proxy, fixed initial counts, and fixed strata. It says nothing about globally optimal clustering or unknown target variances.
+
+For Equation~\eqref{eq:source-pairs}, let $z_{mi}=(X_{mi}-p_i)-\bar e_{mh}$ within stratum $h$. Then $\sum_m z_{mi}=0$ for every item. The elementary identity $\sum_{a<b}(z_{ai}-z_{bi})^2=M\sum_m z_{mi}^2-(\sum_m z_{mi})^2$ therefore reduces to $M\sum_m z_{mi}^2$. Sum over items, divide by $N_h-1$, and average over the $\binom M2$ source pairs. Since $\widetilde v_h=M^{-1}\sum_m S^2_{e_m,h}$, the result is $2M\widetilde v_h/(M-1)$. This identity concerns the observed source matrix only.
+
+\section{Data audit and evaluation population}
+\label{app:data}
+\begin{table}[h]
+\centering\small
+\caption{Actual matrix dimensions and deterministic row exclusions. ``Duplicates'' counts repeated response profiles after removing all-zero rows. All original item columns are retained.}
+\input{generated/data}
+\end{table}
+The seven OpenLLM benchmarks have corresponding per-benchmark model lists in the frozen repository. HELM matrices are identified by row indices because the supplied global model list does not establish a reliable per-matrix mapping for every matrix. Saved prediction archives preserve original source and target row indices. File SHA256 hashes, source-constant item counts, unique response-profile column counts, and retained score ranges are in \texttt{results/data\_audit.csv}. Data are loaded directly; no live leaderboard fetch or re-evaluation changes the snapshot.
+
+We preserve matrix-slot weights rather than reconstructing task-weighted leaderboard scores. In particular, the repository concatenates GPQA variants, which may overlap in underlying questions. Without original question identifiers, removing identical response columns would remove a different object from removing repeated question text. We do neither. The guarantee concerns the specified finite matrix mean, even if those slots are statistically dependent.
+
+\section{Baseline details and the AIPW implementation difference}
+\label{app:baselines}
+\paragraph{Uniform and source-mean controls.}
+With a uniform SRS $S$, uniform mean is $\bar y_S$ and uniform difference is $\bar p+\overline{(y-p)}_S$. Their unbiased design-variance estimates use $(1-k/N)s^2/k$ for binary responses and residuals, respectively. Source mean predicts $\bar p$ for every target, consuming no responses. Its rankings are undefined; it is supplied as a calibration sanity check in the full results.
+
+\paragraph{Score ridge and anchors.}
+Score ridge fits the full source score from source responses on the selected uniform items. CV uses five shuffled folds, the split seed, mean squared error, and the fixed alpha grid in the main text. No target response outside the subset enters the fit. Correlation anchors use $1-\operatorname{corr}(X_{:i},X_{:j})$; undefined correlations for source-constant items are set to zero as in the pinned implementation. FasterPAM uses random initialization, the split seed, at most $100$ iterations, and one CPU thread. Item memberships are assigned to the selected medoid with largest correlation and converted into population weights. All selected medoids count toward the budget, including any with zero assigned weight. Original Anchor Points also studied continuous confidence features; our available inputs are binary correctness.
+
+\paragraph{Paper AIPW versus repository AIPW.}
+Let $g$ be ridge regression of a target's queried outcomes on the source responses at those items, with an intercept and $\alpha=10$. Let $\bar g_S$ and $\bar g_R$ be its average fitted values on queried items and the remaining $N-k$ items. Equation~(3) of \citet{zhang2025}, in its reviewed v1, is
+\begin{equation}
+\widehat\mu_{\mathrm{paper}}=\bar y_S+(1-k/N)(\bar g_R-\bar g_S).
+\label{eq:aipw-paper}
+\end{equation}
+The pinned \texttt{AIPWPred.predict} instead returns
+\begin{equation}
+\widehat\mu_{\mathrm{repo}}=\bar g_R+(1-k/N)(\bar y_S-\bar g_S).
+\label{eq:aipw-repo}
+\end{equation}
+Because an intercept makes mean training residual zero, these reduce to $(k/N)\bar y_S+(1-k/N)\bar g_R$ and $\bar g_R$, respectively. Their difference matters when $k/N$ is large. We use the paper equation for the primary comparison and preserve the repository reproduction separately. Neither same-sample fitted nuisance correction is claimed to have our estimator's exact finite-budget unbiasedness.
+
+\paragraph{Exactly unbiased cross-fitted regression.}
+Partition the uniform queried sequence into alternating halves $A,B$. Fit ridge $g_A$ using target responses only on $A$, with source response features. Predict
+\begin{equation}
+\widehat\mu_{A\to B}=\frac1N\left[\sum_{i\in A}y_i+\sum_{i\notin A}g_A(i)
++\frac{N-|A|}{|B|}\sum_{i\in B}(y_i-g_A(i))\right].
+\label{eq:cf}
+\end{equation}
+Conditional on $A$ and its responses, $B$ is an SRS from its complement. The last term unbiasedly estimates the total residual on that complement. The first term includes the known fitting responses exactly. Therefore Equation~\eqref{eq:cf} is unbiased conditional on $A$. Swap $A,B$ and average to use every query for fitting and audit in opposite directions. The two estimates are dependent, so we do not apply a naive independent-half variance formula or report score intervals for this baseline.
+
+\paragraph{Logistic IRT variants.}
+For MIRT we fit $\Pr(X_{mi}=1)=\sigma(\theta_m^\top a_i+b_i)$ with dimension five by minimizing summed Bernoulli negative log likelihood plus $\frac12\sum_m\|\theta_m\|^2+\frac12\sum_i\|a_i\|^2+0.05\sum_i b_i^2$. Rasch fixes $a_i=1$ and uses one-dimensional abilities. Initialize the first ability component from standardized source mean scores, the first MIRT loading to $0.5$, other components from seed-controlled normals with standard deviation $0.05$, and $b_i$ from clipped source log odds. L-BFGS uses relative objective tolerance $10^{-8}$, gradient tolerance $10^{-4}$, and the ceiling described in the main text. For a target, fix item parameters and infer abilities by penalized likelihood on queried responses, with the same unit Gaussian penalty. The full-score prediction replaces queried probabilities with actual observed outcomes. Target fitting has ceiling $100$, relative tolerance $10^{-10}$, and gradient tolerance $10^{-5}$. Latent anchors cluster concatenated $(a_i,b_i)$ with $k$ clusters and select the nearest member of each cluster, ensuring distinct queries. This is not IRT++ or its variational implementation.
+
+\paragraph{Strata ablations.}
+Raw-response strata applies the same clustering and allocation pipeline to $X_{:i}$ and estimates weighted uncorrected target means. Difficulty strata partitions a stable sort of $p_i$ into ten equally sized groups, then applies residual correction and variance-based allocation. Proportional residual strata uses the same minimum counts but allocates subsequent items by the largest $N_h/(n_h+1)$, subject to capacity. The same-strata no-offset ablation reuses the complete proposed design and changes only the estimator offset. These different controls should not be interchanged.
+
+\section{Additional empirical results}
+\label{app:additional}
+\begin{table}[h]
+\centering\scriptsize
+\caption{Benchmark MAE at $k=100$: mean $\pm$ sample SD over ten seeds. The SD describes split/selection/optimization variability, not uncertainty across target models. ``Diff.'' is uniform difference.}
+\input{generated/per_benchmark}
+\end{table}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{../figures/variance_ratios.pdf}
+\caption{Residual strata versus uniform difference: exact finite-population design variance ratio at $k=100$, averaged over targets in each fixed seed-zero split. Values above one are efficiency failures of the source-derived design. Source data select the design; full target vectors are used only to compute these diagnostic variances.}
+\label{fig:variance}
+\end{figure}
+
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{../figures/source_count.pdf}
+\caption{Source-count sensitivity at $k=100$, macro over the same seven OpenLLM benchmarks, five seeds. Shading is a pointwise $95$\% benchmark-block bootstrap interval. Source models are subsampled from the original eligible source cohort and never from held-out targets. Complete results also include the smaller HELM cohorts at eligible counts.}
+\label{fig:sources}
+\end{figure}
+
+\begin{table}[p]
+\centering\small
+\caption{Normal nominal $95$\% interval coverage with $200$ additional item draws per seed-zero split. Brackets quantify benchmark heterogeneity, not binomial independence of target models.}
+\input{generated/coverage}
+\end{table}
+\begin{table}[p]
+\centering\small
+\caption{Mean full normal interval width (pp), for the same design replications. Coverage should be read together with width.}
+\input{generated/width}
+\end{table}
+\begin{table}[p]\centering\small
+\caption{Macro RMSE (pp) at $k=100$, including the no-query source-mean sanity check and the two AIPW formulas.}
+\input{generated/all_rmse}
+\end{table}
+\begin{table}[p]\centering\small
+\caption{Macro Spearman correlation at $k=100$. The source mean has undefined rankings, displayed as a dash.}\label{tab:allrho}
+\input{generated/all_rho}
+\end{table}
+\begin{table}[p]\centering\small
+\caption{Macro signed prediction bias (pp) at $k=100$. Bias here averages finite-run predictions, not an assertion about design expectation.}
+\input{generated/all_bias}
+\end{table}
+\begin{table}[p]\centering\small
+\caption{Pairwise ordering error at $k=100$ among pairs whose true means differ by more than two pp. An inverted prediction counts one error; a predicted tie counts one half. Each split's pair average is macro-aggregated over seeds and benchmarks. Cohorts without an eligible pair are undefined and omitted; eligibility is identical for all methods.}
+\input{generated/all_pair}
+\end{table}
+\begin{table}[p]\centering\small
+\caption{MAE at $k=100$ restricted to the seven benchmarks with at least $1000$ item slots, so the query fraction is at most $10$\%. This descriptive length sensitivity retains all main estimators; intervals resample only those seven benchmark blocks. It does not replace the pre-specified thirteen-benchmark primary comparison.}
+\input{generated/long_mae}
+\end{table}
+
+\clearpage
+\section{Reproducibility, compute, and research record}
+\label{app:implementation}
+All data preparation, methods, model splits, predictions, item indices, metrics, and rendering code accompany this paper. \texttt{README.md} gives environment setup, exact commands, timing, and a table/figure-to-script map. \texttt{requirements.lock.txt} pins the actual Python environment. The main scripts use Python $3.11.2$, NumPy $2.2.6$, SciPy $1.15.3$, and scikit-learn $1.6.1$, with one BLAS thread per worker. The machine exposes Intel Xeon Gold 6230 CPUs, but the container is limited to four CPU equivalents and $16$ GiB RAM. An initial eight-worker run triggered one out-of-memory process kill after $120$ completed tasks, aborting $270$ pending or running tasks. We preserved those logs, removed temporary matrix copies without changing their values, and reran unfinished tasks with four workers. All $390$ tasks completed; no failing partial prediction was retained. No GPU or model-evaluation API was used.
+
+The main launches took \MainMinutes{} minutes total wall time, comprising \FailedLaunchMinutes{} minutes in the initial interrupted launch and \MainResumeMinutes{} in the resumed launch. Successful tasks account for \WorkerHours{} summed worker-hours (elapsed, not a CPU-time measurement); this excludes discarded in-flight work. The maximum recorded successful-worker high-water memory was \PeakWorkerMiB{} MiB; this is not a total-memory estimate for the failed launch. The design and source-count diagnostics took \DiagnosticSeconds{} seconds in their logged invocation. Timings are local observations, not promises for other machines.
+
+\texttt{PROTOCOL.md} records the pre-main experimental choices and amendments; it is a local analysis plan, not a public preregistration. Smoke tests used commonsense and MMLU-Pro separately from main results. The initial MIRT ceiling of $200$ did not converge on commonsense. A convergence-only rerun with ceiling $1000$ converged after $259$ iterations; the main ceiling was increased before running the main comparison, without using target error to choose it. Across the main fits, MIRT reported \MirtFailures{} unsuccessful source optimizations and Rasch reported \RaschFailures{}; these results remain in the tables. Target ability fitting reported \TargetFitFailures{} unsuccessful batches out of \TargetFitBatches{}; each batch contains independently parameterized target abilities. Detailed termination messages, objective values, gradients, target-fit success flags, and durations are retained. The source-centered no-offset control was added when writing up the ranking identity and is explicitly exploratory. Twelve-decimal tie handling was applied consistently to saved predictions; it does not change score errors.
+
+Exact enumerations in \texttt{src/test\_design.py} verify score expectation, score variance, pairwise variance, and cross-fitted expectation on tiny finite populations. They are correctness tests, not synthetic benchmarks used to support empirical conclusions. Every numerical table, empirical macro, and figure is generated by \texttt{src/report.py} from actually executed results. Complete rows for every budget, including methods omitted from the plots, are released as CSV. Design replications have separate seeds $100000,\ldots,100199$ passed through the documented sampling seed offsets.
+
+\paragraph{Asset provenance and access restrictions.}
+The bundled source snapshot and matrices are used under the repository's MIT license, with its copyright notice preserved. Their upstream evaluations originate from Open LLM Leaderboard and HELM; the latter's toolkit is Apache-2.0. We redistribute neither original question text nor model weights. Our new code is MIT-licensed separately. The NeurIPS 2026 official style and checklist are included unchanged except for filling checklist answers and removing its instruction block. All referenced research was directly consulted from the task's explicitly permitted starter list. No broad literature search, citation traversal, or attempt to identify the unspecified prohibited paper was performed. Initial direct arXiv URLs delivered later versions of two permitted starter papers; the access log identifies these, and the Zhang paper's reviewed v1 was used for the baseline equation. No prohibited content was knowingly encountered. \texttt{logs/RESEARCH\_LOG.md} records accesses, corrections, and pilot failures.
+
+\paragraph{Use of an AI research agent.}
+This research, including method formulation, code, experiments, analysis, and manuscript drafting, was performed by an autonomous Codex research agent under the supplied task instructions. It was not limited to copy editing. Results are computational outputs available for independent checking; no human replication or human-authored review is claimed. The research did not obtain new model responses for the benchmark; it operates on the provided historical matrices.
+
+\clearpage
+\input{checklist}
+\end{document}
