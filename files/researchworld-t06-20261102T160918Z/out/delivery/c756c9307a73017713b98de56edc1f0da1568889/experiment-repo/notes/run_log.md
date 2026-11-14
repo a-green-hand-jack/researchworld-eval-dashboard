@@ -1,0 +1,13 @@
+# Execution log
+
+- Data fetch initially used unavailable `requests`; replaced with Python standard-library urllib. No acquisition requirement omitted. Pinned hashes pass.
+- Numerical validity checks: independent SciPy optimizer, orientation invariance, infinitesimal-label influence finite difference, data-duplication/penalty scaling all pass at lambda .1/1/10.
+- Timed pilot job-bff0ba4cbb succeeded. Its start response was not captured; a duplicate deterministic pilot job-7570122eed also succeeded and is the archived pilot. No independent-replication claim is made.
+- Full primary job-6e0c2eb4be and robustness job-6e27617314 succeeded. Reconstructed witnesses independently verify every found primary attack and list exact processed row indices.
+- Matched-selection start RPC returned `{"error":"timed out"}` although job-da06f654bb successfully completed. Likewise bootstrap and diagnostic start RPCs timed out, but their tracked jobs were job-321f1d2208 and job-16f8ad528e; no duplicate was launched. This was orchestration response delay, not an experimental failure.
+- Summary script initially failed on intentionally empty bootstrap CSVs in matched analyses; fixed the reader, preserving the experiments.
+- Adjacent-pair exploratory diagnostics initially verified only predicted-budget neighbors and 5% cap. These were valid found upper bounds but coarse. Refined with binary search plus exact neighboring endpoint checks, without changing the main estimand; no claim of global minimality/monotonicity.
+- Home-adjusted NBA nuisance-variable job-d4defe83b9 succeeded (300 date bootstraps per season).
+- Paired matched bootstrap job-321f1d2208 completed 500 paired replicates without censored searches. Runner-up changes motivated a separately reported original GPT-4–Claude fixed-contrast control; this was added after inspecting resampling behavior, not preregistered. Both statistics are archived.
+- Refined adjacent-pair job-bcbc500fbd succeeded. All diagnostic outputs are actual refits. Primary bootstrap maximum recorded fit gradient is 2.02e-8; main unperturbed fits maximum 2.32e-9. Representative one-edit influence/refit correlation minimum across primary data is .999919; larger perturbations are always measured by refitting rather than assumed linear.
+- Delivery packaging: fixed clean-checkout summarization to read consolidated matched audit files when ignored per-replicate directories are absent. This changes no experimental result. The README now explicitly starts with `cd analysis` in the delivered paper project and distinguishes archived-summary regeneration from full raw-data reproduction.

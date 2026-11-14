@@ -1,0 +1,26 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T15:00:51.886444+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `3`
+- audit_json_path: `work/results/a06/claude/20261111_111240/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/a06/claude/20261111_111240/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/a06/claude/20261111_111240/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+Headline sealed-evaluation numbers match the grounded records, but replay-derived baseline values are presented as evaluator-recorded, the Supplement states environment versions with no artifact support, and the P4 undercoverage wording overreaches.
+
+## Findings
+- `replay-vs-recorded-provenance` (Experimental protocol; Table 1; Results (resampling over-correction)): The evaluator episodes record only naive_bias for baselines, not Bonferroni or resampling bias, so resampling bias is replay-derived and unchecked against any record. Only naive_IS, bonf_IS, resample_IS and naive_bias were diffed (max_abs_diff_vs_recorded). The Table 1 caption labels only baseline coverage and width as replayed, not resampling bias. claims_grounding.json cites only final.evidence.episodes for baseline coverage, width and resampling bias, and that source does not contain them.
+  - claim: The evaluator records interval score, bias, coverage and width for the EB-IRT reporter and interval score and bias for the baselines; the replay reproduced all recorded baseline interval scores and biases exactly (also Table 1 resampling bias -0.0209 and text bias -0.067 in P2 and -0.031 in P4, and baseline coverage 0.44 and 0.61)
+  - evidence: paper_data.json final_evaluation.evaluation_evidence.episodes[*].solution.* has keys bias, bonferroni_IS, cand_IS, coverage, naive_IS, naive_bias, resample_IS and width, where bias and coverage are EB-IRT only and there is no resample_bias; analysis/reconstructed_baselines.json max_abs_diff_vs_recorded lists naive_IS, bonf_IS, resample_IS and naive_bias; claims_grounding.json claims 8, 17 and 18 use only final.evidence.episodes.
+  - requested_fix: Say that only baseline interval scores and naive bias are evaluator-recorded; label resampling bias, and all baseline coverage and width, as replay-derived in the protocol text and the Table 1 caption; and remove the 'bias ... exactly' wording for resampling bias.
+- `supp-environment-ungrounded` (Supplementary Information, Reproducibility): No evidence artifact (paper_data.json, analysis/*, tables and figures .prov.json sidecars, scientific-evidence) records these package versions or a total script runtime, and no @evidence ref anchors the claim. The only recorded timing is the evaluator's 6.2 s per seed.
+  - claim: The environment used Python 3.12, NumPy 2.5.4 and Matplotlib 3.11.2 ... running the scripts in the order given takes under a minute on CPU
+  - evidence: The strings 2.5.4 and 3.11.2 appear only in paper.tex; the .prov.json sidecars for figures and tables contain no version or runtime fields; paper_data.json final_evaluation records only episode duration_seconds (mean 6.24 s, total 49.95 s).
+  - requested_fix: Delete the specific Python, NumPy and Matplotlib versions and the 'under a minute' runtime claim, or replace them with a statement that environment details were not recorded in the evidence trail.
+- `undercoverage-overclaim-p4` (Abstract; Results (residual bias and miscalibrated width); Limitations item 6; Conclusion): P4 coverage is 0.8875 with a seed sd of 0.0305 over eight seeds, which is within about one standard error of the 0.90 nominal level, so it does not show undercoverage. The same paper treats N2 coverage of 0.887 as a 'null coverage' observation, not a failure. Only P6 (0.833, sd 0.050) is clearly below nominal. In the abstract, 'there' can be read as covering the exhaustive-search ties, where coverage is 0.94 and 0.98, not 0.83--0.89.
+  - claim: The reporter ... under-covers there (0.83--0.89); undercoverage ... in real-outcome halving (0.89); for real halving and large question budgets the new reporter ... under-covers
+  - evidence: analysis/final_per_case.json cases.P4.coverage: mean 0.8875, per-seed sd about 0.031, 8 seeds; cases.P6.coverage: mean 0.833; Table cases P3 0.94 and P5 0.98 for EB-IRT; final.metric.coverage 0.929.
+  - requested_fix: Describe P4 (0.89) as slightly below nominal and within seed noise, and reserve 'undercovers' for P6 (0.83). Rewrite the abstract so the 0.83--0.89 range is attached explicitly to P6 and P4 and not to the exhaustive-search comparison.

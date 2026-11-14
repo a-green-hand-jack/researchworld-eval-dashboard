@@ -1,0 +1,9 @@
+# Frozen-data audit
+
+Data were acquired only from the task-authorized `data/` paths of the fixed upstream commit `55faff496947789f94e6b5908c77cbc3e84f81ad`. No upstream README, paper, or other repository pages were accessed. File URLs, byte counts and SHA-256 hashes are in `results/data_manifest.json`; rerun `python3 scripts/fetch_data.py` and `python3 scripts/audit_data.py` from the repository root. Raw files are ignored by git and must be downloaded.
+
+All 13 score arrays are finite binary model-by-item matrices with no missing cells. Their actual shapes range from 79–448 models and 437–12,032 items; `results/data_audit.csv` is authoritative. The 7 Open LLM matrices have matching-length per-benchmark model lists. The lists contain duplicate names (6 in ARC, 19 in each other benchmark), so model rows must not be assumed independent identities. Exact response duplicates are recorded separately in `results/duplicate_rows.json`; some different names share responses. OpenLLM math includes 53 all-zero rows and 119 constant items. This is observed structure, not evidence that the rows are invalid.
+
+Five HELM arrays have 83 rows and the supplied global list has 83 names; positional alignment is an assumption, not independently verified. LegalBench has 79 rows and no supplied matching per-benchmark model list, so it must not be assigned the 83 names. Primary experiments can use row IDs; any metadata-dependent HELM split must wait for evidence establishing alignment or omit the unresolved benchmark with a stated scope. Raw duplicate rows must not silently inflate independent sample counts. We will agree identity grouping/deduplication and exact-response sensitivity checks before full runs.
+
+This is a data audit, not a benchmark-prediction experiment. No performance claims have yet been measured.

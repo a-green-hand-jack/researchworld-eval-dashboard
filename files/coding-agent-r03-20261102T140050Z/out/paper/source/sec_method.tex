@@ -1,0 +1,54 @@
+\section{Problem setting and method}
+\label{sec:method}
+
+\paragraph{Setting.}
+A history matrix $X\in(\mathbb{R}\cup\{\text{NA}\})^{M\times N}$ holds the scores of $M$ models on $N$ benchmarks, with missing cells.
+A new model arrives. The evaluator may run any $k$ benchmarks $S\subset[N]$ (the \emph{budget}) and must then predict the model's scores on benchmarks it will not run.
+We standardize every benchmark with its training mean and standard deviation, so that a model's score vector is $z\in\mathbb{R}^N$, and measure error by the \emph{standardized MSE} on the targets (also reported in score points).
+Two decisions are to be made: \emph{which} $S$ to run (selection), and \emph{how} to infer $z_{T}$ from $z_S$ (prediction).
+Both may use only $X$.
+
+\paragraph{Predictors.}
+Our main predictor treats $z\sim\mathcal N(\mu,\Sigma)$ and predicts with the Gaussian conditional mean $\hat z_T=\mu_T+\Sigma_{TS}\Sigma_{SS}^{-1}(z_S-\mu_S)$, which is Bayes-optimal under squared loss if the model holds.
+We estimate $\Sigma$ from \emph{pairwise-complete} observations of $X$ (so missing cells are handled without imputation), project it to the PSD cone, and shrink it toward the identity on the correlation scale, $\Sigma_\kappa=(1-\kappa)\hat C+\kappa I$, with $\kappa$ chosen on a validation split of the \emph{training} models (\textsc{Gauss}).
+We compare against: the benchmark mean (\textsc{Mean}); the \emph{average of the benchmarks run}, rescaled per target (\textsc{AvgShift}); a rank-$r$ probabilistic factor model $z=\mu+\Lambda f+\varepsilon$, $\varepsilon_j\sim\mathcal N(0,\psi_j)$, fitted by EM with missing data \citep{tipping1999ppca} and folded in by the posterior of $f$ (\textsc{FA}); iterative-SVD imputation with ridge fold-in in the spirit of soft-impute \citep{mazumder2010softimpute} (\textsc{ISVD}); $K$-nearest models (\textsc{kNN}); and a blend of pairwise and factor-model covariance (\textsc{Hybrid}). All hyper-parameters (rank, shrinkage, $K$) are tuned by an inner split of the training rows.
+
+\paragraph{Selection rules.}
+For a Gaussian model the expected squared error on benchmark $j$ after observing $S$ is $v_j(S)=\Sigma_{jj}-\Sigma_{jS}\Sigma_{SS}^{-1}\Sigma_{Sj}=\mathrm{Var}(z_j\mid z_S)$ and does not depend on the observed values.
+We choose $S$ to minimize the pool-level objective $F(S)=\sum_{j}v_j(S)$ (members of $S$ contribute zero), greedily:
+\begin{equation}
+ j_{t+1}\in\arg\max_{j\notin S_t}\ \frac{\sum_{i}\mathrm{Cov}(z_i,z_j\mid z_{S_t})^2}{\mathrm{Var}(z_j\mid z_{S_t})}
+ \label{eq:greedy}
+\end{equation}
+(\textsc{Greedy}; a rank-one downdate of the residual covariance per step, $O(N^2k)$ in total, a few milliseconds for $N\approx 300$).
+Baselines: \textsc{Random}; \textsc{Most-evaluated} (the benchmarks that most models report---what a practitioner would run by default); \textsc{Most-correlated} (largest mean absolute correlation with the others, which ignores redundancy); \textsc{$k$-medoids} on $1-|\rho|$; \textsc{Greedy-MaxVar} (largest conditional variance, the entropy rule of \citet{krause2008near}); \textsc{Greedy-MI} (the mutual-information rule of \citet{krause2008near}); and top factor-model SNR. Selection is always restricted to the benchmarks the new model has actually been run on (the \emph{pool}), and uses only training rows.
+
+\subsection{Theory: what limits accuracy, and how large $k$ must be}
+\label{sec:theory}
+All statements are for the Gaussian model; proofs are in Appendix~\ref{app:proofs}, and each is checked numerically in \S\ref{sec:exp_theory}.
+
+\begin{proposition}[Closed form, floor, no gain from adaptivity]\label{prop:closed}
+If $\Sigma=\Lambda\Lambda^\top+\Psi$ with $\Lambda\in\mathbb{R}^{N\times r}$, then
+$v_j(S)=\psi_j+\lambda_j^\top\big(I+\Lambda_S^\top\Psi_S^{-1}\Lambda_S\big)^{-1}\lambda_j .$
+Hence $v_j(S)\ge\psi_j$ for every $S$ (an irreducible per-benchmark floor), $v_j$ is non-increasing in $S$, and $v_j(S)$ does not depend on the observed scores: choosing benchmarks sequentially, after seeing results, cannot beat choosing the same number in advance.
+\end{proposition}
+
+\begin{proposition}[Random selection: $k$ must scale with the rank]\label{prop:random}
+Let the loading rows be i.i.d.\ $\mathcal N(0,\sigma^2G)$, $\Psi=\sigma^2I$, with eigenvalues $g_1\ge\dots\ge g_r$ of $G$, and let $S$ be a uniformly random set of $k$ benchmarks, $j\notin S$. Then
+\[
+ \sum_{i=1}^r\frac{g_i}{1+k g_i}\ \le\ \frac{\mathbb{E}\,v_j(S)}{\sigma^2}-1\ \le\ \frac{r}{k-r-1}\qquad(k\ge r+2).
+\]
+For equal $g_i=g$, the excess error over the floor is therefore $\le\epsilon\sigma^2$ only if $k\ge r/\epsilon-1/g$, and is guaranteed once $k\ge r(1+1/\epsilon)+1$: $k=\Theta(r/\epsilon)$. A factor with small strength $g_i$ is not recovered until $k\gtrsim 1/g_i$.
+\end{proposition}
+
+\begin{proposition}[No selection beats the spectrum]\label{prop:tail}
+For any Gaussian $\Sigma$ and \emph{any} $S$ with $|S|=k$, $F(S)\ge\sum_{i>k}\lambda_i(\Sigma)$. Under the factor model with $\Psi=\sigma^2 I$ and $k\ge r$ this is $\sigma^2(N-k)$, i.e.\ $\ge\sigma^2$ per target.
+\end{proposition}
+
+\begin{proposition}[Finite history: unstructured regression pays $k/(M-k-1)$]\label{prop:ols}
+Under Gaussian design with known means, regressing each target on the $k$ selected benchmarks by least squares on $M>k+1$ complete training rows has $\mathbb{E}[\text{test MSE}]=v_j(S)\,(1+k/(M-k-1))$.
+\end{proposition}
+
+\paragraph{Greedy quality.} $f(S)=\mathrm{tr}\,\Sigma-F(S)=\sum_j\mathrm{Var}(z_j)R^2_j(S)$ is a non-negative combination of squared multiple correlations, so by \citet{das2011submodular} its submodularity ratio is at least $\lambda_{\min}$ of the correlation matrix and greedy attains $\ge(1-e^{-\lambda_{\min}})$ of the optimum. This guarantee is weak when benchmarks are strongly collinear (small $\lambda_{\min}$); we therefore measure the greedy/optimal ratio directly (\S\ref{sec:exp_theory}).
+
+\paragraph{Cost and applicability.} Fitting costs one pairwise covariance ($O(MN^2)$) plus tuning; selection is $O(N^2k)$; prediction is one $k\times k$ solve. The history must contain enough co-observations (we require $\ge5$ models per pair, else correlation 0) and the new model is assumed exchangeable with it; \S\ref{sec:exp_shift} tests violations.

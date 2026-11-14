@@ -1,0 +1,7 @@
+# First scheduled mandatory-control wake
+
+Live checkpoint 2026-11-06T22:28:42.731981+00:00:96 completed,2 executing,106 not started;0 recorded failed configurations. Original204 matrix/seeds/horizons unchanged. Both60-config jobs remain running under their immutable checked guards. This checkpoint is execution/resource evidence, not the final study.
+
+Repriced remaining 7.593096CPUh;50% reserved serial prospective 21.210686h fits25.674345h beforeNov8 00:09Z, leaving4.463659h scenario slack. Selected factor remains1.860141102946608 with every new ratio included, only the original two named historical gaps excluded prospectively. Original failed gate and literal5165.075h current remaining-work projection retained. No new anomaly is omitted and no speedup assumed. Known loop/derived/future-finalization basis19.070133CPUh<44. Actual results121295397bytes plus remaining reserved338617422bytes<1000000000. Resource-spend snapshot27281.590589CPU seconds overlaps loop measures; do not add them.
+
+Frozen completed-input set96 contains the original84 plus8 decay0.1 width512 and4 lr-high width512 configurations. Two live lr-high outputs were excluded from the independent checkpoint audit/analysis. Snapshot analysis therefore records108 absent registrations, while live resource inventory records106 not started+2 executing. Neither treats uncompleted execution as scientific censoring. Derived work is tracked as job-2b8869680e; final204 handoff remains mandatory and no final width-by-control conclusion is available.

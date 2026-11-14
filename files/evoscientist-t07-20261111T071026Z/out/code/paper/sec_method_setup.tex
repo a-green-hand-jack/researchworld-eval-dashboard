@@ -1,0 +1,65 @@
+\section{Problem setting and methods}
+\label{sec:method}
+
+\paragraph{Setting.}
+A benchmark has $N$ items.  We observe a binary matrix $S\in\{0,1\}^{m\times N}$ of \emph{source} models' item-level outcomes.
+A \emph{target} model $t$ has unknown outcomes $y_t\in\{0,1\}^N$ and unknown full score $\bar y_t=\frac1N\sum_i y_{ti}$.
+We may run the target on only $n\ll N$ items.  A method consists of (i) a \emph{design}, which uses only $S$ to choose a
+coreset $C$ with $|C|=n$ (and, for randomized designs, known inclusion probabilities $\pi_i$), and (ii) an \emph{estimator}, which maps the
+target's outcomes $y_{t,C}$ (and $S$) to $\hat y_t\approx\bar y_t$.  One coreset is shared by all targets.
+We evaluate with MAE and RMSE of $\hat y_t-\bar y_t$ over the target models, and with Spearman's $\rho$ and Kendall's $\tau$ between $\hat y$ and $\bar y$.
+
+\paragraph{Survey-sampling view.}
+Predicting $\bar y_t$ from a sample of items is a finite-population mean estimation problem, so classical design-based tools apply.
+With inclusion probabilities $\pi_i$ the H\'ajek mean $\sum_{i\in C}y_{ti}/\pi_i\big/\sum_{i\in C}1/\pi_i$ is (nearly) unbiased for \emph{any} target, however different from the sources.
+A \emph{model-assisted} (difference) estimator additionally uses an item-level predictor $f_t(i)$ built from $S$ and the target's coreset outcomes:
+\begin{equation}
+\hat y_t \;=\; \underbrace{\tfrac1N\textstyle\sum_{i=1}^N f_t(i)}_{\text{plug-in}} \;+\; \underbrace{\frac{\sum_{i\in C}(y_{ti}-\tilde f_t(i))/\pi_i}{\sum_{i\in C}1/\pi_i}}_{\text{residual correction}},
+\label{eq:dr}
+\end{equation}
+where $\tilde f_t(i)$ is the prediction for a \emph{sampled} item.  If $f_t$ is accurate the residuals are small and the variance is reduced; if it is badly wrong (e.g.\ the target is unlike the sources) the correction removes the bias in expectation.
+This is the structure of AIPW / prediction-powered estimators; methods that return only the plug-in term (IRT or regression predictions, ``learn from source models'') have no such protection.
+In~\eqref{eq:dr} we use \emph{cross-fitting}: $\tilde f_t(i)$ for $i\in C$ comes from a predictor fit on the other $4/5$ of the coreset, so over-fitting to $C$ cannot shrink the residuals; the plug-in term uses the predictor fit on the whole coreset (variants without cross-fitting are reported as ``is'' for in-sample).
+
+\paragraph{Predictors $f_t$ (all use only $S$ and $y_{t,C}$).}
+\emph{ridge}: item-level ridge regression of $y_{t,C}$ on the source-model outcomes $S_{\cdot,C}$ (features = the $m$ source models; $\alpha=10$, as in the AIPW reference implementation), applied to all items.
+\emph{lat} (latent-ability): a multidimensional 2PL IRT model $\Pr(y_{mi}=1)=\sigma(\theta_m^\top a_i+b_i)$ with $k=2$ dimensions is fit on the source models by MAP (L-BFGS; $\theta_m\sim N(0,I)$, $a_i\sim N(0,10 I)$);  the target's $\theta_t$ is the MAP estimate from its coreset outcomes with item parameters frozen (batched Newton).
+\emph{knn}: average of the full outcome vectors of the $10$ source models whose coreset outcomes disagree least with the target's.
+
+\paragraph{Designs.}
+\emph{uniform}: simple random sample.  \emph{strat}: items sorted by source accuracy, cut into $n$ equal-count strata, one item drawn per stratum (post-stratification on predicted difficulty).
+\emph{pps\_resid} (Neyman-type, proposed): after fitting the latent model on the sources, let $v_i$ be item $i$'s mean squared residual over source models.
+Sampling item $i$ with probability $\pi_i\propto \sqrt{v_i}$ minimizes $\sum_i v_i/\pi_i$, the dominant term of the variance of an inverse-probability-weighted residual mean (Neyman allocation).
+Because the targets' residual variances are unknown and may differ from the sources', we use a \emph{defensive} mixture $\pi_i\propto(1-\gamma)\sqrt{v_i}/\sum_j\sqrt{v_j}+\gamma/N$ with $\gamma=0.3$ fixed a priori, cap $\pi_i\le1$ iteratively, and draw a fixed-size sample by systematic sampling (random order, random start), which has exact marginal inclusion probabilities $\pi_i$.
+
+\paragraph{Proposed method.}
+\textbf{Neyman-DR} $=$ pps\_resid design $+$ lat predictor $+$ cross-fitted estimator~\eqref{eq:dr} (named \texttt{pps\_resid+lat\_cf}).  We fixed this combination, $k=2$, $\gamma=0.3$, 5-fold cross-fitting and ridge $\alpha=10$ \emph{before} running the main experiments, and report all other design$\times$predictor$\times$cross-fit cells (Sec.~\ref{sec:exp}, Appendix) so that the comparison is not selected post hoc.
+
+\paragraph{Reference methods re-implemented.}
+\emph{Random sampling} (mean of the coreset).  \emph{RS-Learn}: random coreset, ridge regression from coreset outcomes to source-model full accuracy~\citep{zhang2025benchmark}.  \emph{AIPW (ref.)}: random coreset and ridge predictor with the residual-shrinkage form of the reference implementation.
+\emph{Anchor points}~\citep{vivek2024anchor}: $k$-medoids on the item correlation distance $1-\rho_{ij}$ computed over source models, anchors weighted by cluster size.
+\emph{pIRT}~\citep{polo2024tiny}: $k$-means on $(a_i,b_i)$ of the IRT fit, nearest items as anchors, $\hat y=\lambda\bar y_{C}+(1-\lambda)\overline{f_t(i\notin C)}$ with $\lambda=n/N$; we run it with $k=2$ and $k=8$ latent dimensions using our own MAP IRT fit rather than the original hierarchical-prior fit.
+\emph{IRT plug-in}: random coreset, prediction $\frac1N\sum_i f_t(i)$ with no correction.
+We did not run metabench~\citep{kipnis2025metabench}, the Pacchiardi et al.\ assessor~\citep{pacchiardi2024100}, active evaluation acquisition~\citep{li2025active}, or the other methods in the reference repository (PCA, lasso, double-optimize, sort-and-search); see Limitations.
+
+\section{Experimental protocol}
+\label{sec:exp}
+
+\paragraph{Data.}
+Item-level binary correctness matrices released with~\citep{zhang2025benchmark} (MIT licence; commit \texttt{55faff4}; files \texttt{data/scores/*.jbl}): seven Open LLM Leaderboard v2 benchmarks (IFEval, MATH Lvl~5, MMLU-Pro, ARC-Challenge, BBH, GPQA, MuSR; 218--448 models, 541--12{,}032 items) and six HELM-Lite scenarios (CommonsenseQA, GSM8K, LegalBench, MATH, MedQA, MMLU; 79--83 models, 437--2{,}047 items).  Dataset statistics are in Appendix Table~\ref{tab:data}.
+No other data were used; we did not re-derive the matrices from the upstream sources.
+
+\paragraph{Model splits (three shift regimes).}
+\textbf{interp}: 25\% of models, chosen at random per seed, are targets, the rest sources (neighbours of every target, e.g.\ fine-tunes of the same base model, are usually among the sources).
+\textbf{org}: Open LLM only; whole developers (the organisation prefix of the model name) are held out at random until $\ge25\%$ of models are targets, so no target's developer appears among sources.
+\textbf{extrap}: sources = the 50\% lowest-accuracy models, targets = the 30\% highest-accuracy models (deterministic per dataset, as in the reference code), i.e.\ targets are stronger than every source.
+
+\paragraph{Budgets, replication.}
+$n\in\{10,25,50,100\}$ items, 30 seeds per (dataset, split).  A seed fixes the model split (interp, org) and the coreset draw; for extrap only the coreset varies.
+Within a seed and $n$, all methods that use the same design see the identical coreset (common random numbers), so comparisons are paired.
+
+\paragraph{Aggregation and uncertainty.}
+Errors differ greatly in scale across benchmarks, so for each (dataset, split, $n$) we divide a method's seed-averaged MAE (RMSE) by that of random sampling and report the geometric mean over the 13 (or 7) datasets; Spearman/Kendall are averaged arithmetically over datasets.
+95\% intervals are percentile bootstrap (1000 replicates) resampling seeds within dataset (the same seeds for all methods) and then datasets; they therefore reflect both coreset/split randomness and dataset heterogeneity, but not the finite number of benchmarks beyond these 13.
+Paired comparisons between methods use two-sided Wilcoxon signed-rank tests across datasets on log MAE ratios with Holm correction within each (split, $n$) over 14 listed pairs (three of them post hoc; Table~\ref{app:signif}, Appendix).
+For extrap the model partition is fixed, so its intervals do not include model-split uncertainty.

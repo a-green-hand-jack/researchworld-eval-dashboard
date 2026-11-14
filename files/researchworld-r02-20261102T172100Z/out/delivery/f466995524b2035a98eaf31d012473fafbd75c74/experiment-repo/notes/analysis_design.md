@@ -1,0 +1,23 @@
+# Working analysis design (awaiting scope decision)
+
+The target is an observed composition Y; coverage of class labels is a different estimand. Data are independently generated train/calibration/test samples. A ridge model for clr(Y) is fitted on 1000 training observations. Calibration is never used to fit the predictor or scale. The finite-sample quantile is the ceil((n+1)(1-alpha)) order statistic; if the index exceeds n the threshold is infinity.
+
+Methods: raw Euclidean norm, raw maximum coordinate residual, Aitchison norm (Euclidean clr distance), training-residual locally scaled Aitchison, group-stratified Aitchison, and coordinatewise raw residuals calibrated at alpha (negative control) or alpha/K (Bonferroni). All regions intersect the simplex. The first five use a joint score; coordinatewise alpha has no joint 1-alpha guarantee. The training scale estimates log squared clr residual norm from features; it is a deliberately simple feasible scale estimator, not an oracle.
+
+DGP: logistic-normal regression with fixed coefficient seed 1729+K, anisotropic Gaussian logit noise. Homogeneous scale .45; heterogeneous scale .18 or .95 by observed group (population proportion .2), multiplied by exp(.15*x1). The conditional mean logits belong to the fitted basis, but E[Y|X] need not equal softmax(E[log Y|X]). The supplied point predictor is the clr center; claims about optimal mean regression are unwarranted. Shift changes the high-noise group frequency from .2 to .8, keeping X and Y distributions within group fixed. Thus observed-group Mondrian calibration remains exchangeable within group under that particular shift.
+
+Independent replications are the uncertainty unit. Methods share data within a replication, so contrasts must be paired. Calibration size, dimension and scenario reuse seed numbers but remain distinct cells; never pool them as independent measurements. Low-dimensional efficiency uses common uniform-simplex draws to estimate Euclidean area fraction at independently drawn X anchors. No clr radius is compared numerically with a raw radius. Monte Carlo draws, anchors, and test observations add sampling noise captured by independent-replication intervals; conditional volume MC SE is separately retained. Area comparisons at high dimension will be withheld if unresolved.
+
+Pilot is a runtime/implementation check, not confirmatory evidence. No external material has been accessed by experiment-repo. Further zero handling, tuning and robustness need a settled scope.
+
+## Pre-main refinements
+
+The driver now exposes alpha as an argument, records code SHA-256 and per-cell timings, and records both zero component prevalence and boundary-response prevalence. These fields avoid silently conflating a transformed positive response with the original censored response. The pilot predates those metadata additions, but its numerical computation is unchanged. Main repetitions will start at replication 1000 (seed 901000), avoiding both pilot seeds. `analysis/environment.txt` freezes actual installed library versions.
+
+## Infinite regions and calibration variability
+
+If any radius summary includes infinity, `mean_radius` is JSON null and `radius_status` is `infinite`; `radius_infinite_fraction` records its prevalence. `infinite_threshold` and calibration group counts remain present for every replication. Coverage and area estimates retain these cases, including area one for an entirely unbounded region. Radius summaries report their own finite count and must not be interpreted as complete efficiency comparisons when their count is smaller than the cell's replication count. Cross-geometry area comparisons retain all replications.
+
+`diagnostics.csv` reports the empirical distribution of test coverage across independently fitted/calibrated runs (SD, 10/50/90 percentiles and fraction below nominal minus .05), plus infinite-threshold and null-radius counts. These distributional summaries include finite-test noise and are not exact conditional coverage of a realized calibration set. Mean intervals are pointwise t intervals, not equivalence tests or universal certificates. The tiny-ncal regression check runs actual records through strict JSON serialization and verifies group-whole-simplex coverage.
+
+Radius safeguard strengthened after independent-review request: if any radius is nonfinite in a cell, its complete-cell mean and CI are omitted (`summary_status=omitted_due_to_infinite_radius`), while finite and total replication counts remain available. No conditional finite-only radius claim is supplied. The summary fixture explicitly combines one finite and one whole-simplex run, checks that the radius mean is omitted, area .55 retains both (.1 and 1), and the infinite count is one.

@@ -1,0 +1,26 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T14:55:46.414137+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `3`
+- audit_json_path: `work/results/t02/claude/20261111_085902/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/t02/claude/20261111_085902/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/t02/claude/20261111_085902/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+Numbers, tables, figures and qualification facts match claims_grounding.json, paper_data.json and the evaluator sources; there are three narrow wording and sign inconsistencies, one of which makes a claim about when the decision rule was fixed that contradicts the Method section.
+
+## Findings
+- `rule-declared-in-advance-1` (Introduction (paragraph 2) vs Method (Test statistic and decision rule)): The Introduction says the protocol fixed the three-way rule in advance. The Method says the rule is the authors' own operationalization, that the evaluator emits only the interval and metrics, and that no claim is made about when the rule was fixed. The artifacts do not show the rule was declared before the evaluation.
+  - claim: The protocol declares in advance that the prediction is refuted if the interval lies at or above zero and inconclusive if it straddles zero.
+  - evidence: paper.tex Introduction vs Method 'the rule is our own operationalization ... we make no claim about when the rule was fixed'; claims_grounding.json claim[3] says the evaluator 'retains no verdict logic'; source_evidence/evaluator/evaluate_final.py computes only the slope and its interval and has no verdict logic; derived/resolution.json#verdict_from_interval_rule is produced by scripts/derive_resolution.py.
+  - requested_fix: Rewrite the Introduction sentence to say the authors apply a three-way rule to the evaluator's reported interval, and remove 'declares in advance' and any implication that the rule was pre-specified.
+- `loglinear-sign-1` (Results, Resolution of the design (Bounded dynamic range) and Table 'resolution'): The slope is defined as the slope of ln(delay) on log2(width), so a falling delay gives a negative slope of about -0.922. The text and table report the unsigned magnitude as a slope, which contradicts the paper's own sign convention.
+  - claim: a delay falling log-linearly from the cap at d=16 to the floor at d=256 would give 0.922; table row 'Slope of a log-linear cap-to-floor profile = 0.922'
+  - evidence: derived/resolution.json#loglinear_full_range_slope = 0.9222 (magnitude of ln(40)/4); scripts/derive_resolution.py line 36 comment 'slope of a profile falling log-linearly from the cap at 16 to the floor at 256'; paper.tex defines the verdict via the slope of ln(delay) vs log2(width) with negative meaning delay shrinks.
+  - requested_fix: Write the value as -0.922, or say 'magnitude 0.922' in both the text and the table row.
+- `constants-no-tuning-1` (Supplementary Information, Evaluated model: constants and parameter counts): The source comments say offline selection or execution was not possible only for the output-scaling, unembedding-init and hidden-exponent defaults. The comments for the initial-weight scale (0.5) and the reference width (128) say nothing about tuning. The paper attributes the 'without offline tuning' statement to the comments for all of these constants.
+  - claim: The initial-weight scale (0.5), the unembedding scale (0.5), the reference width (128), and both exponents (0.5) are constants in the source; the code comments state they were chosen without offline tuning.
+  - evidence: source_evidence/frozen_model/program.py: the comment on _INIT_SCALE says only 'Omnigrok-style smaller initial weight norm'; the comment on REF_WIDTH, OUT_EXP and UNEMBED_INIT says 'offline selection was not possible in this stage'; the comment on HIDDEN_EXP says 'a mild choice made without offline execution'. The development-plane variants V1-V3 were scored before V3 was selected as the evaluated model.
+  - requested_fix: Limit the 'without offline tuning' statement to the output-scaling, unembedding-init and hidden-exponent defaults as the comments state. For the initial-weight scale and reference width, say only that they are source constants, and qualify 'not tuned on it' in the Method accordingly.

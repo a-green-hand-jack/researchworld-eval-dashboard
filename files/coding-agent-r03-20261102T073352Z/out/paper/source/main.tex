@@ -1,0 +1,288 @@
+\documentclass{article}
+\usepackage[preprint]{vendor/neurips_2026}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsthm,booktabs,graphicx,longtable,url}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,citecolor=blue,linkcolor=blue,urlcolor=blue]{hyperref}
+\newtheorem{proposition}{Proposition}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\input{generated/numbers}
+\title{Which Benchmarks Can Be Skipped?\\Target-Aware Design and Its Limits on Public Leaderboards}
+\author{Independent Autonomous Research Study\\Code, data provenance, and reproduction instructions accompany this manuscript}
+\begin{document}
+\maketitle
+\begin{abstract}
+Given a partially observed history of model scores, which $k$ entire benchmarks should an evaluator run to predict a new model's other scores? We study this question using a transparent reference procedure: estimate a positive definite score covariance from incomplete history, predict by Gaussian conditioning, and greedily minimize uncertainty on the unmeasured targets. On a frozen English MTEB suite, eight queries reduce standardized reconstruction RMSE by \MGain\% relative to random queries with the same predictor (publisher-cluster 95\% interval: \MGainLo--\MGainHi\%); the gain persists under publisher-disjoint evaluation. Evidence comes from only 63 fully scored models, with 253 models contributing history. A separate six-benchmark generative-model leaderboard supplies 4,442 models. Its large raw-score gains depend strongly on which benchmarks remain targets: at two queries, the raw RMSE advantage falls from \LRawGain\% to \LFixRawGain\% when averaging all fixed two-target panels. Independent deletion of historical entries can make a low-rank baseline preferable. Gaussian risk identities and simulations explain the selection objective and an irreducible residual floor, without establishing real-data Gaussianity. Small budgets are useful under sufficient historical coverage; neither a universal sufficient $k$ nor uniform superiority over low-rank prediction is supported.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+An evaluator can often afford to run a new model on a few benchmarks but cannot repeat an entire evaluation suite. Public leaderboards contain a potential source of information: models that do well on one task often do well on related tasks. The relevant question is whether these relationships let us predict \emph{individual unrun task scores}, including task-specific deviations, rather than just an average ranking.
+
+This question has two coupled parts. A predictor must infer scores from a small observed subset, and a design rule must decide which subset to observe. A low-dimensional pattern in historical scores makes prediction plausible, but does not establish that an arbitrary small subset identifies a new model's capabilities. Historical coverage is selective, models share provenance, and newly submitted models can differ from historical ones. Moreover, the targets themselves change with the selected subset: a procedure can legitimately improve operational error by measuring a difficult task directly. Such improvement says less about the predictability of a fixed downstream task.
+
+We test three hypotheses. \textbf{H1:} conditioning on deliberately selected tasks reduces out-of-model error relative to random tasks under a matched predictor. \textbf{H2:} this benefit survives provenance separation and fixed-target evaluation. \textbf{H3:} a small sufficient budget depends on history coverage, target composition and the error tolerance. Our contributions are a target-aware formulation of a standard Gaussian reference method; cross-fitted experiments that separate prediction from selection; and audits exposing the limits of apparent benchmark compression. The work is an empirical and methodological study, with elementary supporting theory. It does not estimate training-compute savings or establish a new state of the art for all leaderboard distributions.
+
+\section{Related work}
+\label{sec:related}
+\citet{mteb} introduced a diverse embedding suite and showed that embedding methods have uneven strengths across task types. This motivates predicting the full score vector and reporting task-specific errors. The MTEB models in our main suite are text embedding models, including encoders and language-model-based embedders. They should not be interpreted as a representative sample of generative chat models. We therefore analyze a separate generative-model leaderboard \citep{olldata}, without merging model identifiers or scores across sources.
+
+\citet{tiny} use item response theory and representative examples to estimate benchmark performance from fewer \emph{examples}; \citet{metabench} compress examples across six reasoning and knowledge benchmarks. These approaches need item-level responses and operate at a different acquisition granularity. Here, one query purchases an entire existing benchmark, and the available input is an aggregate model-by-benchmark matrix. Their released methods cannot be used directly with these aggregate-only inputs.
+
+\citet{observational} infer low-dimensional capabilities from public model performance and predict more complex behaviors. \citet{sloth} model latent skills and their dependence on resources across model families. These works support testing a low-rank baseline, but low rank alone does not determine a budgeted query set or remove task residuals. We implement low-rank reconstruction rather than claim a replication of their resource-scaling models: family labels, token counts, and matched evaluation protocols required for those analyses are not available here. Gaussian conditional prediction is standard \citep[Section 2.2]{gpml}; our focus is its operational target loss, incomplete-history implementation, and controlled comparison. The literature review is intentionally limited to directly consulted starting references and this statistical text; it is not an exhaustive priority claim.
+
+\section{Problem, predictor, and query design}
+\label{sec:method}
+Let $Y\in\R^{M\times N}$ be a historical score matrix with observation mask $O$. A new model has score vector $y$. We acquire $y_S$ for $S\subseteq[N]$, $|S|=k$, and predict $y_U$ for $U=[N]\setminus S$. All selection, tuning, and normalization use historical training models. Define training task means $\mu_j$, standard deviations $s_j$, and standardized scores $z_j=(y_j-\mu_j)/s_j$. The operational loss is
+\begin{equation}
+ L_U(y,\hat y)=\frac1{|U|}\sum_{j\in U}\left(\frac{y_j-\hat y_j}{s_j}\right)^2.
+ \label{eq:loss}
+\end{equation}
+We also report raw RMSE in score points ($100$ times the native score units). MTEB correlation scores can be negative; they retain their original scale. These metrics weight tasks differently; neither is a ranking metric. Equal query costs are assumed.
+
+\paragraph{Covariance from incomplete history.}
+For each task, compute observed-entry mean and sample deviation, with deviation floor $10^{-4}$. For a task pair, use the sum of standardized products over jointly observed models divided by the joint count minus one; missing products contribute zero, and the diagonal is set to one. This uses taskwise means, not pair-specific recentering. The matrix need not be positive semidefinite. Symmetrize it, clip eigenvalues below $10^{-6}$, and normalize its diagonal to obtain a correlation matrix $R$. Set
+\begin{equation}
+ C=(1-\alpha)R+\alpha I,\qquad \alpha\in\{.02,.1,.3,.6,.9\}.
+ \label{eq:cov}
+\end{equation}
+An inner validation set selects $\alpha$ by average standardized error of random query prefixes. This is an operational regularizer, without a missing-not-at-random consistency guarantee. Independent missingness and adequate pairwise overlap are favorable conditions; public reporting patterns can violate both.
+
+\paragraph{Prediction.}
+Using $z\sim\mathcal N(0,C)$ as a working model, the predictor and residual covariance are
+\begin{equation}
+ \hat z_U=C_{US}C_{SS}^{-1}z_S,\qquad
+ V_{U\mid S}=C_{UU}-C_{US}C_{SS}^{-1}C_{SU}.
+ \label{eq:conditional}
+\end{equation}
+For $k=0$, return training means. Scores are transformed back to the original units without clipping. The predictor depends only on $y_S$. Gaussianity gives a conditional-mean interpretation; stationary first and second moments suffice for a best-linear-prediction interpretation.
+
+\paragraph{Target-aware greedy design (Schur).}
+Choose the next query to minimize the working model's average uncertainty on the \emph{remaining unqueried} coordinates. Initialize residual covariance $V=C$ and $S=\varnothing$. For each of $k$ iterations, choose
+\begin{equation}
+ q=\mathop{\arg\min}_{q\notin S}\ \frac{1}{N-|S|-1}
+ \sum_{j\notin S\cup\{q\}}\left(V_{jj}-\frac{V_{jq}^2}{V_{qq}}\right),
+ \quad V\leftarrow V-\frac{V_{:q}V_{q:}}{V_{qq}},\quad S\leftarrow S\cup\{q\}.
+ \label{eq:design}
+\end{equation}
+Previously queried rows and columns are set to zero after the update. Ties follow task index. This criterion accounts for both information gained about other tasks and removal of the purchased task from the prediction loss. Selecting the task with largest marginal correlation can repeatedly measure redundant capabilities. Selecting the largest residual variance (D-optimal greedy design) pursues a different objective. No global optimality or submodular approximation guarantee is asserted.
+
+In a \emph{fixed-target audit}, specify $T$ before fitting and allow queries only in $[N]\setminus T$. Replace the sum in Eq.~\eqref{eq:design} by $\sum_{j\in T}$ with constant denominator $|T|$. The same conditional predictor is then evaluated exclusively on $T$. Different methods face identical targets, so target removal cannot explain an advantage within this audit.
+
+\paragraph{Cost and applicability.}
+Pairwise moment estimation costs $O(MN^2)$, eigendecomposition $O(N^3)$, and $k$ rank-one design steps $O(kN^2)$. Storage is $O(MN+N^2)$. With prediction weights precomputed, each new model needs $O(k(N-k))$ arithmetic after its actual evaluations. The design is offline and shared by new models. It requires stable task definitions and sufficient observed overlap; it cannot infer an unseen capability that is independent of the measured tasks. Benchmark-dependent wall times, prompt changes, and noisy repeated measurements are not modeled explicitly.
+
+\section{What the covariance model guarantees}
+\label{sec:theory}
+\begin{proposition}[Working-model risk and adaptation]
+For a centered Gaussian score vector with known positive definite covariance $C$, exact queries, and squared loss~\eqref{eq:loss}, the Bayes risk of a fixed subset is $R_C(S)=\tr(V_{U\mid S})/|U|$. Among policies taking exactly $k<N$ queries, outcome-dependent adaptation cannot improve on the globally best fixed subset. Greedy Schur design is not necessarily that optimum.
+\label{prop:risk}
+\end{proposition}
+The conditional covariance is independent of the observed values. Conditioning on an adaptive transcript yields the same Gaussian posterior for its realized queried coordinates; its risk is therefore a mixture of the fixed-subset risks. This justifies an offline design under the working model, without ruling out adaptive gains under real, non-Gaussian model mixtures.
+
+\begin{proposition}[Covariance error and residual floor]
+Let $\hat C\succ0$ be an assumed standardized covariance, $W=\hat C_{US}\hat C_{SS}^{-1}$, and $Bz=z_U-Wz_S$. If the true vector has mean displacement $\delta$ and covariance $C_*$, its risk satisfies
+\begin{equation}
+ R_*(S)=\frac{\tr(BC_*B^\top)+\|B\delta\|^2}{|U|},\quad
+ |R_*(S)-R_{\hat C}(S)|\leq
+ \frac{\|C_*-\hat C\|_{\rm op}\|B\|_F^2+\|B\delta\|^2}{|U|}.
+ \label{eq:bound}
+\end{equation}
+If $z=Af+\epsilon$ with $\epsilon$ independent of $f$, mutually independent coordinates, and $\operatorname{Var}(\epsilon_j)=d_j$, every predictor based on $z_S$ has risk at least $|U|^{-1}\sum_{j\in U}d_j$.
+\label{prop:bound}
+\end{proposition}
+Thus latent low rank can coexist with a substantial prediction floor. Shrinkage ensures $\lambda_{\min}(C_{SS})\geq\alpha$ and limits amplification by ill-conditioned queries, while introducing bias. For $C=I$, every $k<N$ has standardized risk one: no universal budget achieves any tolerance below one. Full proofs and a simulated Gaussian check are in Appendix~\ref{app:proof}. These statements impose distributional conditions; they do not certify risk from a finite, selectively observed leaderboard.
+
+\section{Experimental protocol}
+\label{sec:experiments}
+\paragraph{Frozen sources and score extraction.}
+We use the supplied fixed MTEB commit \citep{mtebdata} and Open LLM Leaderboard dataset revision \citep{olldata}; full hashes are in Appendix~\ref{app:reproduce}. MTEB-56 contains the original English suite with CQADupstack represented once by its aggregate. Take English \texttt{main\_score} on test, except MSMARCO dev; never average other language subsets. If no CQADupstack aggregate exists, average its twelve subtask scores only when all are available. Per model, keep the revision with most available suite scores (lexicographic tie break), and require at least ten observed suite tasks for history. This yields partially observed history and a much smaller fully observed test population (Table~\ref{tab:data}). All original-matrix missing cells remain missing; we never use imputed values as evaluation truth.
+
+For Open LLM, remove the flagged row, keep one entry per model name, prefer bfloat16 then float16 then float32, and use six \texttt{Raw} scores rather than normalized leaderboard columns. Remove exact duplicate profiles in both sources, including their missingness patterns. This is not semantic deduplication of base models or derivatives. Open LLM scores are in $[0,1]$; MTEB correlations may lie in $[-1,1]$ and are preserved without clipping.
+
+\begin{table}[t]
+\centering\small\input{generated/data_table}
+\caption{Frozen analysis cohorts. History counts include partial rows; only complete rows are test eligible. The last column counts publishers among complete rows. Core and modal cohorts are exploratory sensitivities, not independent datasets.}
+\label{tab:data}
+\end{table}
+
+\paragraph{New-model evaluation and tuning.}
+Each source uses five outer folds and three split seeds ($17,29,43$). Random-row folds simulate new submissions from the observed population. Publisher-disjoint folds group by lowercased model namespace, preventing the same publisher from appearing in training and test. Publisher is a provenance proxy, not a verified family label; shared base architectures and training recipes can cross groups. Outer splits include all historical rows, but test evaluation requires all suite scores so that every chosen query is executable and every complement is observable.
+
+Within outer history, reserve 20\% of rows or publisher groups for validation. Complete validation rows tune models; partial rows are usable in the final historical refit. All fitting statistics and query selection remain isolated from outer test scores. Complete inner-validation counts range from 7--15 in random MTEB folds and 3--22 in grouped MTEB folds, so selection on validation alone can be noisy. Final predictors refit on all outer history. The primary predictor has one hyperparameter setting shared across budgets, tuned using three random orders at the four smallest nonzero tested budgets. MTEB budgets are $1,2,4,8,12,16,24,32$; Open LLM budgets are $1$ through $5$.
+
+\paragraph{Baselines and ablations.}
+Training mean uses no queried values. With the \emph{same} conditional predictor as Schur, compare ten random query orders, marginal squared-correlation centrality (Central), largest residual variance (D-opt), and greedy inner-validation reconstruction loss (Val-greedy). Val-greedy selects its order with an inner-trained covariance, before the final refit. A fixed $\alpha=.02$ Schur ablation tests whether tuning shrinkage drives gains.
+
+For low-rank prediction, use twenty rounds of rank-truncated SVD reconstruction of missing training entries, preserve observed entries, then infer a new model's latent vector by ridge regression on its queried task loadings. Rank and ridge are selected from ranks $\{1,2,4,8,16\}$ for MTEB and $\{1,2,3\}$ for Open LLM, and ridge $\{.01,.1,1,10\}$. We report both shared-budget tuning and a stronger, separately tuned-per-budget sensitivity (PCA-R($k$), random queries; PCA-D($k$), greedy residual variance). The latter additionally allows Open LLM ranks four and five. All methods see the same training/validation splits; the low-rank random baseline uses the same ten query orders as the conditional predictor. These are implementable aggregate-score baselines, without access to item responses or test-family metadata.
+
+\paragraph{Estimands and uncertainty.}
+Average squared error over unqueried tasks within a model, then average over its random query orders and three outer repetitions, then average over models and take the square root. Models, not cells or folds, receive equal weight. Standardized deviations are fold-specific, computed from outer history. We use paired publisher-cluster bootstrap with 2,000 resamples (seed $20261102$), recomputing both RMSEs in each resample. Intervals condition on the fitted cross-validation runs and random-query orders; they do not include full refitting uncertainty or prove independence of publishers. They are descriptive intervals across the tested budgets, without a multiple-comparison significance claim.
+
+\paragraph{Robustness audits.}
+First, reserve one third of MTEB tasks as fixed targets, one random panel per repetition. Open LLM's stronger fixed-target audit exhausts all fifteen pairs of targets and averages their losses before inference. Second, retain 75\%, 50\%, or 25\% of originally observed MTEB historical cells by independent deletion, leaving validation truth and complete test models intact. The deleted history includes final-refit validation rows. This measures sensitivity to added missingness, not a correction for natural reporting bias. Third, chronologically sort Open LLM by submission date, with the earliest 60\% for training, next 20\% for validation and final 20\% for testing; equal dates stay together, and refitting uses all earlier history. This is one temporal split, not a prospective future-model test.
+
+We additionally inspect a thirty-task MTEB core with at least 70\% observed coverage, and a version that retains only each core task's modal dataset-revision identifier. These sensitivities were added after coverage/provenance inspection and are labeled exploratory. They change test eligibility, so differences between cohorts do not isolate causal effects of dataset revision.
+
+\section{Results}
+\label{sec:results}
+\paragraph{Selected queries help under a matched predictor.}
+Figure~\ref{fig:main} and Table~\ref{tab:paired} support H1 on the frozen data. With eight MTEB queries, Schur achieves sRMSE \MSchur{} versus \MRand{} for random queries, a relative reduction of \MGain\%. Its publisher-disjoint gain is \MPubGain\% (95\% interval \MPubGainLo--\MPubGainHi\%). For Open LLM, two queries yield \LSchur{} versus \LRand{}, a \LGain\% reduction; four queries yield a larger \LFourGain\% reduction. The comparable grouped curves suggest that sharing a publisher alone does not explain the benefits. They do not establish generalization across truly unseen base-model families.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{../figures/curves.pdf}
+\caption{Individual unmeasured-score reconstruction. Lower is better. Random and Schur bands are conditional 95\% publisher-cluster intervals. Targets are the method-specific complement of its queries. PCA-R($k$) tunes rank and ridge separately for each budget.}
+\label{fig:main}
+\end{figure}
+
+\begin{table}[t]
+\centering\small\input{generated/paired_table}
+\caption{Paired improvement of Schur over random queries, in standardized RMSE. Positive gains favor Schur. Intervals condition on fitted runs.}
+\label{tab:paired}
+\end{table}
+
+\paragraph{Selection objectives and prediction models matter.}
+Central often spends additional queries on redundant tasks; its error can remain high even when many tasks have been measured (Table~\ref{tab:comparison}). D-opt improves substantially with larger budgets but is weaker at small budgets, especially on MTEB. Val-greedy is competitive and sometimes better than Schur; at eight random-split MTEB queries their errors are essentially alike. This is evidence for careful design, rather than unique dominance of the covariance criterion. Separately budget-tuned low-rank prediction improves the large-budget baseline: at 32 MTEB queries PCA-D($k$) reaches \PCAThirtyTwo{} sRMSE versus \MThirtyTwo{} for Schur. It does not support declaring one predictor uniformly superior. Shared-budget low-rank tuning predominantly chooses rank one, and its large-budget underfitting should not be mistaken for an inherent limitation of all factor models.
+
+\begin{table}[t]
+\centering\small\setlength{\tabcolsep}{3.5pt}\input{generated/comparison_table}
+\caption{Random-row split sRMSE. First four selector baselines share Schur's predictor. PCA-R($k$) and PCA-D($k$) use independently budget-tuned low-rank prediction. All confidence intervals, including shared-budget PCA, are in Appendix~\ref{app:full}.}
+\label{tab:comparison}
+\end{table}
+
+\paragraph{What changes when the targets are fixed?}
+The fixed-target audit supports H2 in a qualified form (Figure~\ref{fig:audit}; Table~\ref{tab:sensitivity}). On MTEB, the eight-query standardized advantage is \MFixGain\% (\MFixLo--\MFixHi\% interval), similar to the operational comparison. For Open LLM, averaging all fifteen two-target panels, Schur's two-query raw RMSE is \LFixRaw{} points. Its raw advantage over random selection is \LFixRawGain\%, versus \LRawGain\% when targets are allowed to change with selection. Standardized improvement in the fixed panels remains \LFixGain\% (\LFixLo--\LFixHi\%). Fixing targets also changes admissible queries, so this is a diagnostic, not an additive causal decomposition. The especially large \emph{raw} operational gain depends on which tasks are directly measured. The complement loss answers the evaluator's original budget question; fixed-target loss answers whether a predetermined downstream task is predictable. At four queries in the six-task audit all allowed candidates are acquired, so the two selectors coincide by construction.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{../figures/audits.pdf}
+\caption{Conditions that change the conclusion. Left: three MTEB fixed-target panels. Middle: all fifteen Open LLM target pairs, averaged equally. Right: independent deletion of originally observed MTEB historical cells; the complete test cohort is unchanged. PCA in this stress test uses shared-budget tuning.}
+\label{fig:audit}
+\end{figure}
+
+\paragraph{Missing history can reverse the predictor comparison.}
+At eight queries, Schur sRMSE rises from \MSchur{} to \ThreeQuarterS{}, \HalfS{}, and \QuarterS{} as retention falls. With half the original observed entries retained, its difference from random selection spans zero (Table~\ref{tab:sensitivity}); the low-rank random baseline is better (\HalfPCA{}). At quarter retention, its low-rank error is \QuarterPCA{} versus Schur's \QuarterS{}. Pairwise covariance estimation is fragile when overlap becomes small; regularization does not recover absent cross-task information. The simulation and perturbation bound are consistent with this mechanism, without proving that covariance estimation is the sole real-data cause.
+
+\begin{table}[t]
+\centering\small\setlength{\tabcolsep}{4pt}\input{generated/sensitivity_table}
+\caption{Sensitivity sRMSE and paired Schur improvement over random queries. All target pairs denotes the exhaustive Open LLM fixed-target audit. PCA uses shared-budget tuning; it was not run for the exhaustive panels. Negative improvement favors random selection.}
+\label{tab:sensitivity}
+\end{table}
+
+\paragraph{Coverage, versions, and submission shift.}
+The core sensitivity gives a \CoreGain\% standardized selection advantage at eight queries (\CoreLo--\CoreHi\% interval). Under modal dataset revisions, the advantage falls to \ModalGain\% (\ModalLo--\ModalHi\%). These changed cohorts support a restricted benefit, not evaluation-protocol invariance. The single temporal Open LLM split also preserves a selection gain, while increasing absolute error. All random Open LLM folds select the order MMLU-PRO, IFEval, MUSR, MATH Lvl 5, GPQA, leaving BBH last. Most grouped folds choose the same order. This is a property of this frozen model/task distribution, not a recommended permanent universal suite.
+
+\paragraph{How many benchmarks are enough?}
+Table~\ref{tab:budget} reports the first tested budget crossing each point-estimate tolerance. A five-point raw RMSE is achieved at sixteen MTEB queries under row splitting, but is not achieved by any tested grouped MTEB budget. Open LLM reaches three-point raw RMSE at four queries, which already uses most of its six-task suite. Even its raw error is nonmonotonic: \LTwoRMSE{}, \LThreeRMSE{}, \LFourRMSE{}, and \LFiveRMSE{} points for $k=2,3,4,5$. The standardized selection objective and remaining-target composition differ from raw-score loss. A single crossing cannot justify interpolation or a monotonic guarantee. At eight MTEB queries the 90th percentile of model-level raw RMSE is \MTail{} points, despite aggregate RMSE \MRaw{}. The corresponding two-query Open LLM values are \LTail{} and \LRaw{}. Aggregate tolerances are not per-model assurances.
+
+\begin{table}[t]
+\centering\small\input{generated/budget_table}
+\caption{Smallest \emph{tested} Schur budget reaching a point-estimate tolerance. Raw RMSE is in score points. ``--'' means no tested budget reaches it. Crossings are descriptive, without simultaneous confidence or guarantees at larger budgets.}
+\label{tab:budget}
+\end{table}
+
+\section{Discussion and limitations}
+\label{sec:limitations}
+The strongest supported conclusion is conditional: deliberate task acquisition helps a transparent linear predictor on these frozen score matrices when historical coverage is sufficient. H1 is supported; H2 survives publisher grouping and fixed targets with weaker raw-score compression on Open LLM; H3 is supported by tolerance dependence and the sparse-history reversal. The analysis separates selection benefit from predictor choice and from target composition, avoiding a single universal ``$k$ is enough'' recommendation.
+
+Several limitations materially restrict this conclusion. MTEB's complete-case cohort has only 63 models and selective task coverage. Test eligibility may favor thoroughly evaluated models, and inference on naturally missing test scores is unidentifiable here. Publisher grouping does not separate related architectures, inherited checkpoints, or shared training data. Exact profile deduplication does not remove near duplicates. A leaderboard commit freezes records, not necessarily prompts, dataset revisions, evaluation software, or contamination. The modal-revision audit cannot ensure equivalence of those protocols. Open LLM has many derivatives and only six tasks; its small-$k$ results cannot establish compression of a hundred-task generative suite. The two sources are distinct populations, not independent replications of the same construct.
+
+The covariance method assumes stable relationships, treats measured benchmark scores as exact, and lacks a finite-sample risk guarantee under selective reporting. Gaussian intervals are only diagnostics: observed marginal coverage is \MCoverage\% on MTEB at eight queries and \LCoverage\% on Open LLM at four, with task and model heterogeneity. Bootstrap intervals condition on a finite set of fits and query orders. We did not evaluate nonlinear predictors, verified unseen model families, prospective future releases, unequal evaluation costs, adversarial specialization, or item-level sampling methods. The literature review is deliberately constrained, so novelty is claimed for this documented investigation and diagnostic combination rather than an exhaustive comparison to all prior work.
+
+Reducing repeated evaluations can broaden access to model assessment. A practical risk is presenting inferred numbers as measured results or overlooking rare capabilities and safety failures. Predicted scores should be labeled, with provenance, and used to triage further evaluation rather than certify deployment. The study uses public aggregate scores and no new human-subject data. The OLL dataset card does not specify a dataset license; we record this unresolved asset limitation explicitly. No model weights or high-risk generative artifact are released. The manuscript and code were produced by an autonomous LLM research agent, including method design and analysis, without an independent human audit; all empirical quantities are traceable to executed scripts.
+
+\newpage
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\clearpage
+\appendix
+\section{Proofs and simulated checks}
+\label{app:proof}
+\paragraph{Proof of Proposition~\ref{prop:risk}.}
+For a fixed $S$, the Gaussian conditional distribution has mean and covariance~\eqref{eq:conditional}. Conditional mean minimizes squared loss; taking the trace of its covariance gives $R_C(S)$. An adaptive deterministic policy chooses its next task from the already observed transcript. Once the final queried values and their order are specified, the policy's selection events impose no additional constraints on unobserved coordinates: those events are measurable functions of the specified observations. Hence the posterior given the transcript is the ordinary Gaussian posterior on those coordinates. Its minimum conditional risk is $R_C(S)$, independent of their numerical values. The policy's total risk is $\E[R_C(S)]\geq\min_{|A|=k}R_C(A)$, attained by querying a globally optimal fixed subset. Randomized policies condition additionally on independent internal randomness and obey the same inequality. This is a known-covariance statement and says nothing about the greedy algorithm attaining the combinatorial optimum. For non-Gaussian mixtures, posterior uncertainty may depend on realized scores and the argument fails.
+
+\paragraph{Derivation of the greedy rule.}
+After conditioning on $S$, candidate $q$ leaves variance $V_{jj}-V_{jq}^2/V_{qq}$ on each other unqueried task. Summing these variances and dividing by $N-|S|-1$ yields Eq.~\eqref{eq:design}. Writing $t=\sum_{j\notin S}V_{jj}$, its numerator is equivalently
+\begin{equation}
+ t-V_{qq}-\sum_{j\notin S\cup\{q\}}V_{jq}^2/V_{qq}.
+ \label{eq:removal}
+\end{equation}
+The $V_{qq}$ term is the directly acquired task's removal. Omitting it optimizes a different loss. With fixed targets, this removal term is absent, as queries cannot belong to the target set. Greedy Schur's \emph{assumed standardized risk} is nonincreasing: acquiring a task of maximal residual variance removes at least the current mean variance, and conditioning further reduces the remaining variances. Minimizing over candidates does at least as well as that candidate. This property does not imply nonincreasing empirical error or raw-score error. For arbitrary acquisition rules, even assumed average complement risk can rise when the acquired task was easier to predict than the remainder.
+
+\paragraph{Proof of Proposition~\ref{prop:bound}.}
+Let $u=|U|$ and write $B$ as a $u\times N$ matrix with identity on columns $U$ and $-W$ on columns $S$. For true mean displacement $\delta$,
+\begin{equation}
+ \E\|Bz\|^2=\tr(BC_*B^\top)+\|B\delta\|^2.
+ \label{eq:quadratic}
+\end{equation}
+Under the assumed centered model, $B\hat C B^\top$ equals its Schur complement, so subtracting the two risks gives $u^{-1}\tr(B(C_*-\hat C)B^\top)+u^{-1}\|B\delta\|^2$. The trace term is bounded in absolute value by $\|C_*-\hat C\|_{\rm op}\tr(B^\top B)$. Division by $u$ gives Eq.~\eqref{eq:bound}. Also,
+\begin{equation}
+ \|B\|_F^2=u+\|W\|_F^2\leq u+\|\hat C_{US}\|_F^2/\alpha^2
+ \label{eq:conditioningbound}
+\end{equation}
+when $\lambda_{\min}(\hat C_{SS})\geq\alpha$. This quantifies one stability benefit of shrinkage, not a guarantee that increasing shrinkage reduces total error.
+
+For the residual floor, condition on both $z_S$ and $f$. Independence leaves $\epsilon_j$ unobserved for every $j\in U$, so even an oracle knowing $f$ has conditional mean-squared error $d_j$. Conditioning only on $z_S$ cannot improve on that oracle. Sum over $U$ and divide by $u$. The independent Gaussian example $C=I$ then supplies the stated counterexample to a universal sufficient budget. No real-data residual-floor value is inferred from this proposition.
+
+\paragraph{Synthetic verification.}
+The synthetic experiment has 56 coordinates and six latent factors, chosen for an explicitly Gaussian calculation rather than to mimic measured benchmark scores. Draw loadings $A_{ij}\sim\mathcal N(0,1/6)$; add independent diagonal noise increasing linearly from $.08$ to $.35$, then standardize the covariance to diagonal one. With seed $20261102$, draw 50,000 test vectors using shared standard-normal variates. Evaluate the fixed greedy query order under the known covariance, and compare empirical MSE with the exact trace risk. Table~\ref{tab:theory} and Figure~\ref{fig:theory} show the actual Monte Carlo results, including simulation standard errors. A second, explicitly misspecified experiment adds $1.5vv^\top$ to the true covariance, where $v$ is a sampled unit vector; prediction still uses the original covariance. The saved outputs also include assumed-covariance shrinkage levels $0,.1,.5$. Numerical checks satisfy the perturbation bound. This checks algebra and implementation under its assumptions, not the correctness of those assumptions on real leaderboards.
+
+\begin{table}[h]
+\centering\small\input{generated/theory_table}
+\caption{Synthetic Gaussian check with known covariance. MSE is standardized, not a measured benchmark error. MC SE denotes standard error across simulated test vectors.}
+\label{tab:theory}
+\end{table}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{../figures/theory.pdf}
+\caption{Synthetic verification. Left: trace risk, actual Monte Carlo MSE with $1.96$ SE bars, and the independent residual lower bound. Right: covariance-risk discrepancy and the operator norm bound under the specified covariance shift.}
+\label{fig:theory}
+\end{figure}
+
+\section{Data, implementation, and reproducibility}
+\label{app:reproduce}
+\paragraph{Artifacts and source versions.}
+The accompanying repository contains all executable Python, processed score matrices, per-model losses, task-level losses, split membership, selected orders, tuning scores, and rendered figures. The exact MTEB source commit is \texttt{6dabbcc68c28ea5f180ce7df79347b3ca9cc6383}; the OLL dataset revision is \texttt{9c09a7cae43334062a82cb164f2ef255013dafa2}. The MTEB archive SHA256 is stored in \texttt{data/processed/mteb\_audit.json}; the OLL file SHA256 is \texttt{f13a7061e63133bc8745d89f8c7a56148584940ede22d3b27e21cad1e078dca5}. No live leaderboard scores are fetched during analysis. Acquisition URLs and checksums are also recorded in the root README. MTEB results use CC0-1.0; OLL's data card has no dataset-level license declaration. Model license metadata is not interpreted as a license for the score dataset. Our new code is MIT licensed; upstream asset terms remain separate.
+
+\paragraph{Coverage and version details.}
+The archive contains 547 model directories with task files, rather than treating a reconnaissance tree API response as complete. That API response was truncated; all analysis uses the full archive. Score extraction records source paths, dataset revisions and score values in \texttt{mteb\_cell\_provenance.csv}. Choosing the most complete model revision does not establish that its metrics are protocol-compatible with other models. The main suite intentionally retains original task names instead of mixing old and newer task variants. Modal-revision filtering reduces the thirty-task core's fully observed cohort from 134 to 67. A modal-revision version of all 56 tasks leaves only 34 complete models; performance experiments on that cohort were not pursued. The historical row pool is unchanged in the core sensitivities so that task availability, rather than outcome-based model inclusion, defines those audits.
+
+\paragraph{Implementation and tests.}
+The code uses Python 3.11 with exact package versions in \texttt{requirements.txt}; NumPy, SciPy, pandas, scikit-learn, matplotlib, requests, pyarrow and pypdf are installed. Primary estimators use NumPy; scikit-learn supplies splitting. No neural model inference occurs. Invariant tests check rank-one against block conditioning, positive definiteness under missingness, query/target separation, the first greedy risk step, and invariance of predictions to replacing all unqueried test entries by extreme numbers. Five tests pass. We additionally provide an audit script for split disjointness, output finiteness, theory checks and manuscript compilation. Tests do not establish freedom from all implementation or research-design errors.
+
+\paragraph{Runtime and resource use.}
+The recorded final experiment stages sum to \ExperimentSeconds{} seconds (\ExperimentMinutes{} minutes) of stage wall time on an Intel Xeon Gold 6230 CPU at 2.10 GHz; BLAS and OpenMP are restricted to one thread per process. Some independent stages were run concurrently. The largest recorded experiment process peak RSS is \PeakMB{} MiB. Downloading, preprocessing, plotting, source inspection, smoke runs and manuscript compilation add overhead; the complete workspace remains below 5 GB. These are score-matrix analyses, not costs of rerunning the underlying benchmarks. A fresh environment should budget minutes for matrix experiments and additional time for the pinned archive download and package installation. The README supplies exact commands and a figure/table-to-script mapping. Root \texttt{run\_all.sh} rebuilds the research outputs; \texttt{make -C paper} compiles the paper. All empirical table entries and text macros are generated by \texttt{scripts/report.py} from actual saved runs.
+
+\paragraph{Research history and independence.}
+\texttt{PROTOCOL.md} records the initial local design before outcome experiments, without claiming external preregistration. \texttt{RESEARCH\_LOG.md} discloses the later coverage, revision, exhaustive-target and budget-specific-baseline audits. Failed reconnaissance downloads, an unavailable text-conversion utility, an intermediate read of an unfinished gzip, and an interrupted supplementary-baseline implementation check are recorded there. No unsuccessful numerical estimator was silently removed. The autonomous agent directly consulted the five starting works cited in the main text, the Gaussian conditioning textbook chapter, fixed data files/cards, and official conference materials. It made no topical literature searches, did not attempt to identify the prohibited publication, and encountered no known prohibited page. The autonomous nature of design, implementation and writing is disclosed; empirical scores come solely from public files and executed code, without generated substitute observations.
+
+\section{Additional results}
+\label{app:additional}
+\paragraph{Raw errors and interval diagnostics.}
+Figure~\ref{fig:raw} displays raw-score errors and nominal Gaussian interval coverage. The intervals use $\hat y_j\pm1.96s_j\sqrt{V_{jj\mid S}}$. They are marginal, plug-in intervals without calibration or joint coverage guarantees. Their aggregate coverage cannot certify a particular task, model, or shifted release.
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{../figures/raw_calibration.pdf}
+\caption{Random-row splits: raw-score reconstruction error and marginal nominal 95\% Gaussian interval coverage. RMSE bands are conditional publisher-cluster 95\% intervals; the dashed line is nominal coverage.}
+\label{fig:raw}
+\end{figure}
+
+\paragraph{Task-level difficulty.}
+Table~\ref{tab:tasks} reports the ten largest standardized task errors among Schur-unqueried tasks at eight MTEB queries. Each task contributes only in folds where it was unqueried, using test-row-count weights. These conditional populations differ across tasks and are descriptive diagnostics; they cannot be interpreted as an unconditional task ranking or a fair across-selector target comparison. For the latter we use fixed target panels.
+\begin{table}[h]
+\centering\small\input{generated/tasks_table}
+\caption{Conditional unqueried-task error at eight queries. ``Unselected folds'' counts the outer folds across all repetitions where the task remained a target.}
+\label{tab:tasks}
+\end{table}
+
+\clearpage
+\section{Full comparison intervals}
+\label{app:full}
+Table entries below are generated from the per-model losses. Raw RMSE uses score points, and standardized RMSE uses training deviations. The Mean row at budget $k$ uses random-query complements but no queried values; it is a matched-complement diagnostic rather than an evaluator spending $k$ queries to ignore them. PCA-random/PCA-D-opt use one shared-budget setting; PCA-budget/PCA-budget-D tune rank and ridge separately per $k$. Schur-lowshrink fixes $\alpha=.02$. Intervals are conditional publisher-cluster percentiles and may overlap despite a paired difference having a narrower interval.
+\small
+\input{generated/full_table}
+\normalsize
+\clearpage
+\input{checklist}
+\end{document}

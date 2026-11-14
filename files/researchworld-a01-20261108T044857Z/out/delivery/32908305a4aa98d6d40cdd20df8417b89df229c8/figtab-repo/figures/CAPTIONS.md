@@ -1,0 +1,44 @@
+# Caption stubs (paste verbatim; numbers here come from the sidecar `.json` of each figure / `results/core_*.csv`)
+
+Common to F1/F2/F3 (state once, or in each caption): *A target is a model other than the current leader under the mean rule (OLLB: 4,495 models;
+HELM: 78 models). Investment = the minimum raise of the target's own scores, task by task, within the per-task cap, that makes it strictly first
+(score rules: margin 0.001 points; ordinal rules: no score margin, the witness raise is within n*eps of the infimum, eps = 0.001 point) with all other models fixed; K = number of tasks raised, L1 = total points raised, n = number of tasks. "Feasible" =
+some raise within the cap makes the target first; targets already first under the rule cost 0 and count as feasible.*
+
+**F1 `F_ollb_primary` (Open LLM Leaderboard, n = 6; cap `emp99`, per-task 99th percentile of fine-tune-minus-base gains).** Left: fraction of targets for which
+first place is reachable (Wilson 95% CI), by the target's rank under the mean rule (log scale; bins double from rank 2; point at the geometric mean rank of the
+targets in the bin; bins with fewer than 3 targets omitted). Middle/right: median K/n and L1/n *among feasible targets only* with 95% bootstrap CIs over targets
+(B = 1000); the curves stop where fewer than 3 targets in a bin are feasible. Borda and Condorcet winner were solved for the 50 best targets under the mean
+only (ranks 2-50; feasibility and K are exact on completed solves, but their L1 is a witness cost, the realised raise, within n*eps of the strict-winning infimum, eps = 0.001 point, n = 6), so their curves end there and their feasibility fractions are not comparable with the score rules' overall fractions.
+
+**F2 `F_helm_primary` (HELM MMLU, n = 57; cap `emp99T`).** As F1. The cap is the OLLB MMLU-PRO 99th-percentile gain applied to every one of the 57 subjects:
+a transfer assumption, not a measured HELM quantity. 78 targets, so most bins hold fewer than 10 targets and the CIs are wide.
+
+**F1b/F2b `F_ollb_oracle`, `F_helm_oracle` (appendix).** As F1/F2 with the oracle cap (scores may rise to 100). Every target is feasible, so these panels show what the rule
+alone does; the values are lower bounds on the investment under any realistic cap.
+
+**F3 `F_ollb_capgrid`, `F_helm_capgrid` (appendix).** Feasibility (left) and median L1/n among feasible targets (right) for three rank strata under the mean (OLLB: 2-5, 6-20, 21-100; HELM: 2-5, 6-20, 21-78; the number of
+targets is in the axis label, N = 4 in the top stratum so its intervals are wide) under each cap *scenario*. The x-axis is an ordering of scenarios, not a monotone sweep: +h is a uniform cap, emp95/emp99 are per-task percentile caps, front
+is the best rival score on each task, 100 is the score ceiling; these cap vectors are not nested, and the display order carries no tight-to-loose meaning (`T` = transferred from OLLB MMLU-PRO to all 57 HELM subjects). Bands: Wilson 95% (left) and 95% bootstrap over targets
+(right, B = 1000), absent where fewer than 3 targets are feasible; lines join scenarios and do not imply a continuous scale. Two different things move the right panels. (i) The *feasible cohort* changes with the cap, so a median over feasible targets
+changes even if no target's own optimum does. (ii) A target's *own* optimum: under the mean rule the minimum L1 of a fixed target that is feasible under two caps is the same (L1 = n times its gap to the best rival, Proposition 1), and the same holds for the minimum rule when feasible; for the median, Borda, Condorcet and the other rules no such
+invariance is established here, and relaxing a cap can allow a cheaper allocation for the same target. Where the mean line is flat (e.g. OLLB 2-5) the cohort did not change; where it moves (OLLB 6-20 at +5; HELM 6-20) the cohort did. Borda and Condorcet (OLLB: the 50 best targets under the mean, solved at `emp99` and the oracle cap; drawn as unconnected markers) cover only
+the part of each stratum with rank <= 50, so their markers are not comparable with the score rules' fractions in the 21-100 stratum.
+
+**F4 `F_helm_scaling`.** HELM MMLU, random subsets of n of the 57 subjects (60 subsets per n; n = 3, 6, 12, 24, 48), cap `emp99T`. In every subset and for every rule separately, the target is the model ranked 2 (left column) or 5 (right column) *under that rule on that subset*
+(`run_robust.py`, mode `tasksub`); the target therefore differs between rules and between subsets, and the curves of different rules mix the effect of the rule with that of the target. It is not the mean-rank-2/5 model and not a fixed model; Condorcet winner is not in this run.
+Top row: percentage of the 60 subsets in which first place is reachable within the cap (per-cell counts in `F_helm_scaling.json`). Middle and bottom rows: K/n and L1/n, medians over the *feasible* subsets only (lines) and 2.5-97.5 percentile range over those subsets (bands: a spread of draws, not a CI of the median).
+Where the top row is below 100% (minimum, rank 5: 55-90% across n; plurality, rank 5: 28% at n = 3, 70% at n = 6) the cost curve is conditional on a selected set of subsets; say "among feasible subsets" wherever a trend is described.
+
+**F5 `F_robust` (appendix).** Stability of the minimum L1 for seven (OLLB; target ranks 2, 3, 5, 10, 20, 50, 100 under the mean) or six (HELM; ranks 2, 3, 5, 10, 20, 40) targets, per rule, under evaluation noise (top row;
+binomial standard error of each score from the item counts, Gaussian draws; 300 draws OLLB closed forms, 60 OLLB ordinal rules, 200 HELM) and under a bootstrap over tasks (bottom row; same caps, per-task caps follow their task). Cap `emp99` (OLLB), `emp99T` (HELM). Dot = median over feasible draws,
+bar = 2.5-97.5 percentile of the feasible draws (a spread of draws, not a CI of the median), open diamond = value on the observed data (absent where the target is outside the solved ordinal set, or infeasible),
+lower strip = percentage of draws in which first place is unreachable within the cap. Directly counted (evaluation-noise row, feasible target x rule cases of the five rules shown): the observed cost lies inside the 2.5-97.5 interval in every case (OLLB closed forms 18/18, OLLB ordinal 12/12, HELM 21/21) and below the draw median in most (18/18, 11/12, 15/21).
+(experiment-repo#5 counts 24/24, 16/16, 26/26 and 23/24, 14/16, 18/26 because it also includes plurality and pow-2.) Inclusion in a wide interval does not bound the size of a shift between the observed cost and the draws' median, and the figure does not show absence of bias; no percentage is claimed here.
+Each draw is re-optimised, so the figure shows the variability of the *optimal requirement* under noise, not whether a fixed raise chosen on the observed data would still make the target first. At ranks 2-3 the lower bar end is 0 because some draws already make the target first.
+Feasibility at the frontier is noise-sensitive: the HELM rank-20 target is infeasible on the observed data under the mean but feasible in about 4.5% of noise draws (its dot is the median of those few draws and has no bar to read), and the rank-40 target is infeasible in every draw.
+
+**F4b `F_helm_scaling_common` (control for F4).** HELM MMLU, random subsets of n of the 57 subjects (60 draws per n; n = 3, 6, 12, 24, 48; seed 0), cap `emp99T`. Here the target is the *same* model under every rule within a draw: the model ranked 2 (left) or 5 (right) under the *mean* of that subset (the `tasksubcommon` run of experiment-repo), so differences between rules at one n are differences of the rule on one target. This is the control for the own-rule version F4, whose target differs by rule; only F4b supports a statement about how a rule reacts to n. Condorcet winner is not in this run.
+Rows: (1) % of the 60 draws in which first place is reachable within the cap; (2) % of draws in which the target is already first under the rule (cost 0; these draws are *included* in the cost rows, so they pull the medians down, e.g. n = 48, rank 2: Borda 18/60, median 21/60, min 32/60 already first; the mean rule has none by construction); (3, 4) K/n and L1/n, medians over feasible draws (lines) with the 2.5-97.5 percentile range of those draws (bands: spread of draws, not a CI of the median). Counts per cell are in `F_helm_scaling_common.json`. Cost curves are conditional on feasibility, and the y-axis of the L1/n row is symlog (0 is shown).
+
+**Ordinal-rule L1 (applies to F1-F5, F4b).** For Borda, Condorcet winner, plurality and Copeland the plotted/tabulated L1 is the cost of the witness raise found by the solver, which is at most n*eps above the infimum needed to make the target strictly first (eps = 0.001 point); only feasibility and K are exact on completed solves. For score rules (mean, median, min) L1 is the exact minimum under the margin eps.

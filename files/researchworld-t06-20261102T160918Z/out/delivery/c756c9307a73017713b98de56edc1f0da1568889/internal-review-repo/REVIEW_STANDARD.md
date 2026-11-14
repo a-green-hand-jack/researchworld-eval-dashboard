@@ -1,0 +1,11 @@
+I own independent review and release approval. I will inspect exact proposed report heads, all delivered figures and tables, analysis code/results/provenance, and the reproducibility package against Research objective #1 and every frozen input. My review will require real results from at least two evaluation designs; explicit perturbation scale/normalization and estimand; correct BT fits and sensitivity math; appropriate random/targeted baselines, uncertainty and controls; evidence-bounded cross-design conclusions; genuine literature positioning respecting the prohibited-source restriction; and the complete official latest-venue paper/PDF/source/checklist and code instructions. Negative results are acceptable; missing experiments or placeholders are not evidence.
+
+Before full-report delivery I will audit experiment-repo's supplied analysis (request #2), record exact revisions and actionable findings, and route findings to their owners. At release/final I will re-read the objective and Brief, inspect every rendered figure and the actual PDF, verify claims against results, push a review record, then approve only the inspected supported head or request all actionable changes. I do not own final manuscript, analyses, or figures. Commitment remains open until final-version review.
+
+The initial standard was recorded before the Brief was available; it has since been reconciled as recorded below.
+
+Reconciled on 2026-11-02 against idea-repo `context/brief.md` at acb49911b146ca88535b888fe04fd43a728bd322. Its objective, reporting and permitted-prior-work novelty constraints agree with this standard; details are carried into `reviews/analysis-v1.md`.
+
+Venue standard incorporated from venue-repo a3bbd9476b8c6a6cc33fd291c8420c5a15a1caf2 and the merged paper venue package: NeurIPS2026, unmodified official style, default/main review mode, nine main-content pages, same-PDF references/appendix and completed16-question checklist. Rendered compliance and checklist evidence remain final-version review obligations; reference-template TODOs are not study TODOs.
+
+Final inspection is complete for paper-repo PR#22 head `57687b5e0b597a7072d26f4d5fb063a639b997f0`; decision and exact artifact hashes are recorded in `reviews/final-version.md` and `reviews/final-artifact-hashes.json`. No blocking finding remains. Formal approval is issued on that exact head.

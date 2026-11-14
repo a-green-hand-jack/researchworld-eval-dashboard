@@ -1,0 +1,59 @@
+\section{A conditional reliability question}
+\label{sec:method}
+Let $f:\mathcal X\to[0,1]$ be a \emph{fixed fitted} positive-class probability model, $x$ a fixed test input, and $Z=(z_1,\ldots,z_B)$ a fixed training-background sample. The players are the $d$ original variables, including whole categorical variables rather than individual dummy columns. We study the finite interventional game
+\begin{equation}
+ v_{x,Z}(S)=\frac1B\sum_{b=1}^B f(x_S,z_{b,\bar S}),\quad S\subseteq[d].
+ \label{eq:game}
+\end{equation}
+All absent variables come from the \emph{same} background row. This preserves their joint distribution with each other, but breaks their dependence with present variables. We do not estimate observational conditional expectations, use survey weights, or interpret interventions causally. The exact target is
+\begin{equation}
+ \phi_j=\sum_{S\subseteq[d]\setminus\{j\}}
+ \frac{v(S\cup\{j\})-v(S)}{d\binom{d-1}{|S|}}.
+ \label{eq:shap}
+\end{equation}
+For a stochastic algorithm $A$ with budget $m$ and seed $U$, $\widehat\phi=A(v,m,U)$. Our question is a probability over $U$, conditional on $f,x,Z$. Training-seed uncertainty, background uncertainty, numerical approximation, and causal validity are different questions. We separately vary $Z$ in a secondary experiment.
+
+\subsection{What counts as a reliable explanation?}
+\label{sec:metrics}
+Let $T_3(a)$ select the three largest absolute coordinates of $a$, breaking ties by original variable order. Define
+\begin{align}
+ E&=\|\widehat\phi-\phi\|_\infty,\\
+ N_\epsilon&=\mathbf1\{E\leq\epsilon\},\quad
+ K=\mathbf1\{T_3(\widehat\phi)=T_3(\phi)\},\\
+ J_\epsilon&=N_\epsilon K,\qquad
+ p_J(x;m)=\Pr_U(J_\epsilon=1).
+\end{align}
+Our primary tolerance is $\epsilon=.01$: every feature contribution must be within one percentage point of predicted probability. This is a transparent engineering tolerance, not a medically or legally validated standard. We repeat the numerical analysis at $.005$ and $.02$. A top-three display has a separate, stricter requirement: exactly the same set. This can penalize negligible differences near ties; we report the cutoff gap to expose this sensitivity. We also measure correct signs for \emph{all} features with $|\phi_j|\geq .01$, and relative $\ell_1$ error $\|\widehat\phi-\phi\|_1/\max(\|\phi\|_1,10^{-12})$.
+
+We call an instance computationally reliable at a chosen budget and criterion when its seed-success probability is at least $.95$. This is a definition to evaluate, not an assumption. A mean over instances cannot establish it for every instance. We report mean success and a conservative per-instance check: the one-sided $95\%$ Clopper--Pearson lower bound for $p_J$ must exceed $.95$. With $64$ successes out of $64$, that bound is $.05^{1/64}>.95$; with a failure, it does not pass. These are pointwise checks with no familywise adjustment, and the resulting counts are descriptive rather than simultaneous guarantees.
+
+\subsection{Agreement is observable; correctness needs a target}
+For two independent runs, repeat top-three agreement is
+\begin{equation}
+ R=\mathbf1\{T_3(\widehat\phi^{(1)})=T_3(\widehat\phi^{(2)})\}.
+\end{equation}
+If $q_A=\Pr\{T_3(\widehat\phi)=A\}$, then $\Pr(R=1)=\sum_Aq_A^2$, while top-three correctness is $q_{T_3(\phi)}$. Agreement alone cannot identify which set is correct. We therefore measure $\Pr(K^{(1)}=0\mid R=1)$ as an empirical false-reassurance diagnostic. The analogous joint agreement requires $R=1$ and $\|\widehat\phi^{(1)}-\widehat\phi^{(2)}\|_\infty\leq .01$. We use disjoint seed pairs to avoid treating the quadratically many overlapping pairs as independent evidence.
+
+The margin explains one source of the discrepancy. Write $|\phi|_{(j)}$ for the $j$th largest absolute attribution and $\Delta_3=|\phi|_{(3)}-|\phi|_{(4)}$. The elementary implication
+\begin{equation}
+ E<\Delta_3/2\ \Longrightarrow\ K=1
+ \label{eq:margin}
+\end{equation}
+holds because absolute values change by at most $E$. Similarly, $E<|\phi_j|$ preserves a nonzero feature's sign. Thus small numerical error need not preserve a ranking with a small cutoff gap. These are deterministic sensitivity statements, not new statistical guarantees; Appendix~\ref{app:proof} gives the proof. Exact gaps are available in an audit, but ordinarily unavailable in deployment.
+
+\subsection{Estimators and an honest budget}
+\label{sec:budget}
+The primary method is the actual \texttt{shap.KernelExplainer} in SHAP~0.51.0, with identity link and \texttt{l1\_reg=0}. This evaluates the library's size-stratified, complement-paired coalition sampling and constrained weighted regression, including its singular-design fallback. We disable feature selection to target the full vector in Eq.~\eqref{eq:shap}; a separate ablation restores the package's default \texttt{num\_features(10)}. We remove only columns equal to $x$ in \emph{every} background row, matching the library's varying-feature shortcut, and restore their zero coordinates afterward. Other model-dummy features remain in the game.
+
+The requested interior-coalition cap is
+\begin{equation}
+ m=\min\{c d,2^d-2\},\quad c\in\{2,8,32,128\}.
+\end{equation}
+The implementation may spend less, particularly when fewer than $d$ columns vary. We save actual counts. Exhaustion is capped at $2^{d_a}-2$ for $d_a$ active columns. For a fresh real-data KernelExplainer, an interior payoff costs $B$ model rows; initialization uses $B$ rows for $v(\varnothing)$ and one row for $f(x)$. Thus actual raw model rows are $B(m_{\rm spent}+1)+1$ in this setting. Coalitions are a portable budget axis, but not a universal time unit.
+
+The comparison estimator averages feature marginal contributions along uniformly sampled permutations, pairing each order with its reversal. A pair spends $2(d_a-1)$ interior payoffs. We use $\lfloor\min(m,2^{d_a}-2)/[2(d_a-1)]\rfloor$ pairs; repeated coalitions remain charged, and leftover budget is unused. The methods therefore share a budget \emph{cap}, not identical evaluation counts. Kernel SHAP deduplicates its sampled masks and can enumerate a small game exactly; this baseline does not. Full enumeration is an additional deterministic accuracy control, not a deployment baseline at a smaller cost.
+
+\subsection{Exact offline audit and uncertainty}
+Every main reference enumerates \emph{all} $2^d$ payoffs of Eq.~\eqref{eq:game}, using double precision, and applies Eq.~\eqref{eq:shap}. There is no high-budget Monte Carlo proxy for truth. We cache these payoffs, expose the exact game as a binary-mask model to KernelExplainer, and replicate its randomness cheaply. This preserves sampled payoffs and regression, but its lookup time is \emph{not} deployment time. A direct raw-model comparison and independent permutation-sum checks validate the wrapper (Appendix~\ref{app:validation}). Separate uncached runs measure online time.
+
+For each dataset we sample $32$ held-out cases, use the same cases across the three fitted models, and run $64$ independent explanation seeds at each budget. A cell's success rate first averages seeds within each case, then averages cases. We obtain $95\%$ percentile intervals with $2{,}000$ bootstrap resamples of cases. For model-averaged or overall summaries, the bootstrap preserves matched cases across models and resamples within each dataset; datasets receive equal weight. The models and datasets themselves are fixed, not random draws from a model or dataset population. Intervals quantify test-case heterogeneity under this design; they do not quantify training-split variation or establish a universal reliability threshold. We do not treat seeds, matched models, or overlapping background pairs as independent test cases, and make no multiple-testing significance claims.

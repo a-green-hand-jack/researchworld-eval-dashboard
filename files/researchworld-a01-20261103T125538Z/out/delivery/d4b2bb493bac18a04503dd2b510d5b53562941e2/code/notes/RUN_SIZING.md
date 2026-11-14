@@ -1,0 +1,11 @@
+# Timed pilot and run sizing
+
+On this host, 12 target entries × 4 rules took 0.203 seconds for HELM and 0.106 seconds for Open LLM (including row writing/witness verification; external interpreter/resource startup excluded). All 96 pilot attacks were certified optimal. Per-rule timings are in `results/pilot_*.csv`.
+
+Linear planning estimates from these pilots (not measurements of full runs): HELM primary 79 targets ~1.34 seconds and 12 configurations ~16 seconds; Open LLM primary 4,575 targets ~40 seconds, 12 configurations plus four inclusion/normalization/identity primary variants ~11 minutes. Large-case runtime can exceed linear estimates because MILP difficulty and host sharing vary. Bundles write every attack immediately and retain solver statuses, bounds, elapsed times and progress logs. Two independent snapshot bundles were launched in parallel; host status showed 40 CPUs with shared placements (no exclusive reservation). Further uncertainty/baseline jobs will be sized from the same optimized primitive and may run sequentially after a snapshot bundle frees.
+
+## Completed run measurements
+
+The HELM primary and sensitivity subprocesses took 4.43 and 8.39 seconds including interpreter startup. The Open LLM primary, 11 additional main configurations and four alternate-matrix primary runs took 359.0 seconds in total. The 200 distinct-subject subset run's measured loop took 149.30 seconds, and random baselines took 1.04 seconds for HELM and14.03 seconds for Open LLM (external resource startup excluded). Resource start/end records and retained completion lines are in `results/resource_runs.json`. Per-attack timings sum to123.92 seconds across296,064 full-run records; those primitive timings exclude witness verification and row writing, so they must not be confused with total reproduction wall time. These measurements are comfortably below the supplied four-CPU-hour planning budget. Cold acquisition time depends on network speed; no claim about training runtime is made.
+
+The allocation, unmeasured peak memory and conservative full-reproduction planning estimate are now documented separately in `COMPUTE_AND_REPRODUCTION.md`; do not interpret stage timings or memory limits as measured end-to-end runtime or peak usage.

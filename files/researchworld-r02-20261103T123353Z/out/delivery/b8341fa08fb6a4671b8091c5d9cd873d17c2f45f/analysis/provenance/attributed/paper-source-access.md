@@ -1,0 +1,11 @@
+# Paper integrator access record
+
+As of 2026-11-03, paper-repo has read the frozen objective and supplied inputs, the source-checked context and its exact relay/provenance, accessible study-plan and analysis/method/proof/pilot material, presentation notes, official venue assets/rules, and Forgejo coordination/review threads. Literature reading scopes belong to the supplying context owner and are retained in the dossier; this record does not claim an independent full-text rereading by the integrator.
+
+The only direct external page accessed by paper-repo so far is the official general NeurIPS Code of Ethics at https://neurips.cc/public/EthicsGuidelines (retrieved 2026-11-03; HTML 70142 bytes; SHA-256 21f78e505a0efac6da5281192b29879067d0ae83964fd84c3d2fcf4a1d297386). The full code, including process, data, societal-impact and mitigation requirements, was read. General navigation and further-reading titles were visible; no further-reading or paper-specific links were followed. The text was extracted with Python's standard-library HTMLParser. No topic, citation-network or withheld-paper search was performed, and no known prohibited-material encounter occurred.
+
+No primary-source PDF is redistributed by the integrator. Update this record and the aggregate experiment reproduction log before final delivery if source access changes.
+
+## Methods and diagnostic integration update (2026-11-03)
+
+Read the delivered analysis implementation, contracts, derivations, candidate manifest and actual pilot/diagnostic provenance; the supplied updated plan; and presentation code/captions/policy within permitted neighboring repositories and paper-root deliveries. Integrated the exact corrected six-file context snapshot from idea-repo d7aac63879d2f3d08ea779467a3de8d6bf52e583 through story-repo f0cc4e754f5c9d34bfeb2d5e95d3224879403854, without direct idea-repository code access. Additional work was local code/manifest checking, independent rendering checks and manuscript composition. No further external research retrieval, topic/citation-network/withheld-study search, or known prohibited-material encounter occurred. PDF hyperlink targets were inspected locally without following external research links.

@@ -1,0 +1,1751 @@
+
+PAGE 1
+Cross-Prediction-Powered Inference
+Tijana Zrnic∗ Emmanuel J. Cand` es†
+∗Department of Statistics and Stanford Data Science
+†Department of Statistics and Department of Mathematics
+Stanford University
+Abstract
+While reliable data-driven decision-making hinges on high-quality labeled data, the acquisition of
+quality labels often involves laborious human annotations or slow and expensive scientific measurements.
+Machine learning is becoming an appealing alternative as sophisticated predictive techniques are being
+used to quickly and cheaply produce large amounts of predicted labels; e.g., predicted protein structures
+are used to supplement experimentally derived structures, predictions of socioeconomic indicators from
+satellite imagery are used to supplement accurate survey data, and so on. Since predictions are imperfect
+and potentially biased, this practice brings into question the validity of downstream inferences. We
+introduce cross-prediction: a method for valid inference powered by machine learning. With a small
+labeled dataset and a large unlabeled dataset, cross-prediction imputes the missing labels via machine
+learning and applies a form of debiasing to remedy the prediction inaccuracies. The resulting inferences
+achieve the desired error probability and are more powerful than those that only leverage the labeled
+data. Closely related is the recent proposal of prediction-powered inference [1], which assumes that a
+good pre-trained model is already available. We show that cross-prediction is consistently more powerful
+than an adaptation of prediction-powered inference in which a fraction of the labeled data is split off and
+used to train the model. Finally, we observe that cross-prediction gives more stable conclusions than its
+competitors; its confidence intervals typically have significantly lower variability.
+1 Introduction
+As data-driven decisions fuel progress across science and technology, ensuring that such decisions are reliable
+is of critical importance. The reliability of data-driven decision-making rests on having access to high-quality
+data on one hand, and properly accounting for uncertainty on the other.
+One frequently discussed issue is that acquiring high-quality data often involves laborious human label-
+ing, or slow and expensive scientific measurements, or overcoming privacy concerns when human subjects
+are involved. Machine learning offers a promising alternative: sophisticated techniques such as generative
+modeling and deep neural networks are being used to cheaply produce large amounts of data that would
+otherwise be too expensive or time-consuming to collect. For example, tools to predict protein structure are
+supporting wide-ranging research in biology [10, 25, 30, 48]; large language models are being used to generate
+difficult-to-aggregate information about materials that can be used to fight climate change [58]; predictions
+of socioeconomic and environmental conditions based on satellite imagery are being used for downstream
+policy decisions [5, 23, 38, 46]. This increasingly common practice, marked by supplementing high-quality
+data with machine learning outputs, calls for new principles of uncertainty quantification.
+In this work we study this problem in the semi-supervised context, where labels are scarce but features
+are abundant. For example, precise measurements of environmental conditions are difficult to come by
+but satellite imagery is abundant. Due to its volume, satellite imagery is routinely used in combination
+with computer vision algorithms to predict a range of factors on a global scale, including deforestation [21],
+poverty rates [23], and population densities [36]. These predictions provide a compelling substitute for
+resource-intensive ground-based measurements and surveys. However, it is crucial to acknowledge that,
+1
+arXiv:2309.16598v3  [stat.ML]  28 Feb 2024
+
+PAGE 2
+Figure 1: Examples of GEE satellite imagery used in the deforestation analysis of Bullock et al. [13].
+while promising, the predictions are not infallible. Consequently, downstream inferences that uncritically
+treat them as ground truth will be invalid.
+We introduce cross-prediction: a broadly applicable method for semi-supervised inference that leverages
+the power of machine learning while retaining validity. Assume a researcher holds both a small labeled
+dataset and a large unlabeled dataset, and they seek inference—i.e., a p-value or a confidence interval—
+about a population-level quantity such as the mean outcome or a regression coefficient. Cross-prediction
+carefully leverages black-box machine learning to impute the missing labels, resulting in both valid and
+powerful inferences. The validity is a result of a particular debiasing step; the power is a result of using
+sophisticated predictive techniques such as deep learning or random forests. We show that the use of black-
+box predictions on the unlabeled data can lead to a massive improvement in statistical power compared to
+using the labeled data alone.
+Cross-prediction builds upon the recent proposal of prediction-powered inference [1]. Unlike prediction-
+powered inference, we do not assume that our researcher already has access to a predictive model for imputing
+the labels. Rather, to apply prediction-powered inference, the researcher would need to use a portion of the
+labeled data to either train a model from scratch or fine-tune an off-the-shelf model. We show that this
+leads to a suboptimal solution. Consider the following example studied by Angelopoulos et al. [1]. The goal
+is to form a confidence interval for the fraction of the Amazon rainforest that was lost between 2000 and
+2015. A small number of “gold-standard” deforestation labels for certain parcels of land are available, having
+been collected through field visits [13]. In addition, satellite imagery is available for the entire Amazon; see
+Figure 1 for Google Earth Engine (GEE) examples used in the deforestation study of Bullock et al. [13].
+Angelopoulos et al. apply prediction-powered inference after using a portion of the labeled data and a
+gradient-boosted tree to fine-tune a regression-tree-based predictor of forest cover [44]. Our work offers an
+alternative: we can avoid data splitting and instead apply cross-prediction, still with a gradient-boosted
+0.100 0.125 0.150 0.175 0.200
+fraction of deforested areas
+400 600 800
+n
+0.6
+0.7
+0.8
+0.9
+1.0coverage
+400 600 800
+n
+0.04
+0.05
+0.06
+0.07width
+cross-prediction
+classical
+PPI
+Figure 2: Estimating the deforestation rate in the Amazon from satellite imagery . Left: Example
+intervals constructed by cross-prediction, classical inference, and prediction-powered inference (PPI), for five
+random splits into labeled and unlabeled data and a fixed number of gold-standard deforestation labels,
+n = 319. Middle and right: Coverage and interval width averaged over 100 random splits into labeled and
+unlabeled data, for n ∈ {319, 638, 957}. The target of inference is the fraction of the Amazon rainforest lost
+between 2000 and 2015 (gray line in left panel). The target coverage is 90% (gray line in middle panel).
+2
+
+PAGE 3
+tree, to perform the fine-tuning. By doing so, we significantly reduce the size of the confidence interval, as
+seen in Figure 2. This trend will be consistent throughout our experiments: cross-prediction is more efficient
+than prediction-powered inference with data splitting. Figure 2 also shows that cross-prediction outperforms
+“classical” inference, which forms a confidence interval based on gold-standard labels only and simply ignores
+the unlabeled data. Additional details about these experiments can be found in Section 7.2.
+Another important takeaway from Figure 2 is that cross-prediction gives more stable inferences: the
+confidence intervals have lower variability than the intervals computed via baseline approaches. Intuitively,
+classical inference has higher variability due to the smaller sample size, while prediction-powered inference has
+higher variability due to the arbitrariness in the data split. We will quantify the stability of cross-prediction
+in our experiments in Section 7, showcasing its superiority across a range of examples, see Table 4.
+Our work is also related to the literature known as semi-supervised inference [56]. The main difference
+between existing approaches and our work is that our proposal leverages black-box machine learning methods,
+allowing for more complicated data modalities (such as high-dimensional imagery) and more sophisticated
+ways of leveraging the unlabeled data. We elaborate on the relationship to prior work in Section 2.1.
+2 Problem setup
+We study statistical inference in a semi-supervised setting, where collecting high-quality labels is challenging
+but feature observations are abundant. Formally, we have a dataset consisting of n i.i.d. feature–label
+pairs, {(X1, Y1), . . . ,(Xn, Yn)} ∼Pn. In addition, we have a dataset consisting of N unlabeled data points,
+{ ˜X1, . . . ,˜XN } ∼PNX , where PX denotes the marginal distribution over features according to P. We are most
+interested in the regime where N ≫ n, as in the case where feature collection is far cheaper than label
+collection.
+Our goal is to perform inference on a property θ∗(P) of the data-generating distribution P, such as the
+mean outcome, a quantile of the outcome distribution, or a regression coefficient. Our proposal handles all
+estimands defined as a solution to an M-estimation problem:
+θ∗(P) = arg min
+θ
+L(θ), where L(θ) := E [ℓθ(X, Y)] and ( X, Y) ∼ P, (1)
+for a convex loss function ℓθ. Here and throughout, ( X, Y) denotes a generic sample from P independent of
+everything else. All of the aforementioned estimands can be cast in the form (1). For example, if the target
+of inference is the mean outcome, θ∗(P) = E[Y ], then θ∗(P) minimizes the squared loss:
+θ∗(P) = arg min
+θ
+E[ℓθ(Y )] = arg min
+θ
+E[(Y − θ)2]. (2)
+Note that the estimand (and thus the loss) will sometimes only depend on a subset of the features X or only
+on the outcome Y , as in Eq. (2). Also note that this manuscript focuses on θ∗(P) ∈ Rd for a fixed d. Studying
+high-dimensional settings—for example, understanding what scaling of d is permitted by the theory—is a
+valuable direction for future work. Below, we write θ∗ = θ∗(P) for short.
+The main question we address is this: how should we leverage the unlabeled data to achieve both valid
+and powerful inference? Validity alone is an easy target: we can simply dispense with the unlabeled data
+and find the classical estimator ˆθclass, defined as
+ˆθclass = arg min
+θ
+Lclass(θ), where Lclass(θ) := 1n
+nX
+i=1
+ℓθ(Xi, Yi). (3)
+For all standard estimands defined via M-estimation—including means, quantiles, linear regression coefficients—
+there are off-the-shelf confidence intervals around ˆθclass that cover θ∗ with a desired probability in the large-
+sample limit [see, e.g., 28, 49]. The classical estimator and the corresponding confidence intervals shall be
+the main comparison points used to evaluate the performance of cross-prediction.
+3
+
+PAGE 4
+2.1 Related work
+We discuss the relationship between our work and the most closely related technical scholarship.
+Semi-supervised inference. Our work falls within the literature known as semi-supervised infer-
+ence [56]. Most existing work develops methods specialized to particular estimation problems, such as mean
+estimation [56, 57], quantile estimation [14], or linear regression [4, 47]. One exception is the recent work
+of Song et al. [45], who also study general M-estimation. Their approach uses a projection-based correction
+to the classical loss (3) based on simple statistics from the unlabeled data, such as averages of low-degree
+polynomials of the features. Unlike existing proposals, our approach is based on imputing the missing labels
+using black-box machine learning methods, allowing for more complicated data modalities and more intricate
+ways of leveraging the unlabeled data. For example, it is unclear how to apply existing methods when the
+features Xi are high-dimensional images. We also note that the semi-supervised observation model has been
+long studied in semi-supervised learning [50, 59, 60]. However, in this literature the goal is prediction, rather
+than inference.
+Prediction-powered inference. The core idea in this paper is to correct imputed predictions, and
+this derives from the proposal of prediction-powered inference [1]. However, a key assumption in prediction-
+powered inference is that, in addition to a labeled and an unlabeled dataset, the analyst is given a good
+pre-trained machine learning model. We make no such assumption. To apply the theory of prediction-
+powered inference, our setting would require using a portion of the labeled data for model training and
+leaving the rest for inference. In contrast, cross-prediction leverages each labeled data point for both model
+training and inference, leading to a boost in statistical power. The distinction between having and not
+having a pre-trained model makes a difference even when comparing prediction-powered inference and the
+classical approach. Angelopoulos et al. [1] do not take into account the data used for model training when
+comparing the two baselines, because the model is assumed to have been trained before the analysis takes
+place. This makes sense when considering off-the-shelf models such as AlphaFold. In our comparisons we do
+take the training data into account.
+Angelopoulos et al. [2] show a central limit theorem for the prediction-powered estimator, allowing for
+computational and statistical improvements over the original methods for prediction-powered inference. Our
+inferences will be based on a similar central limit theorem for cross-prediction.
+Wang et al. [51] similarly study inferences based on machine learning predictions. They propose using
+the labeled data to train a predictor of true outcomes from predicted ones, and then applying the predictor
+to debias the predictions on the unlabeled data. This algorithm does not come with a formal validity
+guarantee. Motwani and Witten [31] conduct a detailed empirical comparison of the method of Wang et al.
+and prediction-powered inference.
+Theory of cross-validation. Cross-prediction is based on a form of cross-fitting. Consequently, our
+analysis is related to the theoretical studies of cross-validation [3, 7, 8, 20, 26]. In particular, our theory
+borrows from the analysis of Bayle et al. [8], who prove a central limit theorem and study inference on the
+cross-validation test error. Our goal, however, is entirely different; we aim to provide inferential guarantees
+for an estimand θ∗, as defined in Eq. (1), in a semi-supervised setting.
+Semiparametric inference. Our work is also related to the rich literature on semiparametric inference
+[9, 16, 22, 27, 29, 32, 34, 37], where the goal is to do estimation in the presence of a high-dimensional
+nuisance parameter. Our debiasing strategy closely resembles doubly-robust estimators [6], such as the
+AIPW estimator [35, 39], and one-step estimators [33]. In this literature the estimand is typically an
+expected value, such as the average treatment effect. One exception is the work of Jin and Rothenh¨ ausler
+[24], who study general M-estimators through a semiparametric lens. The use of cross-fitting is common in
+that literature as well [16, 17, 18]. While the technical arguments used in our work bear resemblance to
+those classically used in semiparametric inference, our motivation is different. Our focus is on showcasing
+how a theoretically-principled use of black-box predictors—neural networks, random forests, and so on—on
+massive amounts of unlabeled data can boost inference. Since the practice of leveraging unlabeled data
+through predictions is already prevalent in domains such as remote sensing, our goal is to ground it in
+statistical theory.
+4
+
+PAGE 5
+Inference with missing data. Semi-supervised inference can be seen as a special case of the problem
+of inference with missing data [41], where missing information about the labels occurs. Our proposed method
+bears similarities to multiple imputation [40, 42, 43] as, at least at a high level, it is based on “averaging out”
+multiple imputed predictions for the labels. However, our method is substantially different from multiple
+imputation, most notably due to the fact that it incorporates a particular form of debiasing to mitigate
+prediction inaccuracies.
+Inference under model misspecification. Finally, our work relates to a large body of work on
+inference under model misspecification [e.g., 11, 12, 52, 53]. In particular, we do not assume that our
+predictions follow any “true” statistical model, and for parameters θ∗ defined as a regression solution, we
+do not assume that the regression model is correct. For example, if θ∗ is the solution to a linear regression,
+we do not assume that the data truly follows a linear model. Like in classical M-estimation, we will show
+asymptotic normality of our estimator despite the misspecification.
+3 Cross-prediction
+We propose cross-prediction—an estimation technique based on a combination of cross-fitting and prediction.
+The basic idea is to impute labels for the unlabeled data points, and then remove the bias arising from the
+inaccuracies in the predictions using the labeled data. We give a step-by-step outline of the construction
+of the cross-prediction estimator. In the following sections we will show how to perform inference with this
+estimator; that is, how to perform hypothesis tests or construct confidence intervals for θ∗.
+3.1 Cross-prediction for mean estimation
+Before discussing the general case, we consider the problem of mean estimation to gain intuition; the object
+of inference is simply θ∗ = E[Y ].
+We begin by partitioning the labeled dataset intoK chunks, I1 = {1, . . . , n/K}, I2 = {n/K+1, . . . ,2n/K},
+and so on (we assume for simplicity that n is divisible by K).1 Here, K is a user-specified number of folds,
+e.g. K = 10. Then, as in cross-validation, we train a machine learning model K times, each time training on
+all data except one fold. Let Atrain denote a possibly randomized training algorithm, which takes as input
+a dataset of arbitrary size and outputs a predictor of labels from features. Then, for each j ∈ [K], let f (j)
+be the model obtained by training on all folds but Ij; that is, f (j) = Atrain({(Xi, Yi)}i∈[n]\Ij ). We note that
+Atrain can be quite general; it may or may not treat the training data points symmetrically, and f (j) need
+not come from a well-defined family of predictors. Rather, f (j) can be any black-box model; e.g. a random
+forest, a gradient-boosted tree, a neural network, and so on. Moreover, f (j) can be trained from scratch or
+obtained by fine-tuning an off-the-shelf model. Finally, we use the trained models to impute predictions and
+compute the cross-prediction estimator, defined as:
+ˆθ+ = 1KN
+KX
+j=1
+NX
+i=1
+f (j)( ˜Xi) − 1n
+KX
+j=1
+X
+i∈Ij
+(f (j)(Xi) − Yi). (4)
+Intuitively, the first term in Eq. (4) is an empirical approximation of the population mean if we treated
+the predictions as true labels. The second term in Eq. (4) serves to debias this heutistic: it subtracts an
+estimate of the bias between the predicted labels and the true labels. We note that the estimator (4) coincides
+with the mean estimator of Zhang and Bradic [57] in the special case where f (j) are linear models, that is,
+f (j)(x) = x⊤βj for some βj. Our analysis applies more broadly, allowing for complex high-dimensional
+models (e.g., image classifiers).
+Observe that the cross-prediction estimator is unbiased, i.e., E[ˆθ+] = θ∗. Indeed, since i ∈ Ij is not used
+to train model f (j), we have E[f (j)( ˜Xi′)] = E[f (j)(Xi)] for all j ∈ [K], i∈ Ij, i′ ∈ [N ]. Applying this identity
+1By removing at most K −1 data points, the size of the labeled dataset can be made divisible by K. Since in our applications
+K will typically be equal to 10, this truncation has a negligible effect.
+5
+
+PAGE 6
+yields E[ˆθ+] = E[Y ] = θ∗.
+The classical estimator is of course the sample mean:
+ˆθclass = 1n
+nX
+i=1
+Yi, (5)
+which is also unbiased. Given that both the cross-prediction estimator and the classical estimator are
+unbiased, it makes sense to ask which one has a lower variance. The main benefit of cross-prediction is that,
+if the trained models f (j) are reasonably accurate, we expect the variance of the cross-prediction estimator
+to be lower. To see this, first recall that, typically, N ≫ n. This means that the first term in ˆθ+ should have
+a vanishing variance due to the magnitude of N . Therefore,
+Var(ˆθ+) ≈ Var
+
+ 1
+n
+KX
+j=1
+X
+i∈Ij
+(f (j)(Xi) − Yi)
+
+ .
+As the sample mean, the remaining term is an average of n terms. However, when the models are accurate,
+i.e. f (j)(Xi) ≈ Yi, we expect Var(f (j)(Xi) − Yi) ≪ Var(Yi).
+The closest alternative to the cross-prediction estimator is the prediction-powered estimator [1], that is,
+its straightforward adaptation to the setup without a pre-trained model. As discussed earlier, prediction-
+powered inference relies on having a pre-trained model f . We can reduce our setting to this case by intro-
+ducing data splitting: we use the first ntr ≤ n data points from the labeled dataset to train a model f and
+the rest of the labeled data to compute the prediction-powered estimator:
+ˆθPP = 1N
+NX
+i=1
+f ( ˜Xi) − 1n − ntr
+nX
+i=ntr+1
+(f (Xi) − Yi). (6)
+The prediction-powered estimator is also unbiased: E[ˆθPP] = θ∗. However, this strategy is potentially
+wasteful because, after f is trained, the training data is thrown away and not subsequently used for esti-
+mation. Cross-prediction uses the data more efficiently, by leveraging each data point for both training and
+estimation.
+3.2 General cross-prediction
+To introduce the cross-prediction estimator in full generality, recall that we are considering all estimands of
+the form (1). As in the case of mean estimation, we split the labeled data into K folds and train a predictive
+model f (j) on all folds but fold j ∈ [K]. The proposed cross-prediction estimator is defined as:
+ˆθ+ = arg min
+θ
+L+(θ), where L+(θ) := 1KN
+KX
+j=1
+NX
+i=1
+˜ℓf (j)θ,i − 1n KXj=1 Xi∈Ij(ℓf (j)θ,i − ℓθ,i). (7)
+Here, we use the short-hand notation˜ℓf (j)θ,i := ℓθ( ˜Xi, f(j)( ˜Xi)), ℓf (j)θ,i := ℓθ(Xi, f(j)(Xi)), and ℓθ,i := ℓθ(Xi, Yi).
+The intuition remains the same as before: the first term is an empirical approximation of the population loss
+if we treated the predictions as true labels, and the second term aims to debias this heuristic. One can verify
+that the mean estimator in Eq. (4) is indeed a special case of the general estimator in Eq. (7), by taking ℓθ
+to be the squared loss, as per Eq. (2).
+The cross-prediction estimator optimizes an unbiased objective, since E[L+(θ)] = L(θ). This follows
+because E[ℓθ( ˜Xi′, f(j)( ˜Xi′))] = E[ℓθ(Xi, f(j)(Xi))] for all j ∈ [K], i∈ Ij, i′ ∈ [N ], seeing that i ∈ Ij is
+not used to train model f (j). Furthermore, by the same argument as before, we expect L+(θ) to have a
+lower variance than the classical objective in Eq. (3) if N is large and the trained predictors are reasonably
+accurate. We note that L+(θ) may not be a convex function in general, but solving for ˆθ+ is tractable in
+many cases of interest. For example, in the case of means and generalized linear models, L+(θ) is convex.
+6
+
+PAGE 7
+The prediction-powered estimator is similar to the cross-prediction estimator, but it requires data splitting
+and does not average over multiple model fits. It is equal to
+ˆθPP = arg min
+θ
+LPP(θ), where LPP(θ) := 1N
+NX
+i=1
+˜ℓfθ,i − 1n − ntr
+nX
+i=ntr+1
+(ℓfθ,i − ℓθ,i),
+where, as before, f is trained on the first ntr labeled data points. The fact that cross-prediction averages
+the results of multiple model fits allows it to achieve more stable inference. Indeed, in our experiments we
+will observe that cross-prediction is more stable than prediction-powered inference throughout.
+4 Inference for the mean
+We now discuss inference with the cross-prediction estimator. For simplicity we first look at mean estimation,
+where θ∗ = E[Y ]. We will see that much of the discussion will carry over to general M-estimation problems.
+Inference with the cross-prediction estimator in Eq. (4) is difficult because the terms being averaged are
+all dependent through the labeled data. In contrast, the classical estimator in Eq. (5) averages independent
+terms, allowing for confidence intervals based on the central limit theorem. The prediction-powered estimator
+in Eq. (6) is similarly amenable to inference based on the central limit theorem, seeing that all the terms
+are independent conditional on f . In this section we show that, under a relatively mild regularity condition,
+the cross-prediction estimator likewise satisfies a central limit theorem. This will in turn immediately allow
+constructing confidence intervals and hypothesis tests for θ∗.
+The central limit theorem will require that, as the sample size grows, the predictions concentrate suffi-
+ciently rapidly around their expectation. Intuitively, one can think of the condition as requiring that the
+predictions are sufficiently stable. While the stability property is difficult to verify for complex black-box
+models, we empirically observe that inference based on the resulting central limit theorem nevertheless pro-
+vides the correct coverage. We observe this across different estimation problems, data modalities, sample
+sizes, and so on.
+Our analysis based on stability is inspired by the work of Bayle et al. [8], who study inference on the
+cross-validation test error, since the inferential challenges in cross-prediction are similar to those in cross-
+validation. The ultimate goals of the two analyses are, however, entirely different.
+Below we state the stability condition. For all x, we define ¯f (x) := E[f (1)(x)]; the “average” model ¯f is
+the predictor we would obtain if we could train many models on independent datasets of size n − n/K and
+average out their predictions.
+Assumption 1. We say that the predictions are stable if, as n → ∞,
+q
+K Var
+ 
+f (1)(X) − ¯f (X) | f (1) L1→ 0.
+Assumption 1 requires that the models f (j) converge to their “average” model ¯f , but there is no assump-
+tion that ¯f is by any means well-specified. If the number of folds is fixed (e.g., K = 10), as we will typically
+assume, then Assumption 1 is satisfied if the variance of the difference between the learned predictions
+f (1)(X) and the average predictions ¯f (X) vanishes at any rate, Var  f (1)(X) − ¯f (X) | f (1) L1→ 0. We expect
+that any reasonably stable learning algorithm Atrain should satisfy Assumption 1 (intuitively, any algorithm
+not too sensitive to perturbing a single data point). Violations of the assumption might arise if the number
+of folds is allowed to grow, e.g. as in the case of leave-one-out cross-fitting, since then the variance has to
+tend to zero sufficiently rapidly.
+Equipped with Assumption 1, we can now state the central limit theorem for cross-prediction.
+Theorem 1 (Cross-prediction CLT for the mean) . Let θ∗ be the mean outcome, θ∗ = E[Y ]. Suppose that
+the predictions are stable (Ass. 1). Further, assume that nN has a limit, and that ¯σ2 = Var( ¯f (X)) and
+7
+
+PAGE 8
+¯σ2∆ = Var( ¯f (X) − Y ) have a nonzero limit. Then,
+√nq
+n
+N ¯σ2 + ¯σ2∆
+
+ˆθ+ − θ∗
+ d
+→ N(0, 1) .
+With this, inference on θ∗ is now straightforward as long as we can estimate the asymptotic variance
+consistently. We will discuss strategies for doing so in Section 6.
+Corollary 1 (Inference for the mean via cross-prediction). Let θ∗ be the mean outcome, θ∗ = E[Y ]. Assume
+the conditions of Theorem 1, and suppose that we have estimators ˆσ2 p→ ¯σ2 and ˆσ2∆ p→ ¯σ2∆. Let
+C+α =
+
+ˆθ+ ± z1−α/2
+q
+n
+N ˆσ2 + ˆσ2∆
+√n
+
+ .
+Then,
+lim inf
+n,N
+P
+ 
+θ∗ ∈ C+α  ≥ 1 − α.
+Per standard notation, z1−α/2 denotes the (1−α/2)-quantile of the standard normal distribution. Corollary 1
+follows by a direct application of Theorem 1, together with Slutsky’s theorem.
+5 Inference for general M-estimation
+We generalize the principle introduced in Section 4 to handle arbitrary M-estimation problems. Indeed, the
+results presented in this section will strictly subsume the results of Section 4.
+As in the case of the mean, we will require that the predictions are “stable” in an appropriate sense.
+Naturally, the notion of stability will depend on the loss function used to define the M-estimator.
+Assumption 2. With ¯f (·) as before, we say that the predictions are stable if for all θ, as n → ∞,
+q
+K Var
+ 
+∇ℓθ(X, f(1)(X)) − ∇ℓθ(X, ¯f (X)) | f (1) L1→ 0.
+Here, Var(· |f (1)) denotes the covariance matrix conditional on f (1). Also, for vectors and matrices, by
+“
+L1
+→ 0” we mean convergence in mean to zero element-wise. Notice that by setting ℓθ(y) = ( θ − y)2 to be
+the squared loss, Assumption 2 reduces to Assumption 1 in the case of mean estimation. As in the case of
+Assumption 1, Assumption 2 should be interpreted as a stability requirement on Atrain. Moreover, there is
+again no requirement of correct specification of ¯f .
+We will provide two approaches to inference in this section; which one is more appropriate will depend
+on the inference problem at hand.
+One approach will be based on the characterization of θ∗ as a zero of the gradient of the expected loss,
+∇L(θ∗) = E[∇ℓθ∗ (X, Y)] = 0, which follows by the convexity of the loss. In particular, we will construct
+a confidence set for θ∗ by finding all θ accepted by a valid test for the null hypothesis that ∇L(θ) = 0.
+Since the test is valid and θ∗ satisfies the null condition, the true solution θ∗ will be excluded with small
+probability. The hypothesis test for the population gradient ∇L(θ) will follow from a central limit theorem
+for the gradient of the cross-prediction loss,
+∇L+(θ) = 1KN
+KX
+j=1
+NX
+i=1
+∇˜ℓf (j)θ,i − 1n KXj=1 Xi∈Ij(∇ℓf (j)θ,i − ∇ℓθ,i).
+The other approach will be based on showing asymptotic normality of the cross-prediction estimator. For
+this, we build on the proof of asymptotic normality of the prediction-powered estimator (with a pre-trained
+8
+
+PAGE 9
+model) [2], which in turn builds on classical asymptotic normality of M-estimators [49]. The asymptotic
+normality will allow forming standard CLT intervals around ˆθ+.
+We implicitly assume mild regularity on the losses ℓθ(x, y) and ℓθ(x, f(j)(x)), in particular that they are
+differentiable and locally Lipschitz around θ∗ for all possible f (j) (see Def. A.1 in [2]). Our second inference
+approach will require the usual condition that ˆθ+ is consistent, ˆθ+ p→ θ∗; this is satisfied quite broadly, e.g.
+when the parameter space is compact or when L+(θ) is convex. The latter holds for all generalized linear
+models, for example. See [2, 49] for further discussion.
+Theorem 2 states the main technical result of this section, which extends Theorem 1 to general M-
+estimation problems.
+Theorem 2 (Cross-prediction CLT). Suppose that the predictions are stable (Ass. 2). Further, assume
+that nN has a limit, and that ¯Σθ = Var(∇ℓ ¯fθ,i) and ¯Σ∆,θ = Var(∇ℓ ¯fθ,i − ∇ℓθ,i) have a nonzero limit. Denote¯Vθ = nN ¯Σθ + ¯Σ∆,θ. Then, √n ¯V −1/2θ  ∇L+(θ) − ∇L(θ) d→ N(0, I).
+If, additionally, the Hessian Hθ∗ = ∇2L(θ∗) is non-singular, ˆθ+ p→ θ∗, and K is constant, then
+√n ¯Σ−1/2 ˆθ+ − θ∗ d→ N(0, I),
+where ¯Σ = H −1θ∗ ¯Vθ∗ H −1θ∗ .
+Theorem 2 immediately yields two methods for computing a confidence set for θ∗, as stated below.
+Corollary 2 (Inference via cross-prediction) . Suppose that we have estimators ˆΣ p→ ¯Σ and ˆVθ p→ ¯Vθ, for
+all θ. Then, assuming the conditions of Theorem 2, for either
+C+α =
+(
+θ :
+ ˆV −1/2θ ∇L+(θ)2 ≤ χ2d,1−αn ) or C+α = ˆθ+i ± z1−α/(2d)s ˆΣiin , d
+i=1
+,
+we have
+lim inf
+n,N
+P
+ 
+θ∗ ∈ C+α  ≥ 1 − α.
+Above, χ2d,1−α is the (1−α)-quantile of the chi-squared distribution withd degrees of freedom; when d = 1
+(as in the case of mean estimation), χd,1−α is equal to z1−α/2. Note also that in the case of mean estimation,
+the two confidence sets are identical and reduce to the set from Corollary 1. In the second confidence set we
+apply a Bonferroni correction over the d coordinates of the estimand for simplicity and clarity of exposition;
+we can obtain an asymptotically exact (1 − α)-confidence set as C+α = nˆθ+ + v : v⊤ ˆΣv ≤ χ2d,1−αn o.
+Next, we apply Theorem 2 and Corollary 2 to concrete problems—quantile estimation, linear regression,
+and generalized linear models—to get explicit confidence interval constructions.
+5.1 Example: quantile estimation
+Assume we are interested in a quantile of Y ,
+θ∗ = inf {y : P(Y ≤ y) ≥ q} .
+The quantile can equivalently be written as any minimizer of the pinball loss,
+θ∗ = arg min
+θ
+E[ℓθ(Y )] = arg min
+θ
+E[q(Y − θ)1{Y > θ} + (1 − q)(θ − Y )1{Y ≤ θ}].
+9
+
+PAGE 10
+The subgradient of the pinball loss is equal to ∇ℓθ(y) = −q1{y > θ} + (1 − q)1{y ≤ θ} = −q + 1{y ≤ θ}.
+Plugging this expression into the first confidence set from Corollary 2 yields
+C+α =
+
+
+θ :
+ ˜F +(θ) − ∆+(θ) − q ≤ z1−α/2
+q
+n
+N ˆσ2θ + ˆσ2∆,θ
+√n
+
+
+ ,
+where ˜F +(θ) = 1KN PKj=1 PNi=1 1{f (j)( ˜Xi) ≤ θ} is the average empirical CDF of the predictions on the
+unlabeled data, and ∆ +(θ) = 1n PKj=1 Pi∈Ij (1{f (j)(Xi) ≤ θ} −1{Yi ≤ θ}) is the difference between theempirical CDFs of the predictions and true outcomes on the labeled data. The standard errors are equal to
+¯σ2θ = Var(1{ ¯f (X) ≤ θ}) and ¯σ2∆,θ = Var(1{ ¯f (X) ≤ θ} −1{Y ≤ θ}). The confidence set C+α thus consists of
+all values θ such that the average predicted CDF ˜F +(θ), corrected by the bias ∆ +(θ), is close to the target
+level q.
+5.2 Example: linear regression
+In linear regression, the target of inference is defined by
+θ∗ = arg min
+θ
+E[ℓθ(X, Y)] = arg min
+θ
+1
+2 E[(Y − X ⊤θ)2]. (8)
+In this case, the cross-prediction estimator, equal to the solution to ∇L+(ˆθ+) = 0, has a closed-form
+expression. Letting ˜X ∈ RN ×d (resp. X ∈ Rn×d) be the unlabeled (resp. labeled) data matrix, Y ∈ Rn be
+the vector of labeled outcomes, the solution is given by
+ˆθ+ = ( ˜X⊤ ˜X)−1
+
+˜X⊤favg(K)( ˜X) − Nn · X⊤ (f1:K(X) − Y) ,
+where favg(K)( ˜X) = 1K PKj=1 f (j)( ˜X) is the vector of average predictions on the unlabeled data, andf1:K(X) is
+the vector of predictions on the labeled data:f1:K(X) = (f (1)(X1), . . . , f(1)(X nK ), f(2)(X nK +1), . . . , f(K)(Xn)).
+We see that ˆθ+ resembles the usual least-squares estimator with favg(K)( ˜X) as the response, except for the
+extra debiasing factor, Nn · X⊤ (f1:K(X) − Y), that takes into account the prediction inaccuracies.
+Instantiating the relevant terms, Theorem 2 implies that ˆθ+ is asymptotically normal with covariance
+equal to ΣOLS = H −1 ¯Vθ∗ H −1, where H = E[XX ⊤] and ¯Vθ∗ = nN ¯Σθ∗ + ¯Σ∆, for ¯Σθ∗ = Var(( ¯f (X) − X ⊤θ∗)X)
+and ¯Σ∆ = Var(( ¯f (X) − Y )X).
+For a given coordinate of interest i, a confidence interval for θ∗i can therefore be obtained as
+C+α =
+
+ˆθ+i ± z1−α/2
+q
+( ˆΣOLS)ii
+√n
+
+ ,
+given an estimate ˆΣOLS of ΣOLS.
+5.3 Example: generalized linear models
+We can generalize the previous example by considering all generalized linear models (GLMs). In particular,
+we consider targets of inference given by
+θ∗ = arg min
+θ
+E[− log pθ(Y |X)] = arg min
+θ
+E[−Y θ⊤X + ψ(X ⊤θ)], (9)
+where pθ(y|x) = exp( yx⊤θ − ψ(x⊤θ)) is the probability density of the outcome given the features and the
+log-partition function ψ is convex. The objective (9) recovers the linear-regression objective (8) by setting
+ψ(s) = 12 s2. It captures logistic regression by choosing ψ(s) = log(1 + es).
+10
+
+PAGE 11
+The asymptotic covariance given by Theorem 2 evaluates to ΣGLM = H −1θ∗ ¯Vθ∗ H −1θ∗ , Hθ∗ = E[ψ′′(X ⊤θ∗)XX ⊤],¯Vθ∗ = nN Var((ψ′(X ⊤θ∗) − ¯f (X))X) + Var((¯f (X) − Y )X). Therefore, analogously to the OLS case, given an
+estimate ˆΣGLM of ΣGLM, we can construct a confidence interval for ˆθ+ as
+C+α =
+
+ˆθ+i ± z1−α/2
+q
+( ˆΣGLM)ii
+√n
+
+ .
+6 Variance estimation via bootstrapping
+The previous inference results rely on being able to estimate the asymptotic covariance of ˆθ+. We herewith
+provide an explicit estimation strategy that we will use in our experiments.
+Recall that that the asymptotic covariance is equal to ¯Σ = H −1θ∗ ¯Vθ∗ H −1θ∗ , where ¯Vθ = nN ¯Σθ + ¯Σ∆,θ, for
+¯Σθ = Var(∇ℓ ¯fθ,i) and ¯Σ∆,θ = Var(∇ℓ ¯fθ,i −∇ℓθ,i). Estimating the Hessian Hθ is easy via plug-in estimation; ¯Vθ,
+on the other hand, depends on the average model ¯f . If the average model ¯f was known, one could compute
+estimates of ¯Σθ and ¯Σ∆,θ by replacing the true covariances with their empirical counterparts. Thus, the
+challenge is to approximate ¯f . To achieve this, we apply the bootstrap to simulate multiple model training
+runs, and at the end we average the predictions of all the learned models.
+In more detail, for each b ∈ {1, 2, . . . , B} = [B], we sample n − nK data points uniformly at random from
+the labeled dataset, and denote the indices of the samples by I bboot. Then, we use the sampled data points to
+train a model f (b)boot using the same model-fitting strategy as for the cross-prediction models f (j). To estimate¯Σθ, we compute
+ˆΣθ = dVar
+
+∇ℓθ( ˜Xi, ¯fboot( ˜Xi)), i∈ [N ]
+
+,
+where ¯fboot = 1B PBb=1 f (b)boot and dVar denotes the empirical covariance. To estimate ¯Σ∆,θ, we compute
+ˆΣ∆,θ = dVar
+
+∇ℓθ(Xi, f(b)boot(Xi)) − ∇ℓθ(Xi, Yi), i∈ [n] \ I (b)boot, b∈ [B] .
+Finally, we approximate the covariance by nN ˆΣθ + ˆΣ∆,θ. In computing ˆΣ∆,θ, we technically do not average
+out the bootstrapped models because we want to make sure that every point ( Xi, Yi) used to compute the
+gradient bias is independent of its corresponding model f (b)boot. Intuitively, as per the discussion following
+Assumption 1, if Atrain is stable we expect f (b)boot to be a good approximation of the average model ¯f , which
+in turn means that the bootstrap covariance estimates should be consistent per conventional wisdom. We
+show empirically that the covariance estimates lead to valid coverage across a range of applications.
+To give one concrete example, consider mean estimation: θ∗ = E[Y ]. We compute
+ˆσ2 = dVar ¯fboot( ˜Xi), i∈ [N ] and ˆσ2∆ = dVarf (b)boot(Xi) − Yi, i∈ [n] \ I (b)boot, b∈ [B] ,
+and form the final interval as C+α =
+
+ˆθ+ ± z1−α/2
+√ n
+N ˆσ2+ˆσ2∆√n
+
+.
+7 Experiments
+We evaluate cross-prediction and compare it to baseline approaches on several datasets; the baselines are
+the classical inference method, which only uses the labeled data, and prediction-powered inference with a
+data-splitting step in order to train a predictive model. Code for reproducing the experiments is available
+at: https://github.com/tijana-zrnic/cross-ppi.
+For each experimental setting, we plot the coverage and confidence interval width estimated over 100
+trials for all baselines. We also show the constructed confidence intervals for five randomly chosen trials.
+11
+
+PAGE 12
+Finally, to quantify the stability of inferences, we report the standard deviation of the lower and upper
+endpoints of the confidence intervals for each method.
+We begin with proof-of-concept experiments on synthetic data. Then, we move on to more complex real
+datasets.
+7.1 Proof-of-concept experiments on synthetic data
+To build intuition, we begin with simple experiments on synthetic data. The purpose is to confirm what we
+expect in theory: (a) as it gets easier to predict labels from features, cross-prediction and prediction-powered
+inference become more powerful and increasingly outperform the classical approach; (b) cross-prediction uses
+the data more efficiently than prediction-powered inference, yielding smaller intervals; (c) cross-prediction
+gives more stable inferences than the baselines when the predictions are useful; (d) all three approaches lead
+to satisfactory coverage.
+In all of the following experiments, we have N = 10, 000 unlabeled data points, and we vary the size of
+the labeled data n between 100 and 1000, in 100-point increments. We apply cross-prediction with K = 10
+folds. We estimate the variance using the bootstrap approach described in Section 6, with B = 30 bootstrap
+samples. For prediction-powered inference, we use half of the labeled data for model training. To illustrate
+the point that cross-prediction can be applied with any black-box model, we train gradient-boosted trees
+via XGBoost [15] to obtain the models f (j). We use the same model-fitting strategy for prediction-powered
+inference. We fix the target error level to be α = 0.1 and average the results over 100 trials.
+Mean estimation. For given parameters R2 and σ2Y , the data-generating distribution is defined as X ∼
+N (0, I2), Y = µ + X ⊤β + ξ, where β1 = β2 = RσY /√2, and ξ ∼ N(0, σ2Y (1 − R2)) is independent of X.
+We fix µ = 4 , σ2Y = 4 and vary R2 = Var(X ⊤β)Var(Y ) ∈ {0, 0.5, 1}. The idea is to vary the degree to which the
+outcomes can be explained through the features: when R2 = 0, the outcome is independent of the features
+and we do not expect predictions to help, while when R2 = 1, the outcome can be perfectly explained
+through the features and we expect predictions to be helpful. Given that the variance of Y is kept constant
+regardless of R2, classical inference has the same distribution of widths across R2. The target of inference is
+θ∗ = E[Y ] = µ.
+In Figure 3 we plot the coverage and interval width of cross-prediction, classical inference, and prediction-
+powered inference, as well as five example intervals. All three methods approximately achieve the target
+coverage, and cross-prediction dominates prediction-powered inference throughout. Further, we see that the
+classical approach dominates the alternatives when the features are independent of the outcomes, while the
+alternatives become more powerful as R2 increases. To evaluate stability, in Table 1 we report the standard
+deviation of the lower and upper endpoints of the confidence intervals from Figure 3, for n = 100. We
+observe that the classical approach is the most stable method when R2 = 0, which makes sense because the
+predictions can only introduce noise. When R2 = 0.5, cross-prediction and classical inference have a similar
+degree of stability, while whenR2 = 1 cross-prediction is significantly more stable. Moreover, cross-prediction
+is significantly more stable than prediction-powered inference throughout. These trends hold across different
+values of n, however we only include the results for n = 100 for simplicity of exposition.
+Quantile estimation. We adopt the same data-generating process as for mean estimation. We only
+change the target of inference θ∗ to be the 75th percentile of the outcome distribution.
+In Figure 4 we plot the coverage and interval width of cross-prediction, classical inference, and prediction-
+powered inference, as well as five example intervals. We observe a qualitatively similar comparison as
+in the case of mean estimation: all three methods approximately achieve the target coverage, and cross-
+prediction dominates prediction-powered inference throughout. As before, the classical approach dominates
+the alternatives when the features are independent of the outcomes, and the alternatives become increasingly
+powerful as R2 increases. In Table 2 we evaluate the stability of the methods by reporting the standard
+deviation of the lower and upper endpoints of the confidence intervals from Figure 4, for n = 100. As before,
+12
+
+PAGE 13
+3.0 3.5 4.0 4.5
+mean
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.5
+1.0width
+cross-prediction
+classical
+PPI
+3.0 3.5 4.0 4.5
+mean
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.2
+0.4
+0.6
+0.8width
+3.50 3.75 4.00 4.25 4.50 4.75
+mean
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.2
+0.4
+0.6width
+R² = 0
+R² = 0.5
+R² = 1
+Figure 3: Mean estimation. Intervals from five randomly chosen trials (left), coverage (middle), and
+average interval width (right) of cross-prediction, classical inference, and prediction-powered inference (PPI)
+in a mean estimation problem.
+Table 2 shows that cross-prediction is more stable than prediction-powered inference for all values of R2,
+and when R2 = 0 classical inference is the most stable option. When R2 = 0 .5, cross-prediction has a
+slightly more stable upper endpoint than classical inference, while classical inference has a more stable lower
+endpoint. When R2 = 1, cross-prediction is by far the most stable method. For R2 ∈ {0, 0.5}. Again, these
+trends are largely consistent across different values of n, however we only include the results for n = 100 for
+simplicity.
+Linear regression. Finally, we look at linear regression. For robustness and interpretability, it is common
+to include only a subset of the available features in the regression. The process of deciding which variables to
+include is known as model selection. The variables that are not included in the model may still be predictive
+Mean estimation
+R2 = 0 R2 = 0.5 R2 = 1
+Method ˆσL ˆσU ˆσL ˆσU ˆσL ˆσU
+cross-prediction 0.2694 0.2696 0.1769 0.1897 0.0591 0.0613
+classical 0.2124 0.2085 0.1908 0.1885 0.2136 0.2102
+PPI 0.3844 0.3997 0.2751 0.2684 0.1045 0.1061
+Table 1: Standard deviation of the lower (ˆ σL) and upper (ˆσU ) endpoints of the confidence intervals in the
+mean estimation problem from Figure 3, for n = 100. The minimum value in each column is in bold.
+13
+
+PAGE 14
+4 5 6
+75% quantile
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.5
+1.0
+1.5width
+cross-prediction
+classical
+PPI
+4 5 6
+75% quantile
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.5
+1.0
+1.5width
+4.5 5.0 5.5 6.0
+75% quantile
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.5
+1.0width
+R² = 0
+R² = 0.5
+R² = 1
+Figure 4: Quantile estimation. Intervals from five randomly chosen trials (left), coverage (middle), and
+average interval width (right) of cross-prediction, classical inference, and prediction-powered inference (PPI)
+in a quantile estimation problem. The target is the 75th percentile.
+of the outcome of interest; we demonstrate that, as such, they can be useful for inference.
+The data-generating distribution is defined as follows: we generate X ∼ N(0, I3), Y = X ⊤β + ξ, where
+β = (1, 1, R0σY ) and ξ ∼ N(0, σ2Y (1 − R20)). Again, the idea is to vary how much of the outcome can be
+explained through prediction versus how much of it is exogenous randomness. We fix σ2Y = 4 and vary
+R0 ∈ {0, 0.5, 1}. The target of inference is defined as the least-squares solution when regressing Y on
+(X1, X2), that is, the first coordinate of this solution. In this case, this is simply equal to θ∗ = β1 = 1.
+In Figure 5 we plot the coverage and interval width of cross-prediction, classical inference, and prediction-
+powered inference. When R20 = 0, the classical approach outperforms the prediction-based approaches; as
+R20 grows, meaning more of the randomness of the outcome can be attributed to X3, the prediction-based
+Quantile estimation
+R2 = 0 R2 = 0.5 R2 = 1
+Method ˆσL ˆσU ˆσL ˆσU ˆσL ˆσU
+cross-prediction 0.4102 0.3509 0.3253 0.3242 0.1345 0.1545
+classical 0.2302 0.3024 0.2569 0.3305 0.2615 0.2806
+PPI 0.5424 0.4614 0.4141 0.4368 0.2151 0.3280
+Table 2: Standard deviation of the lower (ˆ σL) and upper (ˆσU ) endpoints of the confidence intervals in the
+quantile estimation problem from Figure 4, for n = 100. The minimum value in each column is in bold.
+14
+
+PAGE 15
+0.0 0.5 1.0 1.5 2.0 2.5
+regression coefficient
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.5
+1.0width
+cross-prediction
+classical
+PPI
+0.5 1.0 1.5 2.0
+regression coefficient
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.25
+0.50
+0.75width
+0.50 0.75 1.00 1.25 1.50
+regression coefficient
+200 400 600 800 1000
+n
+0.6
+0.8
+1.0coverage
+200 400 600 800 1000
+n
+0.25
+0.50width
+R20 = 0
+R20 = 0.5
+R20 = 1
+Figure 5: Linear regression. Intervals from five randomly chosen trials (left), coverage (middle), and
+average interval width (right) of cross-prediction, classical inference, and prediction-powered inference (PPI)
+in a linear regression problem.
+approaches dominate the classical one. As before, cross-prediction yields smaller intervals than prediction-
+powered inference. We remark that, even though the inference problem posits a linear model, the prediction-
+based approaches still use XGBoost for model training. Like in the previous two examples, we report on
+the stability of the three methods in Table 3. We again fix n = 100 for simplicity. Cross-prediction is far
+more stable than prediction-powered inference throughout, and it is more stable than classical inference for
+nonzero values of R20.
+Linear regression
+R20 = 0 R20 = 0.5 R20 = 1
+Method ˆσL ˆσU ˆσL ˆσU ˆσL ˆσU
+cross-prediction 0.2801 0.2969 0.1875 0.2250 0.1102 0.1472
+classical 0.2091 0.2098 0.2271 0.2262 0.1800 0.1809
+PPI 0.4104 0.4870 0.2602 0.3326 0.1522 0.2530
+Table 3: Standard deviation of the lower (ˆ σL) and upper (ˆσU ) endpoints of the confidence intervals in the
+linear regression problem from Figure 5, for n = 100. The minimum value in each column is in bold.
+15
+
+PAGE 16
+7.2 Estimating deforestation from satellite imagery
+We briefly revisit the problem of deforestation analysis from Section 1. As we saw in Figure 2, cross-
+prediction gave tighter confidence intervals for the deforestation rate than using gold-standard measurements
+of deforestation alone. In other words, cross-prediction can enable a reduction in the number of necessary field
+visits to measure deforestation. Moreover, we saw that cross-prediction outperformed prediction-powered
+inference.
+Here we argue another benefit of cross-prediction in this problem: it is a more stable solution than the
+baselines. Table 4 shows the standard deviation of the endpoints of the confidence intervals constructed by
+cross-prediction and its competitors. Cross-prediction has a significantly lower variability of the endpoints
+than both classical inference and prediction-powered inference, while the latter two exhibit similar variability.
+Finally, we provide the experimental details that were omitted in Section 1 for brevity. We have nall =
+3192 data points with gold-standard labels total. To simulate having unlabeled images, in each trial we
+randomly split the data into n points to serve as the labeled data, for varying n ∈ {0.1nall, 0.2nall, 0.3nall},
+and treat the remaining points as unlabeled. The target of inference is the fraction of deforested areas across
+the locations contained in the sample. We apply cross-prediction with K = 10 folds. For prediction-powered
+inference, we use ntr = 0.1n points for model tuning. We average the results over 100 trials.
+7.3 Estimating relationships between socioeconomic covariates in survey data
+We evaluate cross-prediction on the American Community Survey (ACS) Public Use Microdata Sample
+(PUMS). We investigate the relationship between age, sex, and income in survey data collected in California
+in 2019 ( nall = 377 , 575 people total). High-quality survey data is generally difficult and time-consuming
+to collect. With this experiment we hope to demonstrate how, by imputing missing information based on
+the available covariates, cross-prediction can achieve both powerful and valid inferences while reducing the
+requisite amount of survey data. See Figure 6 for a subset of the available covariates in the ACS PUMS
+data.
+We use the Folktables [19] interface to download the PUMS data, including income, age, sex, and 15 other
+demographic covariates. In each trial, we randomly sample n data points to serve as the labeled data, for
+varying n, and treat the remaining data points as the unlabeled data. We vary n ∈ {0.1nall, 0.2nall, 0.3nall}.
+The target of inference is the linear regression coefficient when regressing income on age and sex: θ∗ =
+arg minθ E[(Y − X ⊤olsθ)2], where Y is income and Xols encodes age and sex, Xols = ( Xage, Xsex). For the
+purpose of evaluating coverage, the corresponding coefficient computed on the whole dataset is taken as
+Figure 6: Subset of the variables available in the ACS PUMS data.
+16
+
+PAGE 17
+1020 1040 1060 1080 1100
+regression coefficient between age and income
+40000 60000 80000 100000
+n
+0.6
+0.7
+0.8
+0.9
+1.0coverage
+40000 60000 80000 100000
+n
+30
+40
+50
+60width
+cross-prediction
+classical
+PPI
+Figure 7: Estimating the relationship between age, sex, and income in ACS survey data. In-
+tervals from five randomly chosen trials (left), coverage (middle), and average interval width (right) of
+cross-prediction, classical inference, and prediction-powered inference (PPI) in a linear regression problem
+on ACS PUMS data. The target θ∗ is the linear regression coefficient when regressing income on age and sex.
+the ground-truth value of the estimand. To obtain the models f (j), we train gradient-boosted trees via
+XGBoost [15]. Note that the predictors use all 17 covariates to predict the missing labels, even though the
+target of inference is only defined with respect to two covariates. We apply cross-prediction with K = 5
+folds. For prediction-powered inference, we use ntr = 0 .2n points for model training, and we also train
+gradient-boosted trees. The target error level is α = 0.1 and we average the results over 100 trials.
+In Figure 7 we plot the coverage and interval width for the three baselines, together with five example
+intervals. All three methods cover the true target with the desired probability. Moreover, as before, cross-
+prediction outperforms prediction-powered inference. In this example, the predictive power of the trained
+models is not high enough for prediction-powered inference to outperform the classical approach; cross-
+prediction, however, outperforms both. In Table 4 we report on the stability of the three methods for
+n = 0.1nall. We observe that cross-prediction is more stable than both alternatives. We also observe that
+prediction-powered inference has more stable intervals than the classical approach, despite the fact that they
+are wider on average.
+7.4 Estimating the prevalence of spiral galaxies from galaxy images
+We next look at galaxy data from the Galaxy Zoo 2 dataset [54], consisting of human-annotated images of
+galaxies from the Sloan Digital Sky Survey [55]. Of particular interest are galaxies with spiral arms, which are
+correlated with star formation in the discs of low-redshift galaxies, and thus contribute to the understanding
+of star formation. See Figure 8 for example images of a spiral and a nonspiral galaxy. We show that, by
+leveraging the massive amounts of unlabeled galaxy imagery together with machine learning, cross-prediction
+can decrease the requisite number of human annotations for inference on galaxy demographics.
+We have 167, 434 annotated galaxy images. In each trial, we randomly split them up into n points to
+serve as the labeled data, for n ∈ {10000, 20000, 30000}, and treat the remaining data points as unlabeled.
+Figure 8: Example images of a spiral galaxy (left) and a nonspiral galaxy (right).
+17
+
+PAGE 18
+0.250 0.255 0.260 0.265 0.270
+fraction of spiral galaxies
+10000 15000 20000 25000 30000
+n
+0.6
+0.7
+0.8
+0.9
+1.0coverage
+10000 15000 20000 25000 30000
+n
+0.0075
+0.0100
+0.0125width
+cross-prediction
+classical
+PPI
+Figure 9: Estimating the prevalence of spiral galaxies from galaxy images. Intervals from five ran-
+domly chosen trials (left), coverage (middle), and average interval width (right) of cross-prediction, classical
+inference, and prediction-powered inference (PPI) in a mean estimation problem on galaxy image data. The
+target θ∗ is the fraction of spiral galaxies.
+Deforestation Analysis ACS Survey Analysis Galaxy Analysis
+Method ˆσL ˆσU ˆσL ˆσU ˆσL ˆσU
+cross-prediction 0.0158 0.0182 11.2781 12.2367 0.0029 0.0029
+classical 0.0195 0.0232 14.5346 15.6106 0.0037 0.0038
+PPI 0.0200 0.0240 13.1378 13.8733 0.0036 0.0037
+Table 4: Standard deviation of the lower (ˆ σL) and upper (ˆσU ) endpoints of the confidence intervals in the
+problems studied in Figure 2, Figure 7, and Figure 9. For each problem we take n to be the smallest labeled
+dataset size in the considered range. The minimum value in each column is in bold.
+The target of inference is the fraction of spiral galaxies in the dataset, equal to about 26 .22%. To compute
+predictions, we fine-tune all layers of a pre-trained ResNet50. We apply cross-prediction with K = 3 folds.
+For prediction-powered inference, we use ntr = 0 .1n points for model training. The target error rate is
+α = 0.1 and we average the results over 100 trials.
+In Figure 9 we plot the coverage and interval width of the three methods, as well as the intervals for
+five randomly chosen trials. Both cross-prediction and prediction-powered inference yield smaller intervals
+than the classical approach. Moreover, cross-prediction dominates prediction-powered inference. We observe
+satisfactory coverage for all three procedures. In Table 4 we evaluate the stability of the procedures for
+n = 10 , 000. Cross-prediction is significantly more stable than classical inference and prediction-powered
+inference. The latter two achieve a similar degree of stability.
+8 Evaluating heuristics
+In Figure 2, we saw that cross-prediction gave tighter confidence intervals than the baseline approaches for
+the problem of deforestation analysis. In this section, we test two heuristic ways of reducing the variance of
+the classical approach and prediction-powered inference and compare the heuristics to cross-prediction.
+The first heuristic removes the debiasing from the cross-prediction estimator and simply averages the
+predictions on the large unlabeled dataset:
+ˆθnodebias = 1KN
+KX
+j=1
+NX
+i=1
+f (j)( ˜Xi).
+This is akin to computing the classical estimator while pretending that the predicted labels are the ground
+18
+
+PAGE 19
+400 600 800
+n
+0.00
+0.25
+0.50
+0.75
+1.00coverage
+400 600 800
+n
+0.02
+0.04
+0.06width
+cross-prediction
+classical
+PPI
+no folds
+no debiasing
+Figure 10: Estimating the deforestation rate in the Amazon from satellite imagery (revisited).
+Coverage and average interval width of cross-prediction, classical inference, and prediction-powered inference
+(PPI), as well as two heuristics related to cross-fitting: one that removes the debiasing and one that trains
+on all labeled data instead of forming folds. The experimental setup is the same as in Figure 2.
+truth. The second heuristic trains a model on all the labeled data, f all = Atrain({(Xi, Yi)}ni=1), and computes
+ˆθnofolds = 1N
+NX
+i=1
+f all( ˜Xi) − 1n
+nX
+i=1
+(f all(Xi) − Yi).
+This estimator is akin to the prediction-powered estimator if we treated f all as fixed and independent of the
+labeled dataset.
+For both heuristics, we form confidence intervals based on the usual central limit theorem that assumes
+i.i.d. sampling. For the first heuristic this is done conditional on the trained models f (j), since the terms
+( 1K PKj=1 f (j)( ˜Xi))i∈[N ] are indeed conditionally independent given f (1), . . . , f(K). Since the second heuristic
+proceeds under the assumption that f all can be seen as being independent of the labeled data, we apply the
+central limit theorem to the two sums separately, as if f all were fixed.
+We see in Figure 10 that removing the debiasing is detrimental to coverage; removing the folds has a
+more moderate effect that vanishes with n, but it is nevertheless significant. Cross-prediction yields wider
+intervals than both heuristics, and by doing so it maintains correct coverage.
+Acknowledgements
+We thank Anastasios Angelopoulos, Ying Jin, and Asher Spector for helpful suggestions and feedback on
+a draft on this manuscript, and Aditya Ghosh for catching and fixing a typo in a previous version of the
+manuscript. We also thank the reviewers for helping us clarify and improve the paper’s exposition. T.Z. was
+supported by Stanford Data Science through the Fellowship program. E.J.C. was supported by the Office of
+Naval Research grant N00014-20-1-2157, the National Science Foundation grant DMS-2032014, the Simons
+Foundation under award 814641, and the ARO grant 2003514594.
+References
+[1] Anastasios N Angelopoulos, Stephen Bates, Clara Fannjiang, Michael I Jordan, and Tijana Zrnic.
+Prediction-powered inference. Science, 382(6671):669–674, 2023.
+[2] Anastasios N Angelopoulos, John C Duchi, and Tijana Zrnic. PPI++: Efficient prediction-powered
+inference. arXiv preprint arXiv:2311.01453 , 2023.
+[3] Morgane Austern and Wenda Zhou. Asymptotics of cross-validation. arXiv preprint arXiv:2001.11111 ,
+2020.
+19
+
+PAGE 20
+[4] David Azriel, Lawrence D Brown, Michael Sklar, Richard Berk, Andreas Buja, and Linda Zhao. Semi-
+supervised linear regression. Journal of the American Statistical Association, 117(540):2238–2251, 2022.
+[5] John E Ball, Derek T Anderson, and Chee Seng Chan. Comprehensive survey of deep learning in remote
+sensing: theories, tools, and challenges for the community. Journal of applied remote sensing , 11(4):
+042609–042609, 2017.
+[6] Heejung Bang and James M Robins. Doubly robust estimation in missing data and causal inference
+models. Biometrics, 61(4):962–973, 2005.
+[7] Stephen Bates, Trevor Hastie, and Robert Tibshirani. Cross-validation: what does it estimate and how
+well does it do it? Journal of the American Statistical Association , pages 1–12, 2023.
+[8] Pierre Bayle, Alexandre Bayle, Lucas Janson, and Lester Mackey. Cross-validation confidence intervals
+for test error. Advances in Neural Information Processing Systems , 33:16339–16350, 2020.
+[9] Peter J Bickel, Chris AJ Klaassen, Peter J Bickel, Ya’acov Ritov, J Klaassen, Jon A Wellner, and
+YA’Acov Ritov. Efficient and adaptive estimation for semiparametric models , volume 4. Springer, 1993.
+[10] Isabell Bludau, Sander Willems, Wen-Feng Zeng, Maximilian T Strauss, Fynn M Hansen, Maria C
+Tanzer, Ozge Karayel, Brenda A Schulman, and Matthias Mann. The structural context of posttrans-
+lational modifications at a proteome-wide scale. PLoS biology, 20(5):e3001636, 2022.
+[11] Andreas Buja, Lawrence Brown, Richard Berk, Edward George, Emil Pitkin, Mikhail Traskin, Kai
+Zhang, and Linda Zhao. Models as approximations I. Statistical Science, 34(4):523–544, 2019.
+[12] Andreas Buja, Lawrence Brown, Arun Kumar Kuchibhotla, Richard Berk, Edward George, and Linda
+Zhao. Models as approximations II. Statistical Science, 34(4):545–565, 2019.
+[13] Eric L Bullock, Curtis E Woodcock, Carlos Souza Jr, and Pontus Olofsson. Satellite-based estimates
+reveal widespread forest degradation in the Amazon. Global Change Biology , 26(5):2956–2969, 2020.
+[14] Abhishek Chakrabortty, Guorong Dai, and Raymond J Carroll. Semi-supervised quantile estimation:
+Robust and efficient inference in high dimensional settings. arXiv preprint arXiv:2201.10208 , 2022.
+[15] Tianqi Chen and Carlos Guestrin. XGBoost: A scalable tree boosting system. In Proceedings of the
+22nd acm sigkdd international conference on knowledge discovery and data mining , pages 785–794, 2016.
+[16] Victor Chernozhukov, Denis Chetverikov, Mert Demirer, Esther Duflo, Christian Hansen, Whitney
+Newey, and James Robins. Double/debiased machine learning for treatment and structural parameters,
+2018.
+[17] Victor Chernozhukov, Juan Carlos Escanciano, Hidehiko Ichimura, Whitney K Newey, and James M
+Robins. Locally robust semiparametric estimation. Econometrica, 90(4):1501–1535, 2022.
+[18] Victor Chernozhukov, Whitney K Newey, and Rahul Singh. A simple and general debiased machine
+learning theorem with finite-sample guarantees. Biometrika, 110(1):257–264, 2023.
+[19] Frances Ding, Moritz Hardt, John Miller, and Ludwig Schmidt. Retiring adult: New datasets for fair
+machine learning. Advances in neural information processing systems , 34:6478–6490, 2021.
+[20] Sandrine Dudoit and Mark J van der Laan. Asymptotics of cross-validated risk estimation in estimator
+selection and performance assessment. Statistical methodology, 2(2):131–154, 2005.
+[21] Matthew C Hansen, Peter V Potapov, Rebecca Moore, Matt Hancher, Svetlana A Turubanova, Alexan-
+dra Tyukavina, David Thau, Stephen V Stehman, Scott J Goetz, Thomas R Loveland, et al. High-
+resolution global maps of 21st-century forest cover change. science, 342(6160):850–853, 2013.
+[22] Rafail Z Hasminskii and Ildar A Ibragimov. On the nonparametric estimation of functionals. In Pro-
+ceedings of the Second Prague Symposium on Asymptotic Statistics , volume 473, pages 474–482. North-
+Holland Amsterdam, 1979.
+20
+
+PAGE 21
+[23] Neal Jean, Marshall Burke, Michael Xie, W Matthew Davis, David B Lobell, and Stefano Ermon.
+Combining satellite imagery and machine learning to predict poverty. Science, 353(6301):790–794,
+2016.
+[24] Ying Jin and Dominik Rothenh¨ ausler. Tailored inference for finite populations: conditional validity and
+transfer across distributions. Biometrika, page asad022, 2023.
+[25] John Jumper, Richard Evans, Alexander Pritzel, Tim Green, Michael Figurnov, Olaf Ronneberger,
+Kathryn Tunyasuvunakool, Russ Bates, AugustinˇZ ´ ıdek, Anna Potapenko, et al. Highly accurate protein
+structure prediction with alphafold. Nature, 596(7873):583–589, 2021.
+[26] Nicholas Kissel and Jing Lei. On high-dimensional Gaussian comparisons for cross-validation. arXiv
+preprint arXiv:2211.04958, 2022.
+[27] Chris AJ Klaassen. Consistent estimation of the influence function of locally asymptotically linear
+estimators. The Annals of Statistics , 15(4):1548–1562, 1987.
+[28] Erich L Lehmann and Joseph P Romano. Testing statistical hypotheses , volume 4. Springer Nature,
+2022.
+[29] B Ya Levit. On the efficiency of a class of non-parametric estimates. Theory of Probability & Its
+Applications, 20(4):723–740, 1976.
+[30] Zeming Lin, Halil Akin, Roshan Rao, Brian Hie, Zhongkai Zhu, Wenting Lu, Nikita Smetanin, Robert
+Verkuil, Ori Kabeli, Yaniv Shmueli, et al. Evolutionary-scale prediction of atomic-level protein structure
+with a language model. Science, 379(6637):1123–1130, 2023.
+[31] Keshav Motwani and Daniela Witten. Valid inference after prediction. arXiv preprint arXiv:2306.13746,
+2023.
+[32] Whitney K Newey. The asymptotic variance of semiparametric estimators. Econometrica: Journal of
+the Econometric Society , pages 1349–1382, 1994.
+[33] Whitney K Newey and Daniel McFadden. Large sample estimation and hypothesis testing. Handbook
+of econometrics, 4:2111–2245, 1994.
+[34] James M Robins and Andrea Rotnitzky. Semiparametric efficiency in multivariate regression models
+with missing data. Journal of the American Statistical Association , 90(429):122–129, 1995.
+[35] James M Robins, Andrea Rotnitzky, and Lue Ping Zhao. Estimation of regression coefficients when some
+regressors are not always observed. Journal of the American statistical Association , 89(427):846–866,
+1994.
+[36] Caleb Robinson, Fred Hohman, and Bistra Dilkina. A deep learning approach for population esti-
+mation from satellite imagery. In Proceedings of the 1st ACM SIGSPATIAL Workshop on Geospatial
+Humanities, pages 47–54, 2017.
+[37] Peter M Robinson. Root-n-consistent semiparametric regression. Econometrica: Journal of the Econo-
+metric Society, pages 931–954, 1988.
+[38] Esther Rolf, Jonathan Proctor, Tamma Carleton, Ian Bolliger, Vaishaal Shankar, Miyabi Ishihara,
+Benjamin Recht, and Solomon Hsiang. A generalizable and accessible approach to machine learning
+with global satellite imagery. Nature communications, 12(1):4392, 2021.
+[39] Andrea Rotnitzky, James M Robins, and Daniel O Scharfstein. Semiparametric regression for repeated
+outcomes with nonignorable nonresponse. Journal of the american statistical association , 93(444):1321–
+1339, 1998.
+[40] D Rubin. Multiple imputation for nonresponse in surveys. Wiley Series in Probability and Statistics ,
+page 1, 1987.
+21
+
+PAGE 22
+[41] Donald B Rubin. Inference and missing data. Biometrika, 63(3):581–592, 1976.
+[42] Donald B Rubin. Multiple imputation after 18+ years. Journal of the American statistical Association ,
+91(434):473–489, 1996.
+[43] Joseph L Schafer. Multiple imputation: a primer. Statistical methods in medical research , 8(1):3–15,
+1999.
+[44] Joseph O Sexton, Xiao-Peng Song, Min Feng, Praveen Noojipady, Anupam Anand, Chengquan Huang,
+Do-Hyung Kim, Kathrine M Collins, Saurabh Channan, Charlene DiMiceli, et al. Global, 30-m resolu-
+tion continuous fields of tree cover: Landsat-based rescaling of modis vegetation continuous fields with
+lidar-based estimates of error. International Journal of Digital Earth , 6(5):427–448, 2013.
+[45] Shanshan Song, Yuanyuan Lin, and Yong Zhou. A general m-estimation theory in semi-supervised
+framework. Journal of the American Statistical Association , pages 1–11, 2023.
+[46] Jessica E Steele, P ˚ al Roe Sundsøy, Carla Pezzulo, Victor A Alegana, Tomas J Bird, Joshua Blumenstock,
+Johannes Bjelland, Kenth Engø-Monsen, Yves-Alexandre De Montjoye, Asif M Iqbal, et al. Mapping
+poverty using mobile phone and satellite data.Journal of The Royal Society Interface, 14(127):20160690,
+2017.
+[47] T Tony Cai and Zijian Guo. Semisupervised inference for explained variance in high dimensional linear
+regression and its applications. Journal of the Royal Statistical Society Series B: Statistical Methodology,
+82(2):391–419, 2020.
+[48] Kathryn Tunyasuvunakool, Jonas Adler, Zachary Wu, Tim Green, Michal Zielinski, Augustin ˇZ ´ ıdek,
+Alex Bridgland, Andrew Cowie, Clemens Meyer, Agata Laydon, et al. Highly accurate protein structure
+prediction for the human proteome. Nature, 596(7873):590–596, 2021.
+[49] Aad W. van der Vaart. Asymptotic Statistics . Cambridge Series in Statistical and Probabilistic Math-
+ematics. Cambridge University Press, 1998.
+[50] Jesper E Van Engelen and Holger H Hoos. A survey on semi-supervised learning. Machine learning ,
+109(2):373–440, 2020.
+[51] Siruo Wang, Tyler H McCormick, and Jeffrey T Leek. Methods for correcting inference based on
+outcomes predicted by machine learning. Proceedings of the National Academy of Sciences , 117(48):
+30266–30275, 2020.
+[52] Halbert White. A heteroskedasticity-consistent covariance matrix estimator and a direct test for het-
+eroskedasticity. Econometrica: journal of the Econometric Society , pages 817–838, 1980.
+[53] Halbert White. Consequences and detection of misspecified nonlinear regression models. Journal of the
+American Statistical Association, 76(374):419–433, 1981.
+[54] Kyle W Willett, Chris J Lintott, Steven P Bamford, Karen L Masters, Brooke D Simmons, Kevin R V
+Casteels, Edward M Edmondson, Lucy F Fortson, Sugata Kaviraj, William C Keel, et al. Galaxy zoo 2:
+detailed morphological classifications for 304 122 galaxies from the Sloan Digital Sky Survey. Monthly
+Notices of the Royal Astronomical Society , 435(4):2835–2860, 2013.
+[55] Donald G York, J Adelman, John E Anderson Jr, Scott F Anderson, James Annis, Neta A Bahcall,
+JA Bakken, Robert Barkhouser, Steven Bastian, Eileen Berman, et al. The Sloan Digital Sky Survey:
+Technical summary. The Astronomical Journal , 120(3):1579, 2000.
+[56] Anru Zhang, Lawrence D Brown, and T Tony Cai. Semi-supervised inference: General theory and
+estimation of means. Annals of Statistics , 47(5):2538–2566, 2019.
+[57] Yuqian Zhang and Jelena Bradic. High-dimensional semi-supervised learning: in search of optimal
+inference of the mean. Biometrika, 109(2):387–403, 2022.
+22
+
+PAGE 23
+[58] Zhiling Zheng, Oufan Zhang, Christian Borgs, Jennifer T. Chayes, and Omar M. Yaghi. Chatgpt
+chemistry assistant for text mining and the prediction of mof synthesis. Journal of the American
+Chemical Society, 145(32):18048–18062, 2023.
+[59] Xiaojin Zhu and Andrew B Goldberg. Introduction to semi-supervised learning. Springer Nature, 2022.
+[60] Xiaojin Jerry Zhu. Semi-supervised learning literature survey. 2005.
+23
+
+PAGE 24
+A Proofs
+A.1 Proof of Theorem 1 (CLT for mean estimation)
+The proof builds on two key technical lemmas, which leverage the notion of stability in Assumption 1 to
+show that we can “replace” the models f (j) in the definition of the cross-prediction estimator (4) with the
+“average” model ¯f . Since ¯f is a nonrandom model, we can proceed with a standard CLT analysis of the two
+terms comprising the estimator.
+We begin by stating and proving the technical lemmas, which are inspired by the analysis of cross-
+validation due to Bayle et al. [8]. To simplify notation, we use EX and VarX to denote the expectation and
+variance conditional on everything but X.
+Lemma A.1. Suppose that the predictions are stable (Ass. 1). Denote
+˜Fj = 1√N
+NX
+i=1
+
+f (j)( ˜Xi) − EX [f (j)(X)] − ( ¯f ( ˜Xi) − E[ ¯f (X)]) . (10)
+Then,
+1
+K
+KX
+j=1
+˜Fj p→ 0.
+Proof. Let ψ(x) = min(1, x). We will use the fact that 1K PKj=1 ˜Fj p→ 0 if and only if E[ψ(| 1K PKj=1 ˜Fj|)] → 0,
+as stated in Fact 1 below. See, for example, Bayle et al. [8] for a proof of the fact.
+F act 1. Let Xn be a sequence of random variables. Then, Xn
+p
+→ 0 if and only if E[min(1, |Xn|)] → 0.
+Note that ψ(x) is nondecreasing and satisfies ψ
+PK
+j=1 xj
+
+≤ PKj=1 ψ(xj) for non-negative xj; this yields
+E
+
+ψ
+
+
+ 1K KXj=1 ˜Fj ≤ E ψ  1K KXj=1 | ˜Fj| ≤ KXj=1 E ψ  1K | ˜Fj| .
+Notice that ψ(x) is also concave. Therefore, by Jensen’s inequality, we have
+KX
+j=1
+E
+
+ψ
+ 1
+K | ˜Fj|
+
+≤
+KX
+j=1
+E
+
+ψ
+ 1
+K E
+h
+| ˜Fj|
+f (j)i
+≤
+KX
+j=1
+E
+
+ψ
+ 1
+K
+q
+E[ ˜F 2j |f (j)]
+
+=
+KX
+j=1
+E
+
+ψ
+ 1
+K
+q
+Var( ˜Fj|f (j))
+
+=
+KX
+j=1
+E
+
+ψ
+ 1
+K
+q
+VarX
+ 
+f (j)(X) − ¯f (X)
+= E
+
+min
+
+K,
+q
+VarX
+ 
+f (1)(X) − ¯f (X) .
+Invoking the stability condition shows that the right-hand side converges to zero. Note that, technically,
+the stability condition is stronger than what is needed for the expression above to converge to zero. In
+particular, stability ensures that E
+hq
+K · VarX
+ 
+f (1)(X) − ¯f (X)i → 0, while for the expression above to
+24
+
+PAGE 25
+vanish it would suffice to ensure E
+hq
+VarX
+ 
+f (1)(X) − ¯f (X)i → 0. The stronger condition will be used in
+the next technical lemma, which handles the second term in the cross-prediction estimator.
+Putting everything together, we get that 1K PKj=1 ˜Fj p→ 0, as desired.
+Lemma A.2. Suppose that the predictions are stable (Ass. 1). Denote
+Fj = 1√n Xi∈Ij f (j)(Xi) − EX [f (j)(X)] − ( ¯f (Xi) − E[ ¯f (X)]) . (11)
+Then,
+KX
+j=1
+Fj
+p
+→ 0.
+Proof. The proof follows a similar principle as the proof of Lemma A.1. As before, we let ψ(x) = min(1, x)
+and use the fact PKj=1 Fj p→ 0 if and only if E[ψ(| PKj=1 Fj|)] → 0 (see Fact 1). We use the fact that
+ψ
+PK
+j=1 xj
+
+≤ PKj=1 ψ(xj) for non-negative xj; this yields
+E
+
+ψ
+
+
+ KXj=1 Fj ≤ E ψ  KXj=1 |Fj| ≤ KXj=1 E [ψ (|Fj|)] .
+Next, by Jensen’s inequality, we have
+KX
+j=1
+E [ψ (|Fj|)] ≤
+KX
+j=1
+E
+h
+ψ
+
+E[|Fj| |f (j)]i
+≤
+KX
+j=1
+E
+h
+ψ
+q
+E[F 2j |f (j)]i
+=
+KX
+j=1
+E
+
+ψ
+q
+Var(Fj|f (j))
+
+=
+KX
+j=1
+E
+"
+ψ
+ r
+|Ij|
+n VarX
+ 
+f (j)(X) − ¯f (X)
+!#
+= E
+
+min
+
+K,
+q
+K · VarX
+ 
+f (1)(X) − ¯f (X) .
+Invoking the stability condition shows that the right-hand side converges to zero. Hence, PKj=1 Fj p→ 0.
+With Lemma A.1 and Lemma A.2 in hand, we can now prove Theorem 1. As alluded to earlier, the idea
+is to use Lemma A.1 and Lemma A.2 to replace the models f (j) in the definition of the cross-prediction
+estimator (4).
+Writing θ∗ = 1K PKj=1(E[f (j)(X)] − E[f (j)(X) − Y ]), we have
+√nq
+n
+N ¯σ2 + ¯σ2∆
+
+ˆθ+ − θ∗
+
+=
+√nq
+n
+N ¯σ2 + ¯σ2∆
+
+ 1
+KN
+KX
+j=1
+NX
+i=1
+(f (j)( ˜Xi) − EX [f (j)(X)]) − 1n
+KX
+j=1
+X
+i∈Ij
+((f (j)(Xi) − Yi) − EX,Y [f (j)(X) − Y ])
+
+
+=
+√nq
+n
+N ¯σ2 + ¯σ2∆
+(T1 − T2), (12)
+25
+
+PAGE 26
+where we define
+T1 = 1KN
+KX
+j=1
+NX
+i=1
+(f (j)( ˜Xi) − EX [f (j)(X)]); T2 = 1n
+KX
+j=1
+X
+i∈Ij
+((f (j)(Xi) − Yi) − EX,Y [f (j)(X) − Y ]).
+Focusing on T1, we have
+√
+N T1 = 1K
+KX
+j=1
+˜Fj + 1√N
+NX
+i=1
+( ¯f ( ˜Xi) − E[ ¯f (X)]),
+for ˜Fj defined in Eq. (10). Invoking Lemma A.1, we thus get √N T1 = 1√N PNi=1( ¯f ( ˜Xi) − E[ ¯f (X)]) + oP (1).
+By an analogous argument, we have
+√nT2 = KX
+j=1
+Fj + 1√n
+KX
+j=1
+X
+i∈Ij
+ 
+( ¯f (Xi) − Yi) − EX,Y [ ¯f (X) − Y ]
+= 1√n
+nX
+i=1
+ 
+( ¯f (Xi) − Yi) − EX,Y [ ¯f (X) − Y ] + oP (1),
+for Fj defined in Eq. (11). Going back to Eq. (12) and denoting by r, ¯σ2lim, ¯σ2∆,lim the limits of nN , ¯σ2, ¯σ2∆,
+respectively, we get
+√nq
+n
+N ¯σ2 + ¯σ2∆
+
+ˆθ+ − θ∗
+
+=
+p n
+Nq
+n
+N ¯σ2 + ¯σ2∆
+√
+N T1 − 1q n
+N ¯σ2 + ¯σ2∆
+√nT2
+=
+p n
+Nq
+n
+N ¯σ2 + ¯σ2∆
+1√
+N
+NX
+i=1
+( ¯f ( ˜Xi) − E[ ¯f (X)]) − 1q n
+N ¯σ2 + ¯σ2∆
+1√n
+nX
+i=1
+ 
+( ¯f (Xi) − Yi) − EX,Y [ ¯f (X) − Y ] + oP (1).
+By the Lindeberg central limit theorem, the first term converges in distribution to N
+
+0, r¯σ2limr¯σ2lim+¯σ2∆,lim ,
+and the second term converges in distribution to N
+
+0,
+¯σ2∆,lim
+r¯σ2lim+¯σ2∆,lim
+
+. Moreover, since the two terms are
+independent, we finally have √nq
+n
+N ¯σ2 + ¯σ2∆
+
+ˆθ+ − θ∗
+ d
+→ N(0, 1).
+A.2 Proof of Theorem 2 (CLT for general M-estimation)
+The proof follows a similar template as the proof of Theorem 1. We begin with two technical lemmas that
+allow swapping the models f (j) in the gradient of the cross-prediction loss, ∇L+(θ), with the “average”
+model ¯f .
+Lemma A.3. Suppose that the predictions are stable (Ass. 2). Denote
+˜Lj = 1√N
+NX
+i=1
+
+∇˜ℓf (j)θ,i − E[∇ℓf (j)θ ] − (∇˜ℓ ¯fθ,i − E[∇ℓ ¯fθ ]) . (13)
+Then,
+1
+K
+KX
+j=1
+˜Lj p→ 0.
+26
+
+PAGE 27
+Lemma A.4. Suppose that the predictions are stable (Ass. 2). Denote
+Lj = 1√n Xi∈Ij ∇ℓf (j)θ,i − E[∇ℓf (j)θ ] − (∇ℓ ¯fθ,i − E[∇ℓ ¯fθ ]) . (14)
+Then,
+KX
+j=1
+Lj
+p
+→ 0.
+Lemma A.3 and Lemma A.4 are proved completely analogously to Lemma A.1 and Lemma A.2; we apply
+the same argument as before entry-wise.
+Now we put the lemmas together to prove the central limit theorems. We first analyze the asymptotic
+normality of ∇L+(θ). The asymptotic normality of ˆθ+ relies on a similar application of the lemmas.
+Asymptotic normality of ∇L+(θ). We can write
+√n  nN ¯Σθ + ¯Σ∆,θ−1/2 (∇L+(θ) − ∇L(θ))
+= √n  nN ¯Σθ + ¯Σ∆,θ−1/2
+
+ 1
+KN
+KX
+j=1
+NX
+i=1
+∇˜ℓf (j)θ,i − 1n KXj=1 Xi∈Ij(∇ℓf (j)θ,i − ∇ℓθ,i) − ∇L(θ)
+= √n  nN ¯Σθ + ¯Σ∆,θ−1/2
+
+ 1
+KN
+KX
+j=1
+NX
+i=1
+(∇˜ℓf (j)θ,i − E[∇ℓf (j)θ ]) − 1n KXj=1 Xi∈Ij((∇ℓf (j)θ,i − ∇ℓθ,i) − E[∇ℓf (j)θ − ∇ℓθ])
+= √n  nN ¯Σθ + ¯Σ∆,θ−1/2 (T1 − T2) , (15)
+where we define
+T1 = 1KN
+KX
+j=1
+NX
+i=1
+(∇˜ℓf (j)θ,i − E[∇ℓf (j)θ ]); T2 = 1n KXj=1 Xi∈Ij((∇ℓf (j)θ,i − ∇ℓθ,i) − E[∇ℓf (j)θ − ∇ℓθ]).
+We apply Lemma A.3 and Lemma A.4 to T1 and T2, respectively. In particular, we can write
+√
+N T1 = 1K
+KX
+j=1
+˜Lj + 1√N
+NX
+i=1
+(∇˜ℓ ¯fθ,i − E[∇ℓ ¯fθ ]),
+where ˜Lj is given in Eq. (13). Invoking Lemma A.3, we thus have√N T1 = 1√N PNi=1(∇˜ℓ ¯fθ,i −E[∇ℓ ¯fθ ])+ oP (1).
+By an analogous argument, for Lj defined in Eq. (14), we have
+√nT2 = KX
+j=1
+Lj + 1√n
+KX
+j=1
+X
+i∈Ij
+
+(∇ℓ
+¯f
+θ,i − ∇ℓθ,i) − E[∇ℓ
+¯f
+θ − ∇ℓθ]
+
+= 1√n
+nX
+i=1
+
+(∇ℓ
+¯f
+θ,i − ∇ℓθ,i) − E[∇ℓ
+¯f
+θ − ∇ℓθ]
+
++ oP (1).
+Going back to Eq. (15) and denoting by r, ¯Σθ,lim, ¯Σ∆,θ,lim the limits of nN , ¯Σθ, ¯Σ∆,θ, respectively, by the
+27
+
+PAGE 28
+Lindeberg central limit theorem we get
+√n  nN ¯Σθ + ¯Σ∆,θ−1/2  ∇L+(θ) − ∇L(θ) =  nN ¯Σθ + ¯Σ∆,θ−1/2  √n√N √N T1 − √nT2
+=
+ n
+N
+¯Σθ + ¯Σ∆,θ
+−1/2 r n
+N
+1√
+N
+NX
+i=1
+(∇˜ℓ ¯fθ,i − E[∇ℓ ¯fθ ])
+−
+ n
+N
+¯Σθ + ¯Σ∆,θ
+−1/2 1√n nXi=1 (∇ℓ ¯fθ,i − ∇ℓθ,i) − E[∇ℓ ¯fθ − ∇ℓθ]
+The first term above converges in distribution to
+N
+
+0, r· (r ¯Σθ,lim + ¯Σ∆,θ,lim)−1/2 ¯Σθ,lim(r ¯Σθ,lim + ¯Σ∆,θ,lim)−1/2
+
+,
+and the second term converges in distribution to
+N
+
+0, (r ¯Σθ,lim + ¯Σ∆,θ,lim)−1/2 ¯Σ∆,θ,lim(r ¯Σθ,lim + ¯Σ∆,θ,lim)−1/2
+
+.
+Since the two terms are independent, we can add up their limiting covariance matrices and get
+√n  nN ¯Σθ + ¯Σ∆,θ−1/2  ∇L+(θ) − ∇L(θ) d→ N(0, I),
+as desired.
+Asymptotic normality of ˆθ+. We follow an argument similar to the classical proof of asymptotic nor-
+mality of M-estimators (see Theorem 5.23 in [49]). Given a function g, we use the shorthand notation
+Eng := 1n
+nX
+i=1
+g(Xi, Yi), Gng = √n (Eng − E[g(X, Y)]) ;
+eEf +N g := 1N K NXi=1 KXj=1 g( eXi, f(j)( eXi)), eGf +N g := √N eEf +N g − 1K KXj=1 EX [g(X, f(j)(X))] ;
+eE ¯fN g := 1N
+NX
+i=1
+g( eXi, ¯f ( eXi)), eG ¯fN g := √N eE ¯fN g − E[g(X, ¯f (X))] ;
+Ef +n g := 1n KXj=1 Xi∈Ij g(Xi, f(j)(Xi)), Gf +n g := √n Ef +n g − 1K KXj=1 EX [g(X, f(j)(X))] ;
+E
+¯f
+ng := 1n
+nX
+i=1
+g(Xi, ¯f (Xi)), G ¯fng := √n(E ¯fng − E[g(X, ¯f (X))]).
+The differentiability and local Lipschitzness of the loss at θ∗ imply that for every (possibly random)
+sequence hn = OP (1), we have
+Gf +n h√n ℓθ∗+ hn√n − ℓθ∗ i = Gf +n h⊤n ∇ℓθ∗  + oP (1).
+By essentially the same argument as in the proof of the asymptotic normality of ∇L+(θ), we can substitute
+the average over models f (j) for ¯f via Lemma A.4, thus getting
+Gf +n h⊤n ∇ℓθ∗  = G ¯fn h⊤n ∇ℓθ∗  + oP (1).
+28
+
+PAGE 29
+Analogously, we have Gn[√n(ℓθ∗+hn/√n − ℓθ∗ )] = Gn[h⊤n ∇ℓθ∗ ] + oP (1), and, by using Lemma A.3,
+˜Gf +N [√n(ℓθ∗+hn/√n − ℓθ∗ )] = ˜G ¯fN [h⊤n ∇ℓθ∗ ] + oP (1).
+Next, denoting H f +θ∗ = 1K PKj=1 ∇2EX [ℓθ∗ (X, f(j)(X))], we apply a second-order Taylor expansion to get
+nEn
+
+ℓθ∗+ hn√n − ℓθ∗
+
+= 12 h⊤n Hθ∗ hn + h⊤n Gn∇ℓθ∗ + oP (1);
+neEf +N ℓθ∗+ hn√n − ℓθ∗  = 12 h⊤n H f +θ∗ hn + r nN h⊤n eG ¯fN ∇ℓθ∗ + oP (1);
+−nEf +n ℓθ∗+ hn√n − ℓθ∗  = − 12 h⊤n H f +θ∗ hn − h⊤n G ¯fn∇ℓθ∗ + oP (1).
+Notice that we have L+(θ) = ˜Ef +N ℓθ + Enℓθ − Ef +n ℓθ. Thus, if we add up the three equations above, we get
+the following:
+n
+
+L+
+
+θ∗ + hn√n  − L+(θ∗) = 12 h⊤n Hθ∗ hn + h⊤n Gn∇ℓθ∗ + r nN ˜G ¯fN ∇ℓθ∗ − G ¯fn∇ℓθ∗  + oP (1).
+We now evaluate this expression for two values of hn, in particular h∗n = √n(ˆθ+ − θ∗) and h′n =
+−H −1θ∗
+
+Gn∇ℓθ∗ + p nN ˜G ¯fN ∇ℓθ∗ − G ¯fn∇ℓθ∗ . This gives
+n
+
+L+(ˆθ+) − L+(θ∗) = 12 (h∗n)⊤Hθ∗ h∗n + (h∗n)⊤ Gn∇ℓθ∗ + r nN ˜G ¯fN ∇ℓθ∗ − G ¯fn∇ℓθ∗  + oP (1);
+n
+ 
+L+(θ∗ − h′n/√n) − L+(θ∗) = − 12 (h′n)⊤Hθ∗ h′n + oP (1);
+By the definition of ˆθ+, the left-hand side of the first equation is smaller than the left-hand side of the second
+equation, hence the same relation is true for the right-hand sides. Taking the difference of the right-hand
+sides and completing the square gives
+1
+2 (h∗n − h′n)⊤Hθ∗ (h∗n − h′n) + oP (1) ≤ 0.
+Since the Hessian is positive definite, we must have h∗n = h′n + oP (1), that is:
+√n(ˆθ+ − θ∗) = −H −1θ∗
+
+Gn∇ℓθ∗ +
+r n
+N
+˜G ¯fN ∇ℓθ∗ − G ¯fn∇ℓθ∗
+
++ oP (1).
+The final statement follows by a standard application of the central limit theorem to the second term. In
+particular, letting r = lim nN , we have:
+Gn∇ℓθ∗ +
+r n
+N
+˜G ¯fN ∇ℓθ∗ − G ¯fn∇ℓθ∗
+= 1√n
+nX
+i=1
+
+∇ℓθ∗,i − ∇ℓ
+¯f
+θ∗,i − E[∇ℓθ∗,i − ∇ℓ
+¯f
+θ∗,i]
+
++
+r n
+N
+1√
+N
+NX
+i=1
+
+∇ℓ
+¯f
+θ∗,i − E[∇ℓ
+¯f
+θ∗ ]
+
+d
+→ N
+
+0, Var(∇ℓθ∗ − ∇ℓ
+¯f
+θ∗ ) + rVar(∇ℓ
+¯f
+θ∗ )
+
+.
+Therefore, −H −1θ∗
+
+Gn∇ℓθ∗ + p nN ˜G ¯fN ∇ℓθ∗ − G ¯fn∇ℓθ∗  converges to N (0, ¯Σ), where
+¯Σ = H −1θ∗   ¯Σ∆,θ∗ + r ¯Σθ∗  H −1θ∗ .
+29

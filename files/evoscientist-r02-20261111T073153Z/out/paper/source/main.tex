@@ -1,0 +1,202 @@
+\documentclass{article}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+\usepackage{icml2026}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\simplex}{\Delta^{K-1}}
+\newcommand{\R}{\mathbb{R}}
+\renewcommand{\Pr}{\mathbb{P}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\clr}{\mathrm{clr}}
+\DeclareMathOperator{\expit}{expit}
+\DeclareMathOperator{\logit}{logit}
+\graphicspath{{figures/}}
+
+\icmltitlerunning{Evaluating Conformal Prediction Regions for Compositional Outputs}
+
+\begin{document}
+
+\twocolumn[
+  \icmltitle{Beyond Marginal Coverage: Evaluating Conformal Prediction\\
+  Regions for Compositional (Sum-to-One) Outputs}
+
+  \icmlsetsymbol{equal}{*}
+  \begin{icmlauthorlist}
+    \icmlauthor{Anonymous Authors}{anon}
+  \end{icmlauthorlist}
+  \icmlaffiliation{anon}{Anonymous Institution}
+  \icmlcorrespondingauthor{Anonymous Authors}{anonymous@example.org}
+  \icmlkeywords{conformal prediction, compositional data, uncertainty quantification}
+  \vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+\begin{abstract}
+Predictors whose output is a composition (a non-negative vector summing to one: softmax probabilities, topic or vote shares) are increasingly paired with conformal prediction regions in the simplex, but there is no shared recipe for judging whether such regions are \emph{reliable}. We study this evaluation question with a controlled comparison of split conformal regions built from eight nonconformity scores (Euclidean, total variation, sup-norm, Hellinger, KL, Aitchison log-ratio, a Mahalanobis log-ratio score, a normalised Euclidean score), two Mondrian variants and cross-conformal calibration, on 36 synthetic settings (logistic-normal, Dirichlet and multinomial targets, $K\in\{3,5,10\}$, 200 replicates each) and on human label distributions for CIFAR-10 test images (CIFAR-10H). We find that (i) marginal coverage is uninformative: all scores are valid (mean coverage 0.895--0.911), and a single-run coverage check cannot resolve $\pm0.02$ unless the calibration set has about $2000$ points, as the (known) Beta--Binomial law of one-run coverage, which we verify, predicts; (ii) region size depends strongly on the score's geometry and the noise family, with the Aitchison score giving regions $0.16$--$0.87\times$ the Euclidean size for strictly positive logistic-normal targets but $1.8$--$3.9\times$ for Dirichlet and multinomial targets with (near-)zeros; (iii) conditional coverage fails in score-specific ways: in closed form for $K{=}2$ the Euclidean score covers $0.83$ to $0.997$ of the targets at nominal $0.90$, and on CIFAR-10H the Euclidean regions cover $0.99$ and $0.72$ of the lowest- and highest-entropy predictions, repaired by Mondrian calibration at $+23\%$ size; (iv) log-ratio scores depend on the zero-replacement constant $\varepsilon$: we prove that the threshold grows as $\sqrt{g/K}\,\log(1/\varepsilon)$ once about an $\alpha$ fraction of calibration compositions contain a zero, and confirm the slope to within $2\%$. We state the conditions under which these conclusions hold and where they should not be extrapolated.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+Many predictors output a composition $f(x)\in\simplex=\{p\in\R^K_{\ge0}:\sum_k p_k=1\}$: the softmax of a classifier, a topic mixture, a market share. Users need to know whether a stated uncertainty is trustworthy. Conformal prediction \citep{vovk2005,lei2018,angelopoulos2021gentle} turns any score of disagreement $s(y,f(x))$ into a region $C(x)\subset\simplex$ with finite-sample marginal coverage under exchangeability, so the \emph{validity} question has a formal answer, whatever the score. What remains open for compositional outputs is practical: which geometry to use for the score (Euclidean, Hellinger, KL, log-ratio~\citep{aitchison1982}), how to handle exact zeros, which calibration scheme to use, and---the focus here---\emph{how to evaluate} such regions in a way that is informative rather than circular.
+
+We ask four questions, formulated before running the main experiments: \textbf{RQ1} What can empirical marginal coverage tell us, and how much calibration/test data does a coverage check need? \textbf{RQ2} How do region sizes of different geometries compare, and does the answer depend on the noise family and on how ``size'' is measured? \textbf{RQ3} Where does conditional coverage fail, which scores or calibrations repair it, and at what cost? \textbf{RQ4} How do log-ratio scores behave when targets contain exact zeros? Our a-priori expectations were: marginal coverage does not discriminate (H1); the best geometry follows the noise geometry (H2); the ranking of scores changes with the size measure (H3); log-ratio scores are fragile with zeros (H4). H1, H2, H4 are supported; H3 is only partly supported (Sec.~\ref{sec:res-size}).
+
+\textbf{Contributions.} (1) An evaluation protocol for simplex-valued conformal regions combining the exact coverage law of a single run, group-conditional coverage gaps, size under two reference measures, and sensitivity to the zero-replacement constant. (2) Three propositions with derivations and numerical checks: the Beta--Binomial law of one-run coverage (a consequence of known results~\citep{vovk2012conditional}, used here as an evaluation tool); a pivotality condition for conditional coverage with a closed form for $K{=}2$; and an exact asymptotic law for the log-ratio threshold under zero replacement. (3) A reproducible empirical study (36 synthetic cells $\times$ 200 replicates, plus CIFAR-10H) with uncertainty quantification. (4) Explicit conditions of validity and non-extrapolation (Sec.~\ref{sec:disc}).
+
+\section{Related Work}
+\label{sec:related}
+\textbf{Conformal prediction.} Split/inductive conformal prediction \citep{papadopoulos2002,vovk2005,lei2018} gives marginal coverage for any score; its coverage given the calibration set is Beta distributed \citep{vovk2012conditional}, which we use as an evaluation tool. Jackknife+ and cross-conformal calibration \citep{barber2021jackknife,vovk2015cross} reuse data at the price of a weaker ($1-2\alpha$) guarantee; we test it at equal labelled budget. Exact conditional coverage is impossible in a distribution-free sense \citep{vovk2012conditional,barber2021limits}; relaxations include Mondrian/class-conditional calibration \citep{vovk2005,ding2023clustered}, multivalid methods \citep{jung2022batch} and conditional guarantees over function classes \citep{gibbs2023conditional}. Coverage under covariate shift \citep{tibshirani2019} is outside our scope.
+
+\textbf{Probability-vector outputs.} For classifiers, conformal methods build label sets from softmax scores \citep{romano2020aps,angelopoulos2020raps}; \citet{javanmardi2024credal} predict credal sets (sets of distributions), and \citet{cresswell2024disparate} study the downstream effect of prediction sets on decisions. Multi-target conformal regions in $\R^d$ use box, ellipsoid or copula-based scores \citep{messoudi2021copula}. We instead study regions \emph{in the simplex} for a compositional target, and compare geometries that respect (Aitchison) or ignore (Euclidean) the simplex constraint.
+
+\textbf{Compositional data analysis.} Aitchison geometry, the centred and isometric log-ratio transforms and the logistic-normal family \citep{aitchison1982,aitchison1980,egozcue2003} are the standard tools; their known difficulty with exact zeros motivates our fourth question. We do not claim a new method: our contribution is the evaluation analysis, its theory, and the empirical map of when each choice works.
+
+\section{Setting, Methods and Evaluation Protocol}
+\label{sec:method}
+\textbf{Setting.} Data $(X,Y)$ with $Y\in\simplex$; a predictor $f:\mathcal X\to\mathrm{int}\,\simplex$ trained on separate data; $n$ calibration pairs exchangeable with the test pair. A score $s(y,p)\ge0$ defines the region $C(x)=\{y\in\simplex: s(y,f(x))\le\hat q\}$ with $\hat q$ the $\lceil(n+1)(1-\alpha)\rceil$-th smallest calibration score ($\infty$ if it exceeds $n$); $\alpha=0.1$ throughout.
+
+\textbf{Scores} (all computed with a closed-form membership test, so regions need not be parametrised): Euclidean $\ell_2=\|y-p\|_2$; total variation $\tfrac12\|y-p\|_1$; $\ell_\infty$; Hellinger $\|\sqrt y-\sqrt p\|_2$; $\mathrm{KL}(y\|p)$; Aitchison $\|\clr(y_\varepsilon)-\clr(p)\|_2$ with $y_\varepsilon=(y+\varepsilon\mathbf 1)/(1+K\varepsilon)$ (additive zero replacement, $\varepsilon=10^{-3}$ synthetic, $10^{-2}\approx$ half a vote for CIFAR-10H); a Mahalanobis score on $\mathrm{ilr}(y_\varepsilon)-\mathrm{ilr}(p)$ with a residual covariance estimated on an auxiliary fold; and $\ell_2/\hat\sigma(p)$ where $\hat\sigma$ is a linear function of the Gini impurity $1-\|p\|^2$ fitted on the auxiliary fold. Validity never depends on the auxiliary fold.
+
+\textbf{Calibration schemes.} (a) Split conformal. (b) Mondrian: separate $\hat q$ in three terciles of the entropy of $f(x)$ (cut points from the auxiliary fold). (c) Five-fold cross-conformal \citep{vovk2015cross} generalised to arbitrary scores: $y\in C(x)$ iff $\#\{i: s(y,f_{-k(i)}(x))>R_i\}<(1-\alpha)(N+1)$, with $R_i$ the out-of-fold scores.
+
+\textbf{Evaluation protocol.} For each replicate we report: \emph{marginal coverage} on a test set; \emph{group-conditional coverage}, pooled over replicates, in entropy terciles of $f(x)$ and in argmax-class groups, summarised by the \emph{gap} = worst group $|\text{coverage}-(1-\alpha)|$ (ent.-gap, arg-gap; their noise floor is about $0.003$--$0.008$); and \emph{size} = $\E_{x}\,\mu(C(x))$ for two reference measures $\mu$: the empirical marginal law of $Y$ (\emph{pool size}, from an independent pool of 1000 targets) and the uniform (Dirichlet(1)) measure on the simplex (\emph{uniform size}, 4000 draws, $K\le5$). Uncertainty: $R$ independent replicates (new world, data, splits), mean $\pm$ 95\% normal CI over replicates, paired differences within replicate with Holm correction over all 252 size comparisons; group gaps have bootstrap CIs over replicates.
+
+\section{Theory}
+\label{sec:theory}
+Proofs are in Appendix~\ref{app:proofs}; all three statements are checked numerically in Sec.~\ref{sec:results}.
+
+\begin{proposition}[One-run coverage law]\label{prop:beta}
+Let $f$ be fixed and the scores $S_1,\dots,S_{n+1}$ i.i.d.\ with continuous cdf $F$. With $k=\lceil(n+1)(1-\alpha)\rceil$, $l=n+1-k=\lfloor(n+1)\alpha\rfloor$, the coverage given the calibration set is $C_{\rm cal}=F(\hat q)\sim\mathrm{Beta}(k,l)$, with mean $k/(n+1)\ge1-\alpha$ and variance $kl/((n+1)^2(n+2))\approx\alpha(1-\alpha)/(n+2)$. The number of covered points among $m$ test points is $\mathrm{BetaBin}(m;k,l)$, so the empirical coverage has variance $\approx\alpha(1-\alpha)\,(\tfrac1{n+2}+\tfrac1m)$.
+\end{proposition}
+\emph{Consequence.} A one-run check ``$|\widehat{\rm cov}-0.9|\le\delta$'' of a valid method fails with a probability computable from this law, \emph{whatever the score}. For $\delta=0.02$, $n=500$ and $m=10^4$ the false-alarm probability is $14\%$; it falls to $0.6\%$ only at $n=2000$, and is $50\%$ or more at $n=100$ for every $m$ (Fig.~\ref{fig:theory}b).
+
+\begin{proposition}[Pivotal scores and conditional coverage]\label{prop:pivot}
+(a) If $S=s(Y,f(X))$ is independent of $X$, then for every calibration set and every $x$, $\Pr(Y\in C(X)\mid X=x,D_{\rm cal})=F(\hat q)$: conditional coverage is constant in $x$. (b) For the logistic-normal model $Y=\mathrm{softmax}(\eta(X)+\sigma\xi)$, $\xi\sim N(0,I_K)$, and $f=\mathrm{softmax}(\eta)$, the Aitchison score ($\varepsilon=0$) equals $\sigma\|\xi-\bar\xi\mathbf 1\|\sim\sigma\chi_{K-1}$, hence is pivotal. (c) For $K=2$, put $u=\logit f_1$, $\tau=\sigma\sqrt2$, and let the $\ell_2$ region be $|y_1-f_1|\le r$. Then
+\[
+c(f_1)=\Phi\!\Big(\tfrac{\logit(f_1+r)-u}{\tau}\Big)-\Phi\!\Big(\tfrac{\logit(f_1-r)-u}{\tau}\Big),
+\]
+with $\logit(t)=\pm\infty$ for $t\ge1$, $t\le0$. $c$ is continuous with $c(f_1)\to1$ as $f_1\to0$ or $1$; since its average over $f_1(X)$ equals $1-\alpha$ for the population threshold, $c<1-\alpha$ on a set of positive probability: \emph{no Euclidean region can be conditionally valid under this noise}.
+\end{proposition}
+
+\begin{proposition}[Zero replacement and the log-ratio threshold]\label{prop:zero}
+Let $y\in\simplex$ have exactly $z$ zero entries, $0<z<K$, $f\in\mathrm{int}\,\simplex$ fixed, $L=\log(1/\varepsilon)$. Then $d_A(y_\varepsilon,f)=L\sqrt{z(K-z)/K}+O(1)$ as $\varepsilon\to0$, while $d_A(y_\varepsilon,f)=O(1)$ if $z=0$. Hence for a fixed calibration set with $g_i=z_i(K-z_i)$,
+\[
+\lim_{\varepsilon\to0}\hat q/\log(1/\varepsilon)=\sqrt{g_{(k)}/K},
+\]
+where $g_{(k)}$ is the $k$-th smallest $g_i$. If $g_{(k)}>0$ (equivalently, at least $l\approx\alpha(n+1)$ calibration compositions contain a zero), then $\hat q\to\infty$ linearly in $\log(1/\varepsilon)$ and the uniform size of $C(x)$ tends to $1$; if $g_{(k)}=0$, $\hat q$ stays bounded.
+\end{proposition}
+The practical reading: the Aitchison score is safe as $\varepsilon$ varies only when fewer than about an $\alpha$ fraction of targets contain zeros; otherwise $\varepsilon$ is a hidden tuning parameter of the \emph{evaluation} (it controls region size) rather than a numerical detail.
+
+\section{Experimental Setup}
+\label{sec:setup}
+\textbf{Synthetic data.} Features $x\sim N(0,I_5)$; $\eta(x)=W^\top x$ with $W_{jk}\sim N(0,0.6^2)$ redrawn per replicate; $m(x)=\mathrm{softmax}(\eta)$. Targets: \emph{LN-homo} $Y=\mathrm{softmax}(\eta+0.5\,\xi)$; \emph{LN-hetero} noise scale $0.35\,e^{0.5x_1}$; \emph{Dirichlet} $Y\sim\mathrm{Dir}(20\,m(x))$; \emph{Multinomial} $Y=\mathrm{Mult}(20,m(x))/20$ (exact zeros in 64\% of the $K{=}5$ targets). $K\in\{3,5,10\}$, $n_{\rm cal}\in\{50,200,1000\}$, 200 replicates per cell (7200 runs). The predictor is a multinomial-logit regression with soft labels (cross-entropy, ridge $10^{-3}$) fit on 1000 points; 500 auxiliary, 1000 test and 1000 pool points are independent. Extra runs vary the predictor sample size ($n_{\rm train}\in\{30,\dots,3000\}$), the zero constant $\varepsilon$, and the calibration scheme (equal labelled budget $N\in\{60,150,400\}$; 100 replicates).
+
+\textbf{Real data.} CIFAR-10H \citep{peterson2019cifar10h}: for the 10000 CIFAR-10 \citep{krizhevsky2009} test images, the proportions of $\approx$50 human annotators choosing each class ($K=10$; 44\% unanimous; 99.97\% of vectors contain at least one zero, 8.1 zero entries on average). The predictor is a publicly available ResNet-20 trained on the CIFAR-10 training set only \citep{chenyaofo2021cifar} (92.1\% test accuracy), used either as the raw softmax or after temperature scaling \citep{guo2017calibration} fit on the auxiliary fold. Each replicate draws random disjoint auxiliary (1000), calibration ($n\in\{100,500,2000\}$) and test (2000) subsets of the 10000 images; 100 replicates. Intervals therefore reflect split-to-split variability within a fixed finite pool, not sampling of new images.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_theory.pdf}
+\caption{Evaluation theory vs.\ simulation. (a) Coverage given the calibration set ($\ell_2$ score, logistic-normal, oracle $f$; $2\times10^4$ calibration draws per $n$) against the Beta law. (b) Probability that a valid method's one-run coverage lies more than $0.02$ from $0.9$; lines: Beta--Binomial law, dots: simulation. (c) $K{=}2$ conditional coverage vs.\ $f_1(x)$ ($\tau=1$, $n_{\rm cal}=2000$, 40 calibrations); dashed: closed form of Prop.~\ref{prop:pivot}c.}
+\label{fig:theory}
+\end{figure*}
+
+\section{Results}
+\label{sec:results}
+\subsection{Marginal coverage is valid and uninformative (RQ1)}
+Across all 36 cells, every non-Mondrian score has mean coverage between $0.895$ and $0.911$ (Table~\ref{tab:validity}, App.~\ref{app:tables}); the deviation from the exact expectation $k/(n+1)$ has $|z|\le2.96$ for seven scores, and $3.41$ for one of $288$ score-cell pairs for Aitchison (Bonferroni threshold $\approx3.8$), so no evidence against validity. The Beta law of Prop.~\ref{prop:beta} matches simulation closely (Fig.~\ref{fig:theory}a, Table~\ref{tab:beta}): means within $1.5\times10^{-3}$, standard deviations within $1.3\%$, KS statistics $\le0.013$ for $2\times10^4$ draws, for the $\ell_2$, Aitchison and (multinomial) TV scores alike. Mondrian regions are valid but conservative in small groups (mean coverage $0.928$, $0.907$, $0.901$ at $n_{\rm cal}=50,200,1000$, as the rounding in $k$ predicts). \emph{Coverage therefore cannot discriminate between scores, and a single coverage number is a noisy check}: the standard deviation of one-run coverage is $0.041$ at $n=50$ and $0.013$ at $n=500$ (Fig.~\ref{fig:theory}b).
+
+\begin{table*}[t]
+\caption{Synthetic results, $K=5$, $n_{\rm cal}=200$, 200 replicates. \emph{size}: mean pool size (fraction of reference targets inside the region; bold = smallest; 95\% CI half-widths 0.004--0.013), \emph{gap}: worst entropy-tercile coverage deviation $|{\rm cov}-0.9|$ (95\% bootstrap half-width $\le 0.006$). Coverage of every row is within $0.898$--$0.908$ (App.~\ref{app:tables}). $K{=}3,10$ and other $n_{\rm cal}$ in App.~\ref{app:tables}.}
+\label{tab:main}
+\centering\small
+\input{tables/tab_main.tex}
+\end{table*}
+
+\subsection{Region size depends on geometry, noise family and measure (RQ2)}
+\label{sec:res-size}
+Table~\ref{tab:main} and Fig.~\ref{fig:relsize} show that no score dominates. For strictly positive logistic-normal targets the log-ratio scores give the smallest regions, and the advantage grows with $K$: Aitchison regions have $0.79$, $0.45$, $0.16\times$ the $\ell_2$ pool size at $K=3,5,10$ (LN-homo, $n_{\rm cal}=200$) and $0.87,0.61,0.35\times$ for heteroscedastic noise. For Dirichlet and multinomial targets the picture reverses: Aitchison is $1.8$--$2.5\times$ larger than $\ell_2$ (Dirichlet) and $2.8$--$3.9\times$ (multinomial), all Holm-significant. Hellinger is smaller than $\ell_2$ in 27 cells (all LN, LN-hetero, Dirichlet cells) but larger in the 9 multinomial cells; KL is the best or tied-best non-log-ratio score in the Dirichlet and multinomial settings (KL vs.\ Hellinger: 24 of 36 cells smaller, 4 larger, 8 n.s.). The crude normalised score $\ell_2/\hat\sigma$ never helps: it is larger than $\ell_2$ in 24 cells ($+4$--$6\%$) and indistinguishable in 12. With a weaker or stronger predictor ($n_{\rm train}\in[30,3000]$, $K{=}5$) the winners are unchanged: Aitchison for both LN families, KL or Hellinger (near-tied) for Dirichlet and KL for multinomial targets (App.~\ref{app:tables}).
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{fig_relsize.pdf}
+\caption{Pool size relative to $\ell_2$ ($n_{\rm cal}=200$; entries are ratios; blue: smaller than $\ell_2$, red: larger).}
+\label{fig:relsize}
+\end{figure*}
+
+\textbf{Does the size measure matter?} We expected the ranking to depend on the reference measure (H3). Over the 24 cells with $K\le5$, pool and uniform sizes give Kendall $\tau$ between methods with median $0.93$ (min $0.64$), so the overall ranking is largely stable; but the \emph{best} method differs in $11/24$ cells, always among near-ties (e.g.\ Aitchison vs.\ KL in LN-homo, $K{=}3$: pool sizes $0.79$ and $0.82$ of $\ell_2$; Table~\ref{tab:measure}, App.). Hence ``which of two close scores is smaller'' should not be reported under a single measure; the large effects above (factors 1.5--4) are measure-robust.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_cond_entropy.pdf}
+\caption{Conditional coverage by entropy tercile of $f(x)$ ($K=5$, $n_{\rm cal}=200$, pooled over 200 replicates; dotted: $0.9$). All curves have marginal coverage $\approx0.9$.}
+\label{fig:cond}
+\end{figure*}
+
+\subsection{Conditional coverage fails in score-specific ways (RQ3)}
+All scores share marginal coverage $\approx0.9$ but differ in coverage across predicted-entropy terciles (Fig.~\ref{fig:cond}, gap columns of Table~\ref{tab:main}). In the logistic-normal model the Aitchison score is near-pivotal (Prop.~\ref{prop:pivot}b is exact for the oracle centre $f=\mathrm{softmax}(\eta)$; here $f$ is the fitted regression): gap $0.003$ (CI $0.002$--$0.007$) versus $0.026$ for $\ell_2$ and $0.042$ for Hellinger. This advantage is specific to the noise family: for Dirichlet targets the Aitchison gap is the \emph{worst} ($0.086$ vs.\ $0.037$), and with heteroscedastic noise it is $0.030$. The $K{=}2$ closed form of Prop.~\ref{prop:pivot}c is confirmed (Fig.~\ref{fig:theory}c): the Euclidean score covers $0.827$ at $f_1=0.5$ and $0.997$ near the boundary, the closed form deviating from simulation by at most $0.002$, while Aitchison is flat ($0.897$--$0.900$ for $0.1<f_1<0.9$; it rises to $0.917$ at $f_1=0.02$ because the replacement $\varepsilon=10^{-3}$ breaks pivotality). The worst coverage of the closed form is $0.80$, $0.83$, $0.88$ for $\tau=0.5,1,1.5$ (App.).
+
+Mondrian calibration on entropy terciles removes the entropy gap for both scores (gap $0.006$--$0.013$, about the rounding floor), but it is not free: for $\ell_2$ it enlarges regions by $47\%$, $6\%$, $0.5\%$ at $n_{\rm cal}=50,200,1000$ (averages over cells), and since the grouping is on the same variable on which we measure the gap this favours Mondrian; it does not repair other groupings: at $K=10$ the argmax-class gap of $\ell_2$ and $\ell_2$-Mondrian are both $0.087$ (LN-homo) whereas Aitchison reaches $0.014$ in that setting.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_zero.pdf}
+\caption{Zero-replacement sensitivity of the Aitchison score. (a) Mean threshold $\hat q$ vs.\ $\log_{10}(1/\varepsilon)$ for multinomial targets (200 replicates); lines: slope $\sqrt{g_{(k)}/K}$ of Prop.~\ref{prop:zero}, anchored at the smallest $\varepsilon$. (b) Uniform-measure size, $K{=}5$, $n_{\rm cal}=200$ (dotted: $\ell_2$). (c) CIFAR-10H pool size ($n_{\rm cal}=500$; dotted: $\ell_2$).}
+\label{fig:zero}
+\end{figure*}
+
+\subsection{Zeros make the log-ratio score hostage to $\varepsilon$ (RQ4)}
+The slope of $\hat q$ against $\log(1/\varepsilon)$ measured between $\varepsilon=10^{-8}$ and $10^{-10}$ agrees with Prop.~\ref{prop:zero} to within $1.6\%$ (range $0.05$--$1.6\%$) in all six $(K,N)$ settings (mean over 200 replicates; e.g.\ $K=5,N=20$: $1.088\pm0.004$ vs.\ $1.090$; $K=10,N=20$: $1.555\pm0.001$ vs.\ $1.580$; Table~\ref{tab:zero}, App.). Both regimes of the proposition occur: for $K{=}3,N{=}100$, only 8\% of targets contain a zero ($<\alpha$) and 65\% of replicates have $g_{(k)}=0$ with a bounded threshold. In the size experiments the multinomial uniform size reaches $1.000$ for $\varepsilon\le10^{-6}$ and Dirichlet $0.94$ at $10^{-8}$, while for logistic-normal targets (no zeros) the size is flat for $\varepsilon\le10^{-4}$. The size is non-monotone in $\varepsilon$ (large $\varepsilon$ distorts the data), and the best $\varepsilon$ on our grid depends on the noise family ($10^{-3}$ for LN, $10^{-2}$ for Dirichlet/multinomial). Even at its best grid value the Aitchison pool size is $0.138$ (Dirichlet) and $0.244$ (multinomial) vs.\ $0.084$ (KL) and $0.101$ (KL) (K=5, $n_{\rm cal}=200$); the $\varepsilon$ choice is moreover made with knowledge of region size, i.e.\ optimistic.
+
+\subsection{Calibration scheme and predictor quality}
+At equal labelled budget, five-fold cross-conformal regions are smaller than split regions by $15\%$, $9\%$, $1\%$ for $N=60,150,400$ (mean over 4 noise families $\times$ $\ell_2$/Hellinger/Aitchison; 12 cells each; Table~\ref{tab:cv}, App.), with coverage $0.899$--$0.918$ (the theoretical guarantee is $1-2\alpha$; we do not observe violations, but we test only $K=5$ and three scores). The gain is concentrated at $N\lesssim150$.
+
+\subsection{Real data: CIFAR-10H}
+\begin{table*}[t]
+\caption{CIFAR-10H, $n_{\rm cal}=500$, 100 replicates. cov.: marginal coverage; size: pool size (bold: smallest); ent.-gap and arg-gap: worst entropy-tercile / argmax-class deviation from $0.9$. 95\% CI half-widths: coverage $\le0.003$, size $\le 0.006$, ent.-gap and arg-gap $\le0.008$.}
+\label{tab:cifar}
+\centering\small
+\input{tables/tab_cifar_500.tex}
+\end{table*}
+Marginal coverage is $0.893$--$0.920$ for all methods (Table~\ref{tab:cifar}), but conditional coverage is badly non-uniform: for $\ell_2$ regions the coverage is $0.994$, $0.979$, $0.718$ in the low, mid and high-entropy terciles of the raw softmax (ent.-gap $0.182$, CI $0.175$--$0.187$); Hellinger, TV and $\ell_\infty$ behave alike. Mondrian calibration brings the gap to $0.005$ at a size cost of $+23\%$ (0.116 vs.\ 0.094); the argmax-class gap is not repaired ($0.140$). The log-ratio score is $5.2\times$ larger than $\ell_2$ for the raw softmax ($0.489$ vs.\ $0.094$) and $1.2\times$ after temperature scaling ($0.113$ vs.\ $0.094$). With $\varepsilon$ varied (Fig.~\ref{fig:zero}c, Table~\ref{tab:cifar-eps}), the size falls from $0.743$ ($\varepsilon=0.1$) to $0.126$ ($10^{-6}$) then rises again ($0.158$ at $10^{-8}$), as Prop.~\ref{prop:zero} predicts once $\varepsilon$ is below the smallest predicted probabilities. For the raw softmax no $\varepsilon$ reaches the Euclidean size (best $0.126$ vs.\ $0.094$); after temperature scaling the best value ($\varepsilon=10^{-3}$) gives $0.097$, comparable to $\ell_2$, but the size rises to $0.213$ and $0.529$ at $\varepsilon=10^{-6},10^{-8}$. The pool size saturates here (all Euclidean-type scores give $0.094$--$0.095$): with 92\% accuracy the best any region can do under this measure is roughly the share of one class ($\approx 0.1$), so size is uninformative among them, and conditional coverage is the discriminating metric. The normalised score $\ell_2/\hat\sigma$ halves the gap for the raw softmax ($0.092$) and nearly removes it after temperature scaling ($0.019$), at $+43\%$ size.
+
+\section{Discussion, Conditions and Limitations}
+\label{sec:disc}
+\textbf{What to report.} Our results suggest the following minimum for compositional conformal regions: (1) marginal coverage with its Beta--Binomial reference band rather than a bare number, and $n_{\rm cal}\gtrsim2000$ if a $\pm0.02$ check is intended; (2) coverage in groups defined by the predictor (entropy, dominant component) with a stated noise floor; (3) size under at least two measures, with the observation that factor-level differences are robust but close pairs are not; (4) the zero fraction $\hat\pi_0$ of calibration targets, compared with $\alpha$, and a sweep over $\varepsilon$ for any log-ratio score.
+
+\textbf{Conditions of validity of the conclusions.} The size ranking (Aitchison $\ll$ Hellinger/KL $<\ell_2$ for logistic-normal noise; reversed for Dirichlet/multinomial noise with small shape parameters/zeros) was observed for $x\in\R^5$ Gaussian features, a softmax-linear mean, one noise level per family, $K\le10$, $\alpha=0.1$, a well-specified-ish predictor, and exchangeable data; Prop.~\ref{prop:zero} holds for additive zero replacement only. Prop.~\ref{prop:pivot}b needs the log-linear location structure and a predictor equal to the geometric centre. Prop.~\ref{prop:beta} needs exchangeability and no ties.
+
+\textbf{Where not to extrapolate.} (i) Other noise levels, mean functions, $K\gg10$, other $\alpha$ (the group-gap and size numbers are for $\alpha=0.1$). (ii) Other zero treatments (multiplicative or model-based imputation) or other $\varepsilon$ rules (e.g.\ $\varepsilon$ tied to the number of counts). (iii) Covariate shift or temporal dependence: coverage guarantees and our diagnostics assume exchangeability. (iv) Real data beyond CIFAR-10H: this is one dataset, one predictor architecture, and replicates are resamples of a finite pool of 10000 images. (v) Class-conditional or label-set uses of softmax scores (APS/RAPS-type sets), which we did not study. (vi) The conditional-coverage groups are defined from $f(x)$ only; coverage within groups defined by unobserved attributes can be different, and Mondrian on entropy does not address it.
+
+\textbf{Limitations.} The normalised score uses a crude linear $\hat\sigma$; a better variance model may change its verdict. The Mahalanobis score uses a covariance that can be unstable at small auxiliary sizes (not varied). Cross-conformal was tested for three scores at $K{=}5$. The uniform measure is only evaluated for $K\le5$ (Monte Carlo in higher $K$ is uninformative). The number of settings is large, but predictors, data-generating processes and sizes were chosen by us, and we did not tune any score except via the stated $\varepsilon$ sweep. Hypothesis H3 (size ranking depends on measure) was only partially supported and we report it as such. An attempt to train the CIFAR predictor on CPU was abandoned because of compute limits; the pretrained model was used instead.
+
+\section*{Impact Statement}
+This paper presents work whose goal is to advance the field of machine learning, specifically the evaluation of uncertainty quantification. A potential negative effect is over-reliance on a region labelled ``90\%'': our results show that this label refers to marginal coverage only and may hide large conditional undercoverage (e.g.\ 72\% in the highest-entropy tercile on CIFAR-10H), which could matter if such regions are used in decisions about subgroups.
+
+\bibliography{refs}
+\bibliographystyle{icml2026}
+
+\newpage
+\appendix
+\onecolumn
+\input{appendix.tex}
+
+\end{document}

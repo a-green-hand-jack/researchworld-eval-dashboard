@@ -1,0 +1,11 @@
+# Pre-delivery analysis inspection
+
+Inspected experiment-repo `e489570fe452dcb8191cf768aa0c2be6202e2b36`: analysis/methods.md, analysis/run_log.md, README.md, provenance/manifest.json, code/run_experiments.py, summarize.py, theory.py, coverage_diagnostics.py, add_exact_baseline.py, add_full_eb_baseline.py, verify_implementation.py, results/theory.csv and results/verification.json. This is an early design/code review, not approval of an assembled report or of measured results not yet supplied.
+
+The deterministic-control variance completion of the square is algebraically correct under iid independent labeled/unlabeled sampling and finite second moments. Its scope is the specified additive control-variate class. The empirical-population resampling target and the difference between fixed-across-methods inputs and repeated sampling are stated. Cross-fitted normal intervals are explicitly asymptotic, not finite-sample guarantees; small-sample failure must remain visible in reporting. The separate held-out empirical-Bernstein design respects the label budget and conditional independence. Its union-bound guarantee requires the known [0,1] label/score bounds stated in methods. The exact binary comparator is relevant and implemented. The reference-check record reports 24 endpoint comparisons, but final acceptance will examine measured trial artifacts and claim mappings separately.
+
+Actionable early finding: summarize.py lacks eb_ppi_full and clopper_pearson in its baseline list. Requested paired comparisons in an issue in experiment-repo. This affects the evidence for learned finite-sample width claims against the stronger relevant available baselines, not validity of the underlying intervals.
+
+No report, final figures, venue template, or completed summary was available in the inspected revisions. Their absence at this work-in-progress stage is not a rejection; approval still requires exact-head inspection of the complete delivery and every rendered figure. The external-review-repo commitment issue #2 contains no substantive problem to resolve.
+
+Wiki repositories of the accessible suppliers were attempted at this initial check and did not yet resolve; the objective and frozen task files are the controlling standard. Recheck idea-repo Brief when supplied and before any delivery judgement.

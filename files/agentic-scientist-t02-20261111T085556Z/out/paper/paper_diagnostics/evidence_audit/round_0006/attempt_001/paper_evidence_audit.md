@@ -1,0 +1,10 @@
+# Agentic evidence audit
+
+- verdict: `pass`
+- finding_count: `0`
+
+## Summary
+Visible claims in the main text, tables, figure captions and Supplementary Information match claims_grounding.json, paper_data.json.final_evaluation, derived/resolution.json and the source evidence. The qualified outcome is presented only as measurement integrity, with the inconclusive verdict kept as the paper's own interval rule.
+
+## Findings
+- None.

@@ -1,0 +1,1 @@
+Local LaTeX intermediates are generated here and ignored. The built delivery is ../paper.pdf. Use `make paper` from the repository root; see the root README for the complete reproduction entry points.

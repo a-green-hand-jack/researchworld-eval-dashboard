@@ -1,0 +1,15 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T13:23:14.547758+00:00`
+- ok: `True`
+- verdict: `pass`
+- finding_count: `0`
+- audit_json_path: `work/results/r03/claude/20261111_111139/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/r03/claude/20261111_111139/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/r03/claude/20261111_111139/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+Every checked number, comparison and caveat in the main text and Supplementary Information matches claims_grounding.json, paper_data.json, the analysis files and the evaluator and source evidence. The failure-scope limits (sealed-tree identity unestablished, no ablation, joint scoring) are disclosed.
+
+## Findings
+- None.

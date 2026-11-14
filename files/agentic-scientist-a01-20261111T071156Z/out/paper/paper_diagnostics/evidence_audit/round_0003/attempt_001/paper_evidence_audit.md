@@ -1,0 +1,10 @@
+# Agentic evidence audit
+
+- verdict: `pass`
+- finding_count: `0`
+
+## Summary
+Visible claims in the main text and Supplementary Information match claims_grounding.json, paper_data.json, the retained search and final metrics, and the evaluator and planner source; the qualified outcome and its limits are stated faithfully.
+
+## Findings
+- None.

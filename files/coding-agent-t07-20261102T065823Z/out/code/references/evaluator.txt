@@ -1,0 +1,1706 @@
+100 instances is all you need: predicting the success of a new LLM
+on unseen data by testing on a few instances
+Lorenzo Pacchiardi
+lp666@cam.ac.uk
+Leverhulme Centre for the Future of
+Intelligence, University of Cambridge
+Cambridge, UK
+Lucy Cheke
+lgc23@cam.ac.uk
+Department of Psychology,
+Leverhulme Centre for the Future of
+Intelligence„ University of Cambridge
+Cambridge, UK
+José Hernández-Orallo
+jorallo@upv.es
+Leverhulme Centre for the Future of
+Intelligence, University of Cambridge
+Cambridge, UK
+VRAIN, ValGRAI, Universitat
+Politècnica de València
+València, Spain
+Figure 1: Our proposed pipeline for predicting the performance of a new LLM on a new instance by testing on a few instances:
+starting from instance-level evaluation results of a set of LLMs, a reference set of instances is extracted (1). Then, we train a
+“generic assessor” that predicts the performance of each LLM-instance pair, based on features intrinsic to the instance (e.g.,
+vector embeddings) and the performance of the considered LLM on the reference set (2). The performance of the new LLM on a
+new instance can be predicted by evaluating the new LLM on the reference set and applying the trained generic assessor (3).
+Abstract
+Predicting the performance of LLMs on individual task instances is
+essential to ensure their reliability in high-stakes applications. To
+do so, a possibility is to evaluate the considered LLM on a set of
+task instances and train anassessor to predict its performance based
+on features of the instances. However, this approach requires eval-
+uating each new LLM on a sufficiently large set of task instances
+to train an assessor specific to it. In this work, we leverage the
+evaluation results of previously tested LLMs to reduce the num-
+ber of evaluations required to predict the performance of a new
+LLM. In practice, we propose to test the new LLM on a small set of
+reference instances and train a generic assessor which predicts the
+performance of the LLM on an instance based on the performance
+of the former on the reference set and features of the instance of
+interest. We conduct empirical studies on HELM-Lite and Kind-
+sOfReasoning, a collection of existing reasoning datasets that we
+introduce, where we evaluate all instruction-fine-tuned OpenAI
+models until gpt4-0125-preview. When predicting performance
+on instances with the same distribution as those used to train the
+generic assessor, we find this achieves performance comparable to
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+© 2024 Copyright held by the owner/author(s).
+This is the author’s version of the work.
+the LLM-specific assessors trained on the full set of instances. Ad-
+ditionally, we find that randomly selecting the reference instances
+performs as well as some advanced selection methods we tested. For
+out of distribution, however, no clear winner emerges and the over-
+all performance is worse, suggesting that the inherent predictability
+of LLMs is low.
+CCS Concepts
+• Computing methodologies →Natural language processing ;
+Transfer learning ; Cost-sensitive learning; • General and refer-
+ence →Evaluation; Reliability.
+Keywords
+Large language models, evaluation, performance prediction, pre-
+dictable AI.
+1 Introduction
+Large Language Models (LLMs) are being used as components of
+multiple services and products, such as agents performing general
+computer tasks [16], performing ML experiments [13], and even
+operating unmanned aerial vehicles [14]. These systems typically
+query an LLM on a specific instance of a task and use their output
+to determine a sequence of actions. For some of these uses, it is
+arXiv:2409.03563v1  [cs.CL]  5 Sep 2024
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+essential to determine whether the output produced by the LLM
+on a specific task instance is correct (or, more generally, “valid”
+[43]) before the subsequent steps are executed1. A nascent line of
+research [9, 42] is addressing this problem by developing “asses-
+sors”, namely, independent modules that predict the correctness (or
+a continuous performance score) of an AI system on an instance
+based on features intrinsic to the latter (such as linguistic features
+or sentence vector embeddings). Assessors can be specific to an
+AI system, or “generic”, in which case they also take as input in-
+formation on the AI system at hand and are trained to predict the
+performance of different LLMs on different instances.
+Meanwhile, the rate at which new LLMs are released has dras-
+tically increased. Some providers, such as OpenAI, are iteratively
+retiring old versions when new ones are released, forcing devel-
+opers to update the LLM version used in their applications (see
+[30]). An even larger explosion is occurring in the open-source
+world, fuelled by inexpensive fine-tuning techniques [10]. To build
+an assessor specific to a new LLM version, users must evaluate it
+on a sufficiently large set of task instances, causing the costs to rise
+quickly when considering many LLM versions. On the other hand,
+the system information one might use to build a generic assessor,
+such as the number of parameters or statistics of the training data
+or architecture, is not standardised across LLMs and unavailable
+for proprietary models.
+As such, this paper investigates the following question: can
+we combine information across LLMs to predict the perfor-
+mance of a new LLM on a new instance by relying only on
+observational (or behavioural) features of the LLMs? In prac-
+tice, we propose to characterise each LLM by its performance on a
+small set of reference instances and to build a generic assessor using
+those as system features. More precisely, we first select a small
+set of reference instances from the labelled dataset on which past
+LLMs were evaluated. Then, we train the generic assessor on the
+concatenation of instance-specific features and the LLM-specific
+success vector on the reference instances. Finally, to estimate the
+probability of success of a new LLM on a novel instance, it suffices
+to evaluate the former on the reference instances, concatenate its
+performance to the features of the instance, and apply the trained
+generic assessor.
+In our empirical studies, we rely on HELM-Lite [20], which pro-
+vides instance-level results for 30 LLMs from different providers
+(at the time we conducted our experiments), and a collection of
+previously existing datasets we introduce, named “KindsOfReason-
+ing”, on which we evaluated the full set of instruction-following
+models from OpenAI until gpt4-0125-preview. We only consider
+tasks with binary correctness score (thus discarding the datasets
+in HELM-Lite that do not satisfy this) and therefore build binary
+assessors.
+We train specific assessors using different prompt features and
+find that OpenAI embeddings [31] lead to better in-distribution per-
+formance than simpler methods such as Word2vec [25], FastText
+[4], and n-grams. Although this analysis is not the main focus of
+our work, it is a valuable tangential contribution. Subsequently,
+we build generic assessors using various methods to select the
+1Notice that this cannot rely on the “ground truth” of the task instance, as that is not
+available in practical use cases (otherwise, there would be no need to query the LLM).
+reference instances and combine the performance on these with
+the instance-specific features. When predicting performance on in-
+stances with the same distribution as those used to train the generic
+assessor, we find the latter to perform comparably to the specific
+assessors, which require the LLM to be evaluated on many more
+instances. Additionally, we find that a random selection of reference
+instances performs as well as the advanced selection methods we
+tested. However, in out-of-distribution scenarios, the predictive
+power of all assessors declines significantly, indicating a lack of
+general predictability in LLMs.
+In essence, the main contributions of our work are the following:
+•We propose a framework that combines evaluation results
+across LLMs to predict the performance of a new LLM on a
+new instance by only evaluating the new LLM on a small set
+of reference instances.
+•We study the performance of various methods for selecting
+the reference instances and combining their performance
+with instance-specific features to build the generic assessor
+•Finally, we introduce the KindsOfReasoning collection of
+existing datasets testing various kinds of reasoning and, in
+the spirit of making instance level results available [6], we
+publicly release the raw outputs and the evaluation results
+of all instruction-tuned models from OpenAI. To the best of
+our knowledge, this is the first public release of its kind.
+The rest of the paper is organised as follows: Section 2 reviews
+related works in the area of predicting the performance of large
+language models (LLMs). In Section 3, we describe our methodology.
+Section 4 presents our empirical studies, where we compare the per-
+formance of the generic assessor with that of independent assessors,
+and study how well the generic assessor can select the most suitable
+LLM for a task. In Section 5, we conclude the paper and discuss the
+limitations of our study and directions for future work (5).
+2 Related work
+2.1 Instance-level prediction of success of AI
+systems
+The motivation for our work follows [43], which advocates for the
+importance of instance-level success predictions for AI systems
+and coins the term “predictable AI”; in particular, they highlight
+how ensuring predictability should be prioritised over increases
+in average performance for risky use cases, and how having this
+could help with compliance with upcoming regulatory frameworks,
+such as the EU AI Act [2].
+Following this motivation, [9] introduces the concept of anasses-
+sor model, which accompanies an ML system and estimates the prob-
+ability of success of the system on individual instances. In particular,
+they discuss how an assessor can be trained on the evaluation re-
+sults of the ML system on test data (i.e., which has not been used
+for training the ML system). Finally, [42] applies this idea to LLMs,
+by showing how a smaller external model can be used to predict the
+performance of a bigger and more expensive LLM on individual in-
+stances without passing the latter through the model. They also find
+it possible to reject almost half of the failure cases before running
+much larger LLMs, resulting in a significant saving of compute.
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+2.2 Predictability of aggregated benchmark
+scores from LLM-specific features
+Two works [32, 40] studied the extent to which an LLM’s aggregate
+performance on BIG-Bench tasks [36] can be predicted using infor-
+mation on the LLM such as number of parameters or the amount of
+used compute. In contrast, our work does not rely on these quan-
+tities, which are often unavailable, instead characterising LLMs
+according to their performance on reference samples. Moreover,
+while these works focus on predicting aggregate performance, our
+work and the ones mentioned in the previous subsection provide
+instance-level predictions for new unlabelled instances.
+2.3 Extracting LLM-specific features from
+existing evaluations
+Recently, [34] built “observational scaling laws” that link perfor-
+mance on complex downstream tasks to hypothesised latent capabil-
+ities, whose values can be inferred by decomposing the performance
+of various LLMs on different benchmarks into components linked
+by a log-linear relation with compute measures for LLM training.
+Doing so allows us to combine information across different LLM
+families, which may differ for their efficiency in converting raw com-
+pute into benchmark scores. Once this relation is established, the
+performance of a new model on downstream tasks can be predicted
+by knowing its performance on simple benchmarks and its compute
+cost. [34] also select a subset of LLMs that maintains high prediction
+accuracy while reducing cost by requiring the evaluation of perfor-
+mance on downstream tasks for fewer models. Their work is similar
+to ours in determining LLM-specific features by using evaluation
+results of multiple LLMs and using them to predict the performance
+of a new LLM. However, the aim of our work is to predict the perfor-
+mance of the new LLM on a specific instance with as few evaluations
+as possible, while the aim of [34] is to avoid the cost of evaluating
+complex downstream tasks and predict the performance on the lat-
+ter from results on simple benchmarks and compute measures. As
+such, the LLM-specific features they use (the latent capabilities) are
+obtained from the performance of the new LLM on simple bench-
+marks (which [34] assumes to be available), while our method only
+needs to evaluate the LLM on a small number of instances. Moreover,
+our method can be applied to new instances for which no ground
+truth is available, while the simple benchmarks and the downstream
+tasks employed in [34] must have a grading mechanism.
+2.4 Predicting performance by benchmark
+subsampling
+Several works share the motivation of reducing the number of eval-
+uations (and hence the cost) needed to evaluate a LLM. For instance,
+a “Lite” version with a reduced number of tasks was introduced
+alongside the larger BIG-Bench benchmark [36]; however, the way
+in which the task selection was done is unknown, to the best of
+our knowledge. Similarly, HELM-Lite [20] is a revised and reduced
+version of HELM [19]. However, both of these perform the reduc-
+tion at the level of tasks of which the benchmark is constituted.
+Instead, [38] subsample a dataset by clustering models’ confidence
+to predict the overall accuracy on the whole dataset, while MixEval
+[27] extracts a subset of instances from various benchmarks which
+is most predictive of the performance on Chatbot Arena2, an online
+platform performing pairwise comparison of LLM outputs. Closer
+to our work is TinyBenchmarks [ 33], which selects informative
+instances from HELM-Lite and estimates the performance of a new
+LLM on the whole benchmark by evaluating it only on those in-
+stances. In particular, TinyBenchmarks uses Item Response Theory
+(IRT) on the matrix of success of each LLM on each instance present
+in the HELM-Lite dataset to extract a vector of item demands and
+LLM capabilities. Then, it uses either the item demands or the raw
+LLM success on each instance to build a representative subset of
+instances by clustering the items and taking the cluster centroids.
+Similarly to our approach, a new LLM is then only evaluated on
+the representative subset; however, in contrast to our work, they
+aim to predict the aggregate score on the benchmark, while we
+focus on predicting instance-level performance. In practice, their
+IRT method provides instance-level predictions (which the authors
+aggregate), but these predictions are limited to instances on which
+previous LLMs have been evaluated (as this is necessary to obtain
+the item demands), which requires access to the ground truth. In
+contrast, our approach is applicable to new instances for which
+we do not know the ground truth, as the trained assessor does not
+require any information beyond the intrinsic features of test in-
+stances. A similar work to [33] is metabench [17], which considered
+6 different datasets, and performed a two-step procedure (random
+sampling for each dataset, followed by item selection based on the
+Fisher information matrices of IRT item parameters) to extract a
+small set of instances, the performance on which accurately predicts
+aggregate performance on the 6 datasets. As they fit the IRT model
+only the pre-selected instances, their method is unable to predict
+instance-level performance. Finally, despite not tackling predictabil-
+ity directly, [35] finds that the vector of successes of different LLMs
+is correlated across instances belonging to 4 benchmarks, and, for
+one of those benchmarks, the similarity between the embeddings
+or a pair of instances predicts the similarity between the success
+vectors; this suggests that patterns in success across LLMs can be
+found and related to the embeddings.
+2.5 Evaluations of reasoning in LLMs
+[5] found reasoning to be one of three factors in the capabilities
+of LLMs. Indeed, reasoning in LLMs has been extensively studied:
+see [26] for a survey on LLM reasoning evaluations and [ 11] for
+a broader survey also encompassing ways to improve and elicit
+reasoning in LLMs.
+Recently, several collections of reasoning datasets have been
+introduced. GLoRE [37] collects 12 logical reasoning datasets with
+three different types of tasks (multiple choice, natural language
+inference, and binary answers). Similarly, LogiGLUE [24] collects
+24 datasets related to inductive, deductive and abductive reasoning,
+with four different types of tasks (the same ones as GLoRe and
+free-form question answering); they only selected datasets that do
+not require external domain knowledge, but some of these datasets
+are poorly formatted. Finally, CALM-Bench [7] is a collection of
+6 diverse tasks requiring both causal reasoning and knowledge.
+KindsOfReasoning, the collection we introduce combining previ-
+ously existing datasets testing various kinds of reasoning, partly
+2https://chat.lmsys.org/
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+overlaps with each of the aforementioned collections; however,
+KindsOfReasoning aims to include a broader range reasoning types
+(logical, common sense, inductive, deductive, abductive, counter-
+factual, causal, analogical, spatial and arithmetic reasoning) over
+22 different datasets; see Appendix A.2 for more information on
+the dataset construction.
+3 Methodology
+Let us denote by L= {𝑚𝑗,𝑗 = 1,...,𝑛 }, a set of trained LLMs.
+Moreover, let D= {(𝑝𝑖,𝑦𝑖),𝑖 = 1,...,𝑁 }be a test dataset used to
+evaluate the performance of the LLMs, with 𝑖 denoting instance
+index, 𝑝𝑖 the input to the LLM (i.e., the prompt) and 𝑦𝑖 the target
+value (i.e., the expected completion by the LLM). Further, we will
+denote by 𝑚𝑗(𝑝𝑖)the output 𝑚𝑗 produces when given 𝑝𝑖 as input3
+and by 𝑧𝑗,𝑖 a binary value indicating the “correctness” of 𝑚𝑗(𝑝𝑖)
+with respect to 𝑦𝑖. The correctness 𝑧𝑗,𝑖 can be defined in multiple
+manners (for instance, exact match or whether 𝑦𝑖 is a substring
+of 𝑚𝑗(𝑝𝑖)); the most suitable manner depends on the considered
+task, but in general the aim of𝑧𝑗,𝑖 is to capture what a human judge
+would perceive as a correct answer4.
+In the following, we first frame the problem of predicting the
+correctness 𝑧𝑗,𝑖 and then discuss our main contribution, namely a
+framework to predict the performance of a new LLM by evaluating
+it on a small subset of instances.
+3.1 Predicting success of a LLM using features
+intrinsic to the prompt
+To begin with, let us now consider a single LLM, say𝑚1; our aim is
+to train a classifier (termed “assessor”) to predict the performance
+𝑧1,𝑖 from the prompt 𝑝𝑖. To do so, we split the test dataset Dinto
+different splits used to train, validate and evaluate the assessor [9],
+denoted as Dtrain,Dval and Dtest, such that D= 𝐷train ∪Dval ∪
+Dtest and Dtrain ∩Dval = Dval ∩Dtest = Dtrain ∩Dtest = ∅. In
+a real-world scenario, Dtest will represent instances for which we
+did not evaluate the considered LLM (and for which we may not
+have access to the ground truth); in contrast, available evaluation
+results are split into Dtrain and Dval.
+In practice, we can extract some numerical features 𝑓(𝑝𝑖)from
+the textual prompt 𝑝𝑖; we use “intrinsic” features, i.e. features that
+are defined independently of the problem at hand (such as the
+number of negations or the vector embeddings of the sentence).
+Formally, we consider a loss function ℓ and a family of classifiers
+ℎ𝜑, where 𝜑 denotes the parameters of the classifier (for instance,
+the weights in a logistic regression classifier), and aim to minimise
+∑︁
+𝑝𝑖 ∈Dtrain
+ℓ(ℎ𝜑(𝑓(𝑝𝑖)),𝑧1,𝑖) (1)
+over 𝜑 using some optimisation algorithm; we can then select the
+best hyper-parameters for solving the above problem using the per-
+formance on the validation data Dval, leading to picking a classifier
+3As LLMs are stochastic, 𝑚𝑗 (𝑝𝑖 )is in general a random variable, and so is 𝑧𝑗,𝑖 . In our
+empirical study, we sample the LLMs at 0 temperature, but, even so, there is still a
+residual amount of stochasticity, even though the reason for this is unclear [29].
+4Particularly in the case of free-form question answering, it can be tricky to find a
+formulation that always matches what a human judge would perceive as a correct
+answer.
+ℎˆ𝜑. Now, we can predict the performance of𝑚1 on 𝑝new ∈Dtest as
+ℎˆ𝜑(𝑓(𝑝new))without inputing the prompt 𝑝new into the LLM 𝑚15.
+3.2 Predicting success by evaluation on
+reference instances
+Now, consider the case in which we have previously evaluated
+some LLMs on Dtrain and Dval. We are interested in predicting
+the performance of a new LLM, say 𝑚new on new instances Dtest.
+Using the approach in Section 3.1, we could test the new LLM on
+all instances in Dtrain and Dval and train an assessor specific to
+that LLM. Instead, we want to leverage the information contained
+in the available evaluation results for previous LLMs to predict the
+performance of 𝑚new on Dtest without evaluating it on the full
+Dtrain (and assuming that we do not have access to the labels in
+Dtest, which prevents us from evaluating the other LLMs on it).
+Thus, we build ageneric assessor, namely a classifier that predicts
+the success 𝑧𝑗,𝑖 from the pair (𝑚𝑗,𝑝𝑖). In practice, let us split the
+LLMs for which full evaluation results are available into a train-
+ing and validation split Ltrain and Lval. For each pair (𝑚𝑗,𝑝𝑖)∈
+Ltrain ×Dtrain, we concatenate the prompt-intrinsic features 𝑓(𝑝𝑖)
+with LLM-specific features 𝑔(𝑚𝑗)and aim to fit a classifier ℎ𝜑 that
+minimises ∑︁
+𝑚𝑗 ∈Ltrain
+∑︁
+𝑝𝑖 ∈Dtrain
+ℓ(ℎ𝜑(𝑔(𝑚𝑗),𝑓 (𝑝𝑖)),𝑧𝑗,𝑖) (2)
+over 𝜑. Similarly to what we did before (Section 3.1), we keep the
+performance of Lval on Dval to perform model selection, leading
+to a trained classifier ℎˆ𝜑. Then, the performance of 𝑚new on an
+instance 𝑝new ∈Dtest can be obtained as ℎˆ𝜑(𝑔(𝑚new),𝑓 (𝑝new)).
+The LLM-specific features 𝑔(𝑚𝑗)could include statistics on the
+training data of 𝑚𝑗 and architectural information (for example,
+number of attention layers and parameters). However, the high va-
+riety of hyperparameters involved in the definition and training of
+LLMs and the unavailability of detailed information on proprietary
+models makes defining broadly informative features hard, if not
+impossible. To circumvent this problem, we propose to use the per-
+formance of 𝑚𝑗 on a small set of reference instances Dref ⊂Dtrain
+as 𝑔(𝑚𝑗); in this way, it is sufficient to evaluate the new LLM𝑚new
+on Dref to predict their performance on news instances Dtest. See
+Figure 1 for a graphical description of our method. Next, we discuss
+various methods to determine Dref.
+3.2.1 Selecting the reference instances. In order to select the most
+informative instances (𝑝𝑖,𝑦𝑖)∈D train to form Dref , we can use
+information intrinsic to the instances as well as the evaluation
+results of Ltrain on Dtrain (while keeping aside Dval and Lval to
+choose the best selection method; see Section 3.2.3). In general,
+let us denote by 𝑥𝑖 ∈ R𝑑 a feature vector associated to 𝑝𝑖 and
+X ∈R𝑑×|Dtrain | the matrix whose columns are 𝑥𝑖. Finally, let us
+define Ztrain = (𝑧𝑗,𝑖)𝑗: 𝑚𝑗 ∈Ltrain,𝑖: 𝑝𝑖 ∈Dtrain . We attempt using the
+following features:
+•features intrinsic to the prompt 𝑥𝑖 = 𝑓(𝑝𝑖), which are not
+necessarily the same used to build the assessor in Sections 3.1
+5This assessor is anticipative [9], as it does not use the output𝑚1 (𝑝new )when predict-
+ing the performance; this can avoid the cost of querying the LLM if its performance
+on a specific input is predicted to be poor.
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+and 3.2; in this case, 𝑑corresponds to the size of the features
+computed by 𝑓.
+•The binary successes/failure vector on Ltrain, which identi-
+fies X = Ztrain and for which 𝑑 = 𝑛train.
+•The item demands obtained by applying the IRT approach
+in [33] (discussed in Section 2), which obtains a set of item
+demands and LLM capabilities starting from the success ma-
+trix Ztrain. Thus, we set 𝑥𝑖 to be the obtained item demands,
+whose size 𝑑can be chosen by the user (we fix this to𝑑 = 10
+following [33]).
+For all possible choices of X above, we apply the following meth-
+ods to determine the reference instances:
+•Clustering on intrinsic features : we perform KMeans
+clustering on the columns ofX and, for each identified cluster,
+add the instance 𝑖closest to the cluster centroid to Dref. The
+pre-specified number of clusters determines the number of
+selected instances.
+•Factor Analysis (FA) : FA decomposes X = WH +E, where
+W ∈R𝑑×𝑙 is the loading matrix, H ∈R𝑙×|Dtrain |is a matrix
+whose columns are the latent factors for each of the sam-
+ples, E is a matrix of Gaussian noise and 𝑙 is the number of
+hidden factors. The features for each instance is assumed to
+be independent from the other instances given the matrix
+W. In practice, we first fit FA with a high number of factors,
+set 𝑙 to the number of eigenvalues of the correlation matrix
+XX𝑇 which are larger than 1 and re-fit FA with the varimax
+rotation method [15]. Then, we select the required number
+of reference instances by picking, for each 𝑘 = 1,...,𝑙 , an
+approximately equal number of instances with the highest
+values of |𝐻𝑘,𝑖|6.
+In total, we have 6 ways of selecting Dref (3 sets of features times
+2 selection methods), two of which (clustering on success/failures
+and IRT item parameters) correspond to the selection method used
+in [33]. We compare these methods with a random reference subset;
+moreover, we also draw 20 random reference subsets, fit an asses-
+sor using the performance on the reference instances, and pick the
+random subset that leads to the highest performance (“random best
+of 20”).
+3.2.2 Predicting success by concatenating intrinsic features and per-
+formance on the reference instances.Once we select the reference
+instances Dref, we can extract the success of each LLM on Dref to
+define 𝑔(𝑚𝑗)= (𝑧𝑗,𝑖)𝑖∈Dref . We can then concatenate this to the
+feature vector 𝑓(𝑝𝑖)(which does not need to be the same used for
+selecting the reference instances in Section 3.2.1) and train a generic
+assessor aiming to minimise Eq. (2). Notice how the features 𝑓(𝑝𝑖)
+can also rely on the reference dataset, as that is fixed for all new
+LLMs: for instance, we also attempt using a measure of similarity
+between the vector embeddings of 𝑝𝑖 and each of the instances in
+Dref as 𝑓(𝑝𝑖).
+3.2.3 Choosing the best setup on validation data and predicting the
+performance of a new LLM.As mentioned above, we have multiple
+ways to define the reference set as well as multiple choices for
+6For instance, if we want to select 35 reference instances and 𝑙 = 10, we select the
+𝑖’s corresponding to the top 4 |𝐻𝑘,𝑖 |for 𝑘 = 1,..., 5 and those with the top 3 for
+𝑘 = 6,..., 10.
+the intrinsic features 𝑓. We can also choose multiple families of
+classifiers ℎ𝜑 and hyperparameters of the optimisation algorithm
+to minimise Eq. (2). As such, we pick the combination of options
+which best predicts the performance of the validation LLMs Lval
+on the validation data Dval. Hence, once we want to predict the
+performance of a new LLM 𝑚new on a new instance 𝑝new ∈Dtest,
+we only need to evaluate 𝑚new on Dref and apply the trained
+generic assessor. In our empirical studies below, we will test each
+method on multiple new LLMs, which we group into Ltest.
+4 Empirical studies
+4.1 Considered datasets and splits
+We consider two collections of datasets in our experiments7:
+•HELM-Lite [20], a revised and reduced version of the popu-
+lar HELM [19], which includes 10 different “scenarios” (i.e.,
+datasets), some of which are stratified into sub-scenarios. Of
+those, we keep the scenarios and subscenarios for which the
+performance metric is binary, and further discard those for
+which different LLMs were tested with a different number
+of few-shot examples; the resulting subset spans 6 scenar-
+ios for a total of 4285 instances. The list of included and
+discarded scenarios and sub-scenarios can be found in Ap-
+pendix A.1. On this benchmark, the results for 30 LLMs from
+different families were available at the time we conducted
+our experiments (see Table 1).
+•KindsOfReasoning, a collection that we introduce in this
+paper, which is aimed at testing various kinds of reason-
+ing (logical, common sense, inductive, deductive, abductive,
+counterfactual, causal, analogical, spatial and arithmetic rea-
+soning). Our collection includes 22 different datasets with
+varying number of instances, for a total of 37,529 instances.
+On this dataset, we tested all instruction-tuned models re-
+leased from OpenAI, from text-ada-0018 to
+gpt-4-0125-preview, for a total of 14 LLMs (see Table 1).
+The instance-level outputs of all models will be released 9,
+in the spirit of [6]. To the best of our knowledge, this is the
+first collection of instance-level results covering all versions
+of a given model family from such a large time window,
+and we hope other researchers can find insights in this data.
+We provide more information about the construction of this
+collection in Appendix A.2.
+For each of these collections, we repeat all our experiments con-
+sidering different choices for the train, validation, and test splits
+Dtrain,Dval and Dtest. In particular, we consider a random split,
+where the various splits are sampled by shuffling together all in-
+stances of all datasets. In addition, we consider multiple out-of-
+distribution (OOD) splits, where we keep one set of datasets as
+Dtest (according to some criteria), and Dtrain and Dval are ob-
+tained from randomly shuffling the other ones. In this way, the
+data used to train and select the best assessor (both in the generic
+and specific setup) have the same distribution, which is however
+7Code available at https://github.com/LoryPack/ReferenceInstancesPredictability
+8Note that the older models have been discontinued on 4th January 2024, but we
+obtained our raw results before that date.
+9At https://github.com/Kinds-of-Intelligence-CFI/KindsOfReasoning
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+Table 1: LLMs in Ltrain, Lval and Ltest for the generic assessor experiments, on the two considered collection of datasets.
+KindsOfReasoning HELM-Lite
+Train openai/text-ada-001,
+openai/text-babbage-001,
+openai/text-curie-001,
+openai/text-davinci-001,
+openai/text-davinci-002,
+openai/gpt-3.5-turbo-0301,
+openai/gpt-3.5-turbo-0613,
+openai/gpt-3.5-turbo-1106
+01-ai/yi-6b, 01-ai/yi-34b, AlephAlpha/luminous-base,
+AlephAlpha/luminous-supreme, ai21/j2-grande, ai21/j2-jumbo,
+cohere/command, google/text-bison@001, google/text-unicorn@001,
+mistralai/mixtral-8x7b-32kseqlen, mistralai/mistral-7b-v0.1,
+openai/gpt-3.5-turbo-0613, openai/gpt-4-1106-preview,
+openai/text-davinci-002, openai/text-davinci-003,
+tiiuae/falcon-7b, writer/palmyra-x-v3, writer/palmyra-x-v2
+Validation openai/text-davinci-003,
+openai/gpt-3.5-turbo-0125
+tiiuae/falcon-40b, openai/gpt-4-0613,
+AlephAlpha/luminous-extended, cohere/command-light
+Test openai/gpt-4-0125-preview,
+openai/gpt-4-0314,
+openai/gpt-4-0613,
+openai/gpt-4-1106-preview
+anthropic/claude-2.1, anthropic/claude-2.0,
+anthropic/claude-instant-1.2, anthropic/claude-v1.3,
+meta/llama-2-70b, meta/llama-2-13b, meta/llama-2-7b,
+meta/llama-65b
+Table 2: Size of Dtrain, Dval and Dtest for the different splits
+for the KindsOfReasoning and HELM-Lite collections, to-
+gether with the criteria for which datasets to include in the
+test split ( Dtrain and Dval are randomly obtained from those
+not included in Dtest).
+Train
+size
+Validation
+size
+Test
+size
+Test set
+composition
+KindsOfReasoning
+In-distribution 21016 5254 11259 Random
+OOD 1 18069 4517 14943 arithmetic
+OOD 2 20705 5176 11648 causal
+OOD 3 21273 5318 10938 logical, deductive,
+inductive, spatial,
+abductive,
+counterfactual, and
+analogical
+reasoning
+OOD 4 23238 5810 8481 world knowledge,
+common sense
+HELM-Lite
+In-distribution 2400 600 1285 Random
+OOD 1 2378 595 1312 Math, GSM, MMU
+abstract algebra
+OOD 2 2182 546 1557 Legalbench
+OOD 3 2295 574 1416 Commonsense,
+Med QA, MMLU
+(except abstract
+algebra)
+different from the data where the selected assessor will be evaluated
+on. Details on the various splits are given in Table 2.
+Moreover, for the generic assessor experiments, we identify a
+single split of train, validation, and test LLMsLtrain,Lval and Ltest
+for each dataset collection. Analogously to how we selected the
+OOD splits, we make Ltest as different as possible from Ltrain and
+Lval: concretely, we select LLMs from two producers as Ltest for
+HELM-Lite and all versions of gpt4 models for KindsOfReasoning.
+In this way, we test the performance of our proposed methodology
+in the hard case where the new LLM we want to predict performance
+for is substantially different from the previously seen ones. The
+LLM splits are given in Table 1.
+Notice how the diversity of LLMs in HELM-Lite is higher than
+that in KindsOfReasoning, as the latter has been evaluated on a
+single family of models. This is interesting as it allows us to under-
+stand how the performance of our proposed method changes when
+considering a broad or narrow set of LLMs.
+4.2 Considered prompt features
+Our methodology, discussed in Section 3, relies on choosing a trans-
+formation 𝑓 that converts a given prompt 𝑝𝑖 into a set of numerical
+features 𝑥𝑖 = 𝑓(𝑝𝑖), where we refer to these features as “intrinsic”
+as they do not depend on the particular LLM whose performance
+we are interested in predicting (as mentioned in Section 3.2.2, in the
+generic assessor setup, we allow the intrinsic features to depend
+on the set of reference instances, as the set of reference instances
+is fixed for all LLMs in Ltest).
+Empirically, we attempted using the following features:
+•the prompt embeddings computed from the OpenAI API
+(with the endpoint text-embedding-3-large, [31]);
+•the Word2vec [25] andFastText [4] word embeddings, which
+compute a vector for each word of the prompt which we
+average to obtain a feature vector for the whole prompt;
+•the 1-gram vectors, which are obtained as a measure of the
+frequency of words in a specific prompt normalized over
+that of the words in the entire set of training prompts.
+We studied the performance of these in the specific assessor setup
+(complete results in Appendix A.3) and found that OpenAI embed-
+dings perform better more frequently. Moreover, the OpenAI embed-
+dings obtained from the endpoint text-embedding-3-large were
+trained using Matryoshka Representation Learning [ 18], which
+allows them to be truncated (by removing the final elements of
+the vector) without the embedding losing its concept-representing
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+properties. As such, we investigate the performance of the specific
+assessor by truncating the OpenAI embeddings (Appendix A.4)
+and we found that the performance saturates using 1024 (out of
+a total of 3072) embeddings. As such, our experiments on generic
+assessors use the first 1024 elements of the OpenAI embeddings.
+Additionally, in the generic assessor framework, we also attempt to
+use the cosine similarity between the embeddings of each element
+of the selected Dref and the considered instance 𝑝𝑖 as 𝑓(𝑝𝑖).
+4.3 Metrics and other details
+We use the Area Under the Curve (AUC) as a metric for the perfor-
+mance of the generic and specific assessor. The AUC measures how
+well a binary probabilistic classifier (i.e., a classifier that provides a
+probabilistic prediction for a binary variable) discriminates between
+the two classes: a classifier whose assigned probabilities for the two
+classes do not overlap achieves the maximum valueAUC = 1, while
+a classifier assigning random values to the two classes achieves
+AUC = 0.5. We employ the AUC as its extreme values are insensitive
+to the proportion of positive and negative samples in the dataset,
+and it can therefore be used to compare results across various sce-
+narios (in our case, the various train/validation/test splits and the
+two dataset collections). However, AUC is insensitive to monotonic
+transformation of the output probabilities and this implies that a
+classifier achieving AUC = 1 can be miscalibrated (for instance, a
+classifier assigning probability 0.51 to all positive samples and 0.49
+to all negative samples achieves AUC = 1, but its predictions are
+miscalibrated).
+We test various values of the size of Dref (results in Appen-
+dix A.6) and we find that the performance on the test set saturates
+around 100 reference instances; as such, all results reported in the
+main text are obtained with that value.
+Next, for any data split and any choice of Dref in the generic
+assessor setup, we attempt to use various classifiers as assessors
+(logistic regression with 𝑙2 and 𝑙1 penalty and xgboost). Further-
+more, as mentioned in Section 3.2.2, in the generic assessor setup,
+we attempt to use the OpenAI embeddings as well as their cosine
+similarity to those of the elements of Dref as instance features. To
+select the best method, we do the following:
+•in the specific assessor setup, we compute the AUC of each
+classifier trained on each test LLM on Dval, pick the one
+with the highest value, and report the AUC of that classifier
+on Dtest.
+•In the generic assessor setup, for each data split, we eval-
+uate the AUC of each combination of classifier, choice of
+Dref and instance features 𝑓 on Dval for each LLM in Lval.
+To select the best combination, we compute the win rate
+of each combination for each validation LLM and pick the
+combination with the highest average win rate over Lval
+(a simpler average over Lval is impacted by the intrinsic
+different predictability of the different LLMs, which change
+the maximally achievable AUC).
+Notice how, by doing so, the specific assessor requires each test
+LLM to be tested on the whole Dtrain and Dval, while the generic
+assessor only uses the results ofLtrain and Lval on Dtrain and Dval
+correspondingly and requires evaluating each test LLM onDref. The
+latter case is therefore fully representative of the case of a new LLM
+evaluated on a new instance. The winning combination for each
+data split is reported in Table 3. Interestingly, for multiple data splits,
+the randomly sampled Dref performs better than those determined
+according to the advanced criteria in Section 3.2.1. While surprising
+at first, other works [17, 33, 39, 40] had found that benchmarks can
+be reduced by random sampling for multiple purposes.
+In terms of classifier, instead, XGBoost generally performs better.
+Finally, using similarity between the embeddings of the reference
+instances and those of the considered instance more frequently
+performs better than directly using the latter as 𝑓(𝑝).
+4.4 How well can we predict success?
+Figure 2 includes our main result, namely the predictive perfor-
+mance of the generic and specific assessor for the test LLMs Ltest,
+alongside three baselines:
+•“Random selector” corresponds to a generic assessor where
+Dref is a random set of instances selected from Dtrain, in-
+stead of using the selection methods discussed in Section 3.2.1;
+the best classifier and intrinsic features for each split are
+chosen using validation data and LLMs as for the generic
+assessor (Section 4.3).
+•“Reference only” is obtained by fitting, for each Ltest, an
+assessor on the performance on the elements of Dref, by
+only taking as input the intrinsic features of the prompts in
+Dref (thus, ignoring the performance of the previous LLMs
+to predict the performance of the new one). Notice how
+the best classifier and Dref for “reference only” are selected
+independently of those for the generic assessor by using the
+validation data and LLMs as discussed in Section 4.3.
+•“All train data” is obtained by fitting a single assessor on
+the pooled performance results of all LLMs in Ltrain on
+Dtrain only using the intrinsic features 𝑓(𝑝𝑖)(effectively
+considering all LLMs as a single LLM and ignoring the new
+LLM’s performance on Dref)
+From the results in Figure 2, several considerations can be made.
+First, notice how the predictive performance generally degrades
+out of distribution with respect to the in-distribution (random) split.
+For some out-of-distribution splits, some predictive power remains
+(recall that AUC = 0.5 corresponds to random guess) but, on other
+splits, even the specific assessor performs poorly, despite relying on
+evaluation results of the test LLMs on the whole train and validation
+data splits. This indicates that the considered intrinsic features of
+the prompt (the OpenAI embeddings) do not reliably capture a
+general performance pattern. While, in principle, more informative
+features could be used, it is also possible that there is an inner limit
+to the out-of-distribution predictability of the current generation
+of LLMs, due to their stochastic nature.
+Moreover, the specific assessor always outperforms our generic
+assessor in distribution and does so frequently out of distribution,
+as expected from the former having access to more information
+about the test LLM; however, the performance gap is generally
+small. In distribution, further, the generic assessor almost always
+outperforms or performs comparably with the “all train data” and
+“reference only” baselines, indicating that combining the informa-
+tion on previous LLMs and the evaluation results of the test LLM on
+Dref generally performs better than relying only on either one. For
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+Table 3: The best combination of instance-intrinsic features, selector and classifier for each data split in the two considered
+dataset collections, selected according to the performance on validation LLMs as discussed in Section 4.3. In the “instance-
+intrinsic features” column, “embeddings” refers to using the OpenAI embeddings of the considered instance as 𝑓(𝑝𝑖), while
+“similarity” refers to using the cosine similarity between the OpenAI embeddings of the reference instances and that of the
+considered instance; further, “similarity with interaction” explicitly adds features obtained as the pairwise produce of each
+similarity with its corresponding success (notice that this is superfluous for XGBoost, which can natively leverage interactions
+between features).
+Instance-intrinsic features Selector Classifier
+KindsOfReasoning
+In-distribution Similarity Random best of 20 XGBoost
+OOD 1 Similarity Factor analysis embeddings XGBoost
+OOD 2 Similarity with interaction Clustering IRT values XGBoost
+OOD 3 Embeddings Random XGBoost
+OOD 4 Similarity Random XGBoost
+HELM-Lite
+In-distribution Similarity with interaction Clustering embeddings Logistic Regression L1 C=0.1
+OOD 1 Embeddings Clustering LLM success XGBoost
+OOD 2 Similarity with interaction Random Logistic Regression L1 C=1
+OOD 3 Similarity with interaction Clustering LLM success Logistic Regression L1 C=1
+some OOD splits (OOD 2 and 3 for KindsOfReasoning and OOD1
+and 3 for HELM-Lite), instead, either or both of these baselines per-
+form better than the generic assessor, indicating how the generic
+assessor likely overfits to the training distribution; however, in
+most of those cases, the predictive performance is quite low for all
+methods (except for split 3 in HELM-Lite).
+If we instead compare the generic assessor with the “random se-
+lector” baseline (which is identical to the generic assessor but with
+a random Dref), we see how the two often perform comparably and
+there are a few cases where either one prevails, in roughly equal
+frequency. This indicates that the generic assessor is not sensitive
+to the specific selection of Dref (an indication for this could also be
+seen in Table 3, where there is no coherent best selector and where
+a few times the “random” subset was selected as best). Notice how,
+on validation data, the selected combination of selector, features,
+and classifier for the generic assessor is always better than the
+random selector baseline, as the possible choices for the latter are a
+subset of those for the former; however, our Figure 2 shows how, at
+least in a few cases, it is possible that the random selector performs
+better on test data.
+In a similar manner, the “reference only” baseline is identical to a
+”specific assessor” trained on a subset of Dtrain, but with the selec-
+tion of the best classifier being carried out on the validation LLMs,
+instead of using the results of the considered LLM on Dval. Still,
+the specific assessor always performs better than “reference only”
+in-distribution, while the latter sometimes overtakes the former
+out-of-distribution, indicating that the specific assessor overfits the
+training distribution due to the larger number of training points or
+due to the classifier selection being performed using the test LLM.
+5 Conclusion
+We proposed a novel framework for predicting the performance of
+a new Large Language Model (LLM) on individual task instances
+by leveraging the evaluation results of previously tested LLMs.
+Our approach minimises the number of evaluations required for a
+new LLM by introducing a generic assessor that combines instance-
+specific features with LLM-specific features derived from perfor-
+mance on a small set of reference instances. In doing so, our method
+is cheaper than specific assessors [9, 42] that solely rely on the per-
+formance of the considered LLM on a larger set of labelled examples.
+While we focus on LLMs, our methodology can be seamlessly ap-
+plied to predict the performance of other AI systems, by using
+suitable system-specific and instance-specific features.
+We conducted empirical studies on the HELM-Lite and Kind-
+sOfReasoning collections. In distribution, we found our generic
+assessor to perform only slightly worse than the specific assessor,
+indicating that the generic assessor is a viable method to reduce the
+evaluation cost of new LLMs when interested in predicting instance-
+level performance. In distribution, moreover, the generic assessor
+almost always outperforms the baseline relying only on information
+on previous LLMs or on the results of the test LLM onDref. Further,
+the generic assessor is mostly unsensitive to the specific set of refer-
+ence instances used. Out of distribution, instead, the picture is more
+varied: no clear winner emerges, and instance-level predictability is
+generally low, except for a few splits (for instance, OOD 1 in Kind-
+sOfReasoning and OOD 3 in HELM-Lite). As such, our work raises
+awareness of the low inner predictability of LLMs, and we hope it
+encourages the research community to focus more on characteris-
+ing what affects the predictability of LLMs and hence finding ways
+to increase it, which will help to make AI systems more reliable
+[43]. To foster research in this area, we release the instance-level
+results of all instruction-finetuned GPT3 and GPT4 models until
+gpt4-0125-preview on our novel KindsOfReasoning collection
+of datasets; to the best of our knowledge, this is the first publicly
+available set of fine-grained results for all versions of an LLM family.
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+Figure 2: Predictive performance (AUC) of the specific and generic assessor and a few baselines, for different splits of the
+KindsOfReasoning and HELM-Lite collections of datasets. Some combinations (for instance, the random selector on split 1 of
+KindsOfReasoning achieve AUC lower than the lower bound of the panels (0.4) and are hence hidden in the graph.
+Our work has several limitations, which can be addressed in
+future work:
+•First, as we focused on providing a proof of concept, it is
+possible that optimised features and bespoke classifiers can
+better predict instance-level performance of LLMs.
+•Moreover, it may be possible to identify other LLM-specific
+behavioural features more suitable than the performance on
+a reference set of instances we employed. In particular, it may
+be possible to adaptively select the most informative features
+(such as done in [17]) and thus improving accuracy while
+reducing the number of required evaluations even more.
+•Finally, in our out-of-distribution studies, we considered the
+same data distribution for the train and validation split, and
+a different one for the test split. With this setup, we found
+our generic assessor sometimes underperforms the baselines
+on the test data, likely due to overfitting the training distri-
+bution. This may be prevented by using validation data with
+a different distribution from the train (and test) split.
+Acknowledgments
+Lorenzo Pacchiardi is funded by US DARPA grant HR00112120007
+(RECoG-AI), received computational support from OpenAI through
+the Researcher Access Program and travel support from TAILOR
+Connectivity Fund (EU’s Horizon 2020 research and innovation
+programme, grant agreement No. 952215). The authors thank Marko
+Tesic and Lexin Zhou for their useful feedback on the draft.
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+References
+[1] Lasha Abzianidze, Joost Zwarts, and Yoad Winter. 2023. SpaceNLI: Evaluating
+the Consistency of Predicting Inferences In Space. ArXiv abs/2307.02269 (2023).
+https://api.semanticscholar.org/CorpusID:259341771
+[2] Brando Benifei and Ioan-Dragos Tudorache. 2023. Proposal for a Regulation of
+the European Parliament and of the Council on Harmonised Rules on Artificial
+Intelligence (Artificial Intelligence Act) . Technical Report. Tech. rep., Committee
+on the Internal Market and Consumer Protection . . . .
+[3] Chandra Bhagavatula, Ronan Le Bras, Chaitanya Malaviya, Keisuke Sakaguchi,
+Ari Holtzman, Hannah Rashkin, Doug Downey, Scott Yih, and Yejin Choi. 2019.
+Abductive Commonsense Reasoning. ArXiv abs/1908.05739 (2019). https://api.
+semanticscholar.org/CorpusID:201058651
+[4] Piotr Bojanowski, Edouard Grave, Armand Joulin, and Tomas Mikolov. 2017.
+Enriching word vectors with subword information.Transactions of the association
+for computational linguistics 5 (2017), 135–146.
+[5] Ryan Burnell, Han Hao, Andrew RA Conway, and Jose Hernandez Orallo.
+2023. Revealing the structure of language model capabilities. arXiv preprint
+arXiv:2306.10062 (2023).
+[6] Ryan Burnell, Wout Schellaert, John Burden, Tomer D Ullman, Fernando Martinez-
+Plumed, Joshua B Tenenbaum, Danaja Rutar, Lucy G Cheke, Jascha Sohl-Dickstein,
+Melanie Mitchell, et al. 2023. Rethink reporting of evaluation results in AI.Science
+380, 6641 (2023), 136–138.
+[7] Dhairya Dalal, Paul Buitelaar, and Mihael Arcan. 2023. Calm-bench: A multi-task
+benchmark for evaluating causality-aware language models. In Findings of the
+Association for Computational Linguistics: EACL 2023 . 296–311.
+[8] Andrew S. Gordon, Zornitsa Kozareva, and Melissa Roemmele. 2011. Choice
+of Plausible Alternatives: An Evaluation of Commonsense Causal Reasoning.
+In AAAI Spring Symposium: Logical Formalizations of Commonsense Reasoning .
+https://api.semanticscholar.org/CorpusID:434646
+[9] José Hernández-Orallo, Wout Schellaert, and Fernando Martínez-Plumed. 2022.
+Training on the test set: Mapping the system-problem space in AI. In Proceedings
+of the AAAI conference on artificial intelligence , Vol. 36. 12256–12261.
+[10] Edward J Hu, yelong shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+Wang, Lu Wang, and Weizhu Chen. 2022. LoRA: Low-Rank Adaptation of Large
+Language Models. In International Conference on Learning Representations . https:
+//openreview.net/forum?id=nZeVKeeFYf9
+[11] Jie Huang and Kevin Chen-Chuan Chang. 2023. Towards Reasoning in Large
+Language Models: A Survey. In Findings of the Association for Computational
+Linguistics: ACL 2023 , Anna Rogers, Jordan Boyd-Graber, and Naoaki Okazaki
+(Eds.). Association for Computational Linguistics, Toronto, Canada, 1049–1065.
+https://doi.org/10.18653/v1/2023.findings-acl.67
+[12] Lifu Huang, Ronan Le Bras, Chandra Bhagavatula, and Yejin Choi. 2019. Cosmos
+QA: Machine Reading Comprehension with Contextual Commonsense Reasoning.
+In Conference on Empirical Methods in Natural Language Processing . https:
+//api.semanticscholar.org/CorpusID:202540590
+[13] Qian Huang, Jian Vora, Percy Liang, and Jure Leskovec. 2024. Benchmarking
+Large Language Models as AI Research Agents. https://openreview.net/forum?
+id=N9wD4RFWY0
+[14] Shumaila Javaid, Nasir Saeed, and Bin He. 2024. Large Language Models for
+UAVs: Current State and Pathways to the Future. arXiv:2405.01745 [cs.AI]
+[15] Henry F Kaiser. 1958. The varimax criterion for analytic rotation in factor analysis.
+Psychometrika 23, 3 (1958), 187–200.
+[16] Geunwoo Kim, Pierre Baldi, and Stephen McAleer. 2024. Language models can
+solve computer tasks. Advances in Neural Information Processing Systems 36
+(2024).
+[17] Alex Kipnis, Konstantinos Voudouris, Luca M Schulze Buschoff, and Eric Schulz.
+2024. metabench–A Sparse Benchmark to Measure General Ability in Large
+Language Models. arXiv preprint arXiv:2407.12844 (2024).
+[18] Aditya Kusupati, Gantavya Bhatt, Aniket Rege, Matthew Wallingford, Aditya
+Sinha, Vivek Ramanujan, William Howard-Snyder, Kaifeng Chen, Sham Kakade,
+Prateek Jain, et al. 2022. Matryoshka representation learning. Advances in Neural
+Information Processing Systems 35 (2022), 30233–30249.
+[19] Percy Liang, Rishi Bommasani, Tony Lee, Dimitris Tsipras, Dilara Soylu, Michi-
+hiro Yasunaga, Yian Zhang, Deepak Narayanan, Yuhuai Wu, Ananya Kumar, et al.
+2022. Holistic evaluation of language models. arXiv preprint arXiv:2211.09110
+(2022).
+[20] Percy Liang, Yifan Mai, Josselin Somerville, Farzaan Kaiyom, Tony Lee, and Rishi
+Bommasani. [n. d.]. HELM Lite: Lightweight and Broad Capabilities Evaluation.
+https://crfm.stanford.edu/2023/12/19/helm-lite.html. Accessed: 2024-06-06.
+[21] Kevin Lin, Oyvind Tafjord, Peter Clark, and Matt Gardner. 2019. Reasoning Over
+Paragraph Effects in Situations. In Conference on Empirical Methods in Natural
+Language Processing . https://api.semanticscholar.org/CorpusID:201058633
+[22] Alisa Liu, Swabha Swayamdipta, Noah A Smith, and Yejin Choi. 2022. Wanli:
+Worker and ai collaboration for natural language inference dataset creation.arXiv
+preprint arXiv:2201.05955 (2022).
+[23] Hanmeng Liu, Jian Liu, Leyang Cui, Zhiyang Teng, Nan Duan, Ming Zhou, and
+Yue Zhang. 2023. LogiQA 2.0—An Improved Dataset for Logical Reasoning in
+Natural Language Understanding. IEEE/ACM Transactions on Audio, Speech, and
+Language Processing 31 (2023), 2947–2962. https://doi.org/10.1109/TASLP.2023.
+3293046
+[24] Man Luo, Shrinidhi Kumbhar, Mihir Parmar, Neeraj Varshney, Pratyay Banerjee,
+Somak Aditya, Chitta Baral, et al. 2023. Towards logiglue: A brief survey and
+a benchmark for analyzing logical reasoning capabilities of language models.
+arXiv preprint arXiv:2310.00836 (2023).
+[25] Tomas Mikolov, Kai Chen, Gregory S. Corrado, and Jeffrey Dean. 2013. Efficient
+Estimation of Word Representations in Vector Space. InInternational Conference
+on Learning Representations . https://api.semanticscholar.org/CorpusID:5959482
+[26] Philipp Mondorf and Barbara Plank. 2024. Beyond Accuracy: Evaluating the
+Reasoning Behavior of Large Language Models–A Survey. arXiv preprint
+arXiv:2404.01869 (2024).
+[27] Jinjie Ni, Fuzhao Xue, Xiang Yue, Yuntian Deng, Mahir Shah, Kabir Jain, Graham
+Neubig, and Yang You. 2024. MixEval: Deriving Wisdom of the Crowd from LLM
+Benchmark Mixtures. arXiv preprint arXiv:2406.06565 (2024).
+[28] Yixin Nie, Adina Williams, Emily Dinan, Mohit Bansal, Jason Weston, and Douwe
+Kiela. 2019. Adversarial NLI: A New Benchmark for Natural Language Under-
+standing. ArXiv abs/1910.14599 (2019). https://api.semanticscholar.org/CorpusID:
+207756753
+[29] OpenAI. 2023. Why the API output is inconsistent even after the temperature is
+set to 0. https://community.openai.com/t/why-the-api-output-is-inconsistent-
+even-after-the-temperature-is-set-to-0/329541/9. Accessed: 2024-06-05.
+[30] OpenAI. 2024. Deprecation Information. https://platform.openai.com/docs/
+deprecations. Accessed: 2024-06-04.
+[31] OpenAI. 2024. New embedding models and API updates. https://openai.com/
+index/new-embedding-models-and-api-updates/. Accessed: 2024-06-06.
+[32] David Owen. 2024. How predictable is language model benchmark performance?
+arXiv preprint arXiv:2401.04757 (2024).
+[33] Felipe Maia Polo, Lucas Weber, Leshem Choshen, Yuekai Sun, Gongjun Xu,
+and Mikhail Yurochkin. 2024. tinyBenchmarks: evaluating LLMs with fewer
+examples. In ICLR 2024 Workshop on Mathematical and Empirical Understanding
+of Foundation Models . https://openreview.net/forum?id=CN4xL9IYRO
+[34] Yangjun Ruan, Chris J Maddison, and Tatsunori Hashimoto. 2024. Observational
+Scaling Laws and the Predictability of Language Model Performance. arXiv
+preprint arXiv:2405.10938 (2024).
+[35] Charlotte Siska, Katerina Marazopoulou, Melissa Ailem, and James Bono. 2024.
+Examining the robustness of LLM evaluation to the distributional assumptions
+of benchmarks. In Proceedings of the 62nd Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers) , Lun-Wei Ku, Andre Martins,
+and Vivek Srikumar (Eds.). Association for Computational Linguistics, Bangkok,
+Thailand, 10406–10421. https://aclanthology.org/2024.acl-long.560
+[36] Aarohi Srivastava, Abhinav Rastogi, Abhishek Rao, Abu Awal Md Shoeb,
+Abubakar Abid, Adam Fisch, Adam R Brown, Adam Santoro, Aditya Gupta,
+Adrià Garriga-Alonso, et al. 2022. Beyond the imitation game: Quantifying and
+extrapolating the capabilities of language models. arXiv preprint arXiv:2206.04615
+(2022).
+[37] Zhiyang Teng, Ruoxi Ning, Jian Liu, Qiji Zhou, Yue Zhang, et al. 2023. GLoRE:
+Evaluating Logical Reasoning of Large Language Models. arXiv preprint
+arXiv:2310.09107 (2023).
+[38] Rajan Vivek, Kawin Ethayarajh, Diyi Yang, and Douwe Kiela. 2024. Anchor
+Points: Benchmarking Models with Much Fewer Examples. In Proceedings of the
+18th Conference of the European Chapter of the Association for Computational
+Linguistics (Volume 1: Long Papers) , Yvette Graham and Matthew Purver (Eds.).
+Association for Computational Linguistics, St. Julian’s, Malta, 1576–1601. https:
+//aclanthology.org/2024.eacl-long.95
+[39] Yudong Wang, Chang Ma, Qingxiu Dong, Lingpeng Kong, and Jingjing Xu.
+2023. A Challenging Benchmark for Low-Resource Learning. arXiv preprint
+arXiv:2303.03840 (2023).
+[40] Qinyuan Ye, Harvey Yiyun Fu, Xiang Ren, and Robin Jia. 2023. How Predictable
+Are Large Language Model Capabilities? A Case Study on BIG-bench. In The
+2023 Conference on Empirical Methods in Natural Language Processing . https:
+//openreview.net/forum?id=XMpzcC9L5z
+[41] Weihao Yu, Zihang Jiang, Yanfei Dong, and Jiashi Feng. 2020. ReClor: A Reading
+Comprehension Dataset Requiring Logical Reasoning. ArXiv abs/2002.04326
+(2020). https://api.semanticscholar.org/CorpusID:209485573
+[42] Lexin Zhou, Fernando Martínez-Plumed, José Hernández-Orallo, Cèsar Ferri, and
+Wout Schellaert. 2022. Reject Before You Run: Small Assessors Anticipate Big
+Language Models.. In EBeM@ IJCAI .
+[43] Lexin Zhou, Pablo A Moreno-Casares, Fernando Martínez-Plumed, John Burden,
+Ryan Burnell, Lucy Cheke, Cèsar Ferri, Alexandru Marcoci, Behzad Mehrbakhsh,
+Yael Moros-Daval, et al. 2023. Predictable Artificial Intelligence. arXiv preprint
+arXiv:2310.06167 (2023).
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+A Appendix / supplemental material
+A.1 More information on the considered and
+excluded scenarios from HELM-Lite
+As mentioned in the main text, we discard some scenarios and
+subscenarios from HELM-Lite as either the performance metric
+was non-binary or because the available results used a different
+number of few-shot prompts for different LLMs. In particular, we
+discard the following:
+•LegalBench:
+– corporate lobbying - incoherent number of few-shots across
+LLMs
+•MATH:
+– algebra - incoherent number of few-shots across LLMs
+– geometry - incoherent number of few-shots across LLMs
+– intermediate algebra - incoherent number of few-shots
+across LLMs
+•NarrativeQA: non-binary metric (f1 score)
+•NaturalQuestions: non-binary metric (f1 score)
+•WMT 2014: non-binary metric (BLEU score)
+As such, the subset of HELM-Lite that we consider through-
+out our experiments is made up of the following scenarios and
+subscenarios:
+•commonsense
+•GSM8K
+•MedQA
+•LegalBench:
+– abercrombie
+– function of decision section
+– proa
+– international citizenship questions
+•MATH:
+– counting and probability
+– number theory
+– prealgebra
+– precalculus
+•MMLU:
+– abstract algebra
+– college chemistry
+– computer security
+– econometrics
+– US foreign policy
+A.2 The KindsOfReasoning collection
+Table 4 shows detailed information on the datasets included in the
+KindsOfReasoning collection. For some datasets, we only kept a
+smaller number of instances than the one available, to reduce the
+cost of evaluating a model on the full benchmark. We do not do this
+for the “Arithmetic” dataset as each of the prompt of that dataset
+is short, and hence the cost of evaluating it is small (besides, we
+use Arithmetic as the test data for one of our chosen splits, and
+subsampling it would have made the test data too small).
+Most of the datasets included in this collection are present in
+one (or more) of BIG-Bench [ 36], LogiGLUE [ 24], CALM-bench
+[7] and GLoRE [ 37]. However, as mentioned in the main text 2,
+our collection covers more kinds of reasoning. The dataset and
+the instance-level results of all instruct-GPT models from Ope-
+nAI (fromtext-ada-001 to gpt4-0125-preview will be released
+at anonymised).
+A.3 Additional results with other features in
+the specific assessor setup
+Figures 3 and 4 show performance of the specific assessor setup us-
+ing different features intrinsic to the prompt, for different data splits
+of the KindsOfReasoning and HELM-Lite collections respectively.
+In particular, for each figure, the top panel shows performance on
+Dval, while the latter shows performance on Dtest, for the clas-
+sifier selected according to its best performance on Dval. On the
+validation data, the performance of the OpenAI embeddings is gen-
+erally higher and, as such, the experiments reported in the main
+text are with this choice of embeddings. However, the performance
+on Dtest for the OOD splits show a mixed picture, with the OpenAI
+embeddings often performing worse than simpler ones (such as
+Word2Vec) and with generally lower performance.
+A.4 How many OpenAI embeddings are needed?
+Figures 5 and 6 show performance of the specific assessor using the
+OpenAI embeddings truncated at different vector sizes, for different
+data splits of the KindsOfReasoning and HELM-Lite collections
+respectively. In particular, for each figure, the top panel shows
+performance on Dval, while the latter shows performance onDtest,
+for the classifier selected according to its best performance onDval.
+The performance on Dval (and Dtest for the in-distribution split)
+plateaus when the truncation size reaches 1024 and, as such, all
+the results reported in the main text are with that truncation size.
+On Dtest for the various OOD splits, the performance does not
+follow a smooth curve, but still seems to peak more often around a
+truncation size of 1024.
+A.5 Control for number of training samples in
+the KindsOfReasoning collection
+Figure 7 shows the difference between the AUC of a specific assessor
+trained on the full Dtrain and one trained on a random subsample
+of Dtrain of size 3000, for different choices of the random split for
+the KindsOfReasoning collection. The difference is small on Dval
+(notice the 𝑦scale of the graphs) and generally small for Dtest for
+all data splits, except for OOD 1, which reaches higher absolute
+values on both sides of 0.
+A.6 Impact of the number of reference points
+Figures 8 and 9 show the performance of the generic assessor in pre-
+dicting the performance of Lval on Dval (top panels) and Ltest on
+Dtest, for different values of the number of reference points selected,
+for different splits of the KindsOfReasoning and HELM-Lite collec-
+tion respectively. In particular, this experiment was conducted by
+considering only one selector method (clustering on embeddings)
+7I use the multiple-choice version rather than the NLI one; moreover, the source I used
+shuffled the order of options and replaced the correct option with “none is correct”, so
+the model should always select that.
+11The source I used shuffled the order of options and replaced the correct option with
+“none is correct”, so the model should always select that.
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+Table 4: Datasets used in building the KindsOfReasoning collection. See Appendix A.2 for information on the column meanings.
+Task name Reasoning type Used in Task Type Used
+split
+N sam-
+ples
+N sam-
+ples
+used
+Notes Source
+used
+formal fallacies
+syllogisms negation
+[36]
+Logical reasoning BIG-Bench Valid/invalid - 14200 1000 - BIG-Bench
+logical_args [36] Logical reasoning
+common sense
+BIG-Bench MC (5) - 32 32 - BIG-Bench
+babi_task_16 [36] inductive reasoning LogiGLUE 1-word answer test 5000 1000 - BIG-Bench
+LogiQA 2.0 [23] deductive reason-
+ing
+LogiGLUE
+GLoRE
+MC (4) validation 1569 1569 10 OpenAI
+evals
+library
+wanli [22] deductive reason-
+ing
+LogiGLUE NLI test 5000 1000 Slightly modified
+the prefix
+LogiGLUE
+alpha_nli [3] abductive CALM-
+bench
+LogiGLUE
+MC (2) test 1432 1000 Changed from NLI
+to MC format
+LogiGLUE
+reclor [41] abductive, induc-
+tive,
+deductive reason-
+ing
+LogiGLUE
+GLoRE
+MC (4 options) test 500 500 11 OpenAI
+evals
+library
+crass_ai [36] Counterfactual rea-
+soning
+BIG-Bench MC (5 options) - 44 44 - BIG-Bench
+cause and effect
+[36]
+Causal reasoning BIG-Bench MC (2) - 102 102 Over 2 different for-
+mats
+BIG-Bench
+fantasy reasoning
+[36]
+Causal reasoning BIG-Bench Yes/No - 201 201 - BIG-Bench
+goal step inference
+[36]
+Causal reasoning BIG-Bench MC (4) - 7053 3000 Over 3 subtasks BIG-Bench
+Copa [8] Causal reasoning,
+world knowledge
+CALM-
+bench
+MC (2) test 500 500 - Original
+source
+Cosmos_qa [12] Causal reasoning,
+world knowledge
+CALM-
+bench
+MC (4) validation 2985 2985 use validation set as
+the test set does not
+have labels.
+HuggingFace
+ropes[21] Causal reasoning,
+world knowledge
+CALM-
+bench
+Completion validation 1688 1688 use validation set as
+the test set does not
+have labels.
+HuggingFace
+Anli [28] Causal reasoning,
+world knowledge
+LogiGLUE NLI test 3200 3200 Merged the 3
+“rounds” (levels of
+difficulty) together
+Original
+source
+Emoji_movie [36] analogical reason-
+ing, world knowl-
+edge
+BIG-Bench MC (5) - 100 100 - BIG-Bench
+abstract narrative
+understanding [36]
+analogical reason-
+ing
+BIG-Bench MC (10 and 100) - 2000 2000 Over 2 subtasks (9
+and 99 distractors;
+I discarded the one
+with 4 distractors)
+BIG-Bench
+odd one out [36] analogical reason-
+ing
+BIG-Bench MC (variable
+number)
+- 86 86 - BIG-Bench
+metaphor under-
+standing [36]
+analogical reason-
+ing
+BIG-Bench True/False - 680 680 - BIG-Bench
+geometric shapes
+[36]
+Spatial reasoning BIG-Bench MC (10) - 360 360 - BIG-Bench
+Space_nli [1] Spatial reasoning - NLI - 1604 1604 - Original
+source
+Arithmetic [36] Arithmetic ability BIG-Bench Completion - 15023 15023 Over 20 subtasks BIG-Bench
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+(a) AUC with different choices of instance-intrinsic features on Dval.
+(b) AUC with different choices of instance-intrinsic features on Dtest.
+Figure 3: AUC with different choices of instance-intrinsic features (OpenAI embeddings, Word2Vec, FastText and 1-gram),
+for different splits on KindsOfReasoning. For each split and feature, various classifiers were trained on Dtrain and the best
+according to its performance on Dval was selected; the panels report the performance of the latter on Dval and Dtest.
+and one base classifier (XGBoost); the results show the perfor-
+mances using various choices of the instance-intrinsic features.
+Broadly, it can be seen as the performance on Dval roughly peaks
+around 30 reference instances (although a few cases are roughly
+constant and some others show a drop for very high number of
+reference instances). No clear trend can instead be seen for the
+performance on Dtest for the OOD splits.
+Received 20 February 2007; revised 12 March 2009; accepted 5 June 2009
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+(a) AUC with different choices of instance-intrinsic features on Dval.
+(b) AUC with different choices of instance-intrinsic features on Dtest.
+Figure 4: AUC with different choices of instance-intrinsic features (OpenAI embeddings, Word2Vec, FastText and 1-gram), for
+different splits on HELM-Lite. For each split and feature, various classifiers were trained on Dtrain and the best according to its
+performance on Dval was selected; the panels report the performance of the latter on Dval and Dtest.
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0AUROC_val
+split = In distribution
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+split = OOD 1
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+split = OOD 2
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+split = OOD 3
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+split = OOD 4
+Features
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+(a) AUC with increasing number of OpenAI embeddings on Dval.
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0AUROC_test
+split = In distribution
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+split = OOD 1
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+split = OOD 2
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+split = OOD 3
+1
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+2048
+3072
+embedding_size
+split = OOD 4
+Features
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+(b) AUC with increasing number of OpenAI embeddings on Dtest.
+Figure 5: AUC with increasing number of OpenAI embeddings for specific assessors trained on increasing number of OpenAI
+embeddings, for different splits on KindsOfReasoning. For each split and number of embeddings, various classifiers were
+trained on Dtrain and the best according to its performance on Dval was selected; the panels report the performance of the
+latter on Dval and Dtest.
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+(a) AUC with increasing number of OpenAI embeddings on Dval.
+(b) AUC with increasing number of OpenAI embeddings on Dtest.
+Figure 6: AUC with increasing number of OpenAI embeddings for specific assessors trained on increasing number of OpenAI
+embeddings, for different splits on HELM-Lite. For each split and number of embeddings, various classifiers were trained on
+Dtrain and the best according to its performance on Dval was selected; the panels report the performance of the latter on Dval
+and Dtest.
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+0.02
+0.00
+0.02
+0.04
+0.06
+AUROC - AUROC_subsampled
+split = OOD 4
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+split = In distribution
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+split = OOD 1
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+split = OOD 2
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+split = OOD 3
+features
+openai
+fasttext
+ngrams_1
+word2vec
+(a) Dval.
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+0.4
+0.2
+0.0
+0.2
+0.4
+0.6
+AUROC - AUROC_subsampled
+split = OOD 4
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+split = In distribution
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+split = OOD 1
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+split = OOD 2
+text-ada-001
+text-babbage-001
+text-curie-001
+text-davinci-001
+text-davinci-002
+text-davinci-003
+gpt-3.5-turbo-0301
+gpt-3.5-turbo-0613
+gpt-3.5-turbo-1106
+gpt-3.5-turbo-0125
+gpt-4-0314
+gpt-4-0613
+gpt-4-1106-preview
+gpt-4-0125-preview
+llm
+split = OOD 3
+features
+openai
+fasttext
+ngrams_1
+word2vec
+(b) Dtest.
+Figure 7: Difference between the AUC of a specific assessor trained on the full Dtrain and one trained on a random subsample of
+Dtrain of size 3000, for different choices of the random split for the KindsOfReasoning collection. Positive values indicate better
+performance of the specific assessor trained on the full Dtrain, and viceversa. For each split and feature, various classifiers
+were trained on Dtrain and the best according to its performance on Dval was selected; the panels report the difference in
+performance of the latter on Dval and Dtest.
+GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain. Lorenzo Pacchiardi, Lucy Cheke, and José Hernández-Orallo
+(a) AUC with increasing number of reference instances on Dval.
+1
+3
+10
+30
+100
+300
+1000
+n_ref
+0.2
+0.4
+0.6
+0.8AUROC
+split = In distribution
+1
+3
+10
+30
+100
+300
+1000
+n_ref
+split = OOD 1
+1
+3
+10
+30
+100
+300
+1000
+n_ref
+split = OOD 2
+1
+3
+10
+30
+100
+300
+1000
+n_ref
+split = OOD 3
+1
+3
+10
+30
+100
+300
+1000
+n_ref
+split = OOD 4 Features
+gpt-4-0125-preview, Embeddings
+gpt-4-0125-preview, Similarity
+gpt-4-0125-preview, Similarity with interaction
+gpt-4-0314, Similarity
+gpt-4-0314, Similarity with interaction
+gpt-4-0314, Embeddings
+gpt-4-0613, Similarity with interaction
+gpt-4-0613, Similarity
+gpt-4-0613, Embeddings
+gpt-4-1106-preview, Embeddings
+gpt-4-1106-preview, Similarity with interaction
+gpt-4-1106-preview, Similarity
+(b) AUC with increasing number of reference instances on Dtest.
+Figure 8: AUC for generic assessors trained with an increasing number reference instances in Dref, for different splits on
+KindsOfReasoning. To produce this plot, only one possible selector (clustering on the OpenAI embeddings) and one classifier
+(XGBoost) were considered. For each split and number of reference instances, the results show the validation and test AUC
+with different choices of the instance-intrinsic features, for all test LLMs.
+100 instances is all you need GenAI Evaluation KDD2024, August 25, 2024, Barcelona, Spain.
+(a) AUC with increasing number of reference instances on Dval.
+(b) AUC with increasing number of reference instances on Dtest.
+Figure 9: AUC for generic assessors trained with an increasing number reference instances in Dref, for different splits on
+HELM-Lite. To produce this plot, only one possible selector (clustering on the OpenAI embeddings) and one classifier (XGBoost)
+were considered. For each split and number of reference instances, the results show the validation and test AUC with different
+choices of the instance-intrinsic features, for all test LLMs.

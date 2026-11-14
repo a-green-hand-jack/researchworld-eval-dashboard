@@ -1,0 +1,796 @@
+[PDF PAGE 1]
+Anchor Points: Benchmarking Models with Much Fewer Examples
+Rajan Vivek, Kawin Ethayarajh, Diyi Yang, Douwe Kiela
+Stanford University
+{rvivek, kawin, diyiy, dkiela}@stanford.edu
+Abstract
+Modern language models often exhibit power-
+ful but brittle behavior, leading to the develop-
+ment of larger and more diverse benchmarks to
+reliably assess their behavior. Here, we suggest
+that model performance can be benchmarked
+and elucidated with much smaller evaluation
+sets. We first show that in six popular lan-
+guage classification benchmarks, model con-
+fidence in the correct class on many pairs of
+points is strongly correlated across models. We
+build upon this phenomenon to proposeAnchor
+Point Selection, a technique to select small sub-
+sets of datasets that capture model behavior
+across the entire dataset. Anchor points reli-
+ably rank models: across 87 diverse language
+model-prompt pairs, evaluating models using
+1-30 anchor points outperforms uniform sam-
+pling and other baselines at accurately ranking
+models. Moreover, just a dozen anchor points
+can be used to estimate model per-class predic-
+tions on all other points in a dataset with low
+error, sufficient for gauging where the model is
+likely to fail. Lastly, we present Anchor Point
+Maps for visualizing these insights and facilitat-
+ing comparisons of the performance of different
+models on various regions within the dataset
+distribution.
+1 Introduction
+Language models have unlocked incredible general-
+ization through scaling up parameters and pretrain-
+ing data. Yet these same systems prove to be brittle,
+spurring the development of larger, more diverse,
+and more shrewd benchmarks to reliably assess
+their behavior (Rajpurkar et al., 2016; Hendrycks
+et al., 2021; Kiela et al., 2021; Wu et al., 2023).
+Modern benchmarks typically have on the order
+of 105 validation examples, with 103 − 104 per
+task. Such numbers ensure that validation perfor-
+mance strongly correlates with test performance
+and that all in-domain regions are captured. But
+these sizes are often unwieldy for rapid experimen-
+tation and do not easily afford interpretability. To
+Figure 1: SST-2 Validation Set Anchor Point Map. The
+locations of all 872 points are learned using the pre-
+dictions of N = 60randomly-selected source models
+on SST-2. (Note N can be as small as 10; see Table
+3). We then evaluate a held-out model, Falcon-7B, on
+30 anchor points (green triangles). The model’s predic-
+tions on only these 30 points are used to estimate the
+Falcon-7B predictions on the remaining 842 points with
+a mean absolute error of 0.09, achieving 92% agreement
+with the model’s true predictions. The anchor points
+identify regions where the model is weak (red regions).
+We show the same Anchor Point Map colored by the
+true Falcon-7B predictions in Figure 9, demonstrating
+that the model is indeed weak in these areas.
+compare model configurations, design the most ro-
+bust prompt, or analyze failure cases, researchers
+and practitioners must forward-pass (and poten-
+tially manually inspect) the development set many
+times. How small can benchmark development sets
+be while still capturing model behavior over the
+full breadth of the benchmark? Surprisingly, very
+small—just several to a few dozen examples might
+suffice.
+In this work, we investigate the problem of
+benchmarking model performance and revealing
+model weaknesses on large datasets with as few
+evaluation examples as possible, an objective we
+arXiv:2309.08638v2  [cs.CL]  18 Feb 2024
+[PDF PAGE 2]
+Figure 2: Anchor Points are Micro-Benchmarks, tiny
+representative subsets of large benchmarks. Correlative
+structure in the predictions of source models on the large
+benchmark can be used to extract these points. Each
+anchor point has a weight corresponding to the fraction
+of the benchmark it represents. Evaluating models on
+the anchor points produces a score that rank correlates
+with performance on the entire benchmark. Anchor
+Point Maps visualize a given model’s likely instance-
+level performance on all points in the benchmark using
+only its performance on the anchor points.
+call micro-benchmarking. We propose Anchor
+Point Selection, a technique that finds small eval-
+uation sets that are maximally representative of
+model behavior over the entirety of a large dataset.
+We find that anchor points are effective develop-
+ment sets: across 87 diverse language models and
+prompts, using 1-30 anchor points shows superior
+performance at ranking model performance over
+random and embedding-based selection baselines.
+Moreover, evaluating just a dozen anchor points
+can be used to predict the model’s instance-level
+predictions on all other points in the dataset with
+high agreement on average, sufficient to estimate
+where models are likely to fail.
+Our approach builds upon a simple insight: for
+many pairs of points from a given dataset, the
+predicted probability of the correct class strongly
+correlates across models. Thus, evaluating every
+model on the entirety of a dataset is redundant. The
+predictions of existing source models on a given
+dataset are telling about predictions of a new tar-
+get model, even across considerable performance
+gaps. This mirrors phenomena like Accuracy on
+the Line (Miller et al., 2021) and Agreement on the
+Line (Baek et al., 2022), but at a much more gran-
+ular scale. Anchor Points can be selected by iden-
+tifying dataset medoids in a space where distance
+is a positive, monotonically decreasing function
+of cross-model correlations between points. We
+further propose to visualize this space using multi-
+dimensional scaling and U-MAP (McInnes et al.,
+2018), which we call Anchor Point Maps. Anchor
+Point Maps show what region each anchor point
+captures and highlight that different models and
+prompts may struggle on different dataset regions,
+allowing fine-grained comparisons.
+Emphatically, we do not aim to replace large
+benchmarks, but rather provide cheaper signal
+about model performance on these benchmarks
+to help accelerate the development of models and
+prompts. We also strive to be blunt about the limi-
+tations of our technique. Anchor point generaliza-
+tion relies on the predictive correlations of source
+models being consistent with that of target models.
+This is not always the case, leading to poor gen-
+eralization to specific target models depending on
+the choice of source models. We share simple rules
+of thumb to promote this source-target consistency,
+but lack rigorous theory to guide source model se-
+lection. We lay foundations for further research
+into model predictive correlations and efficient, in-
+terpretable model evaluation.
+2 Related Work
+Sample-Efficient Model Evaluation We devi-
+ate from prior sample-efficient model evaluation
+literature along key axes. Many works (Kossen
+et al., 2021a,b; Deng and Zheng, 2021; Corneanu
+et al., 2020) minimize evaluation annotation costs
+by actively selecting points to annotate for evaluat-
+ing a given model. In the era of large benchmarks
+and large models, labeled evaluation examples are
+widely-available but evaluating all of them is cum-
+bersome. Our technique instead minimizes the
+number of forward-passed examples necessary for
+reliable model evaluation. Furthermore, our se-
+lection strategy is agnostic to the target model(s)
+being evaluated. The resulting evaluation set is
+[PDF PAGE 3]
+transferable to other language models.
+Other works (Rodriguez et al., 2021; Ethayarajh
+et al., 2022; Bowman and Dahl, 2020) point out
+that it is often a minority of points that differentiate
+the performance of various models. Rodriguez
+et al. (2021) show that evaluating models on points
+identified as the most discriminative can effectively
+rank model performance. However, optimizing for
+discriminability does not result in representative
+subsets: very easy or very hard points will tend
+to be excluded, leading to a different distribution.
+Instead, we optimize for representativeness which
+we show naturally leads to discriminability.
+Instance-Level Model Performance Despite be-
+ing noisy (Zhong et al., 2021), instance-level
+model predictions are a rich source of information
+about model behavior. Swayamdipta et al. (2020)
+present Data Maps, a powerful technique that lever-
+ages instance-level predictions to reveal underlying
+structure in the interplay of models and data points.
+Various training example regions play distinct roles
+in guiding a classifier to its solution. Unlike our
+technique, Data Maps are not used for comparing
+model performance or isolating distinct regions of
+the dataset distribution where models are weak.
+Ethayarajh et al. (2022) further show that
+instance-level predictions can be used to quantify
+how much information a given model can extract
+from a dataset, providing a formal metric of dataset
+difficulty that exposes model behavior at the dataset
+and data point level.
+Predictive Correlations across Models Miller
+et al. (2021) present the Accuracy on the Line phe-
+nomenon: out-of-distribution (OOD) performance
+is strongly positively correlated with in-distribution
+(ID) performance for a wide range of models and
+distribution shifts. This unexplained by classical
+theory which provides only weak bounds relating
+the two metrics (Ben-David et al., 2018). Baek et al.
+(2022) further show that the agreement of two clas-
+sifiers on ID data strongly linearly correlates with
+their agreement on OOD data whenever Accuracy
+on the Line holds. Both phenomena can be used to
+cheaply estimate model OOD performance. Our
+findings presented in this work mirror these phe-
+nomena at a much more granular scale, i.e., data
+instances rather than data sets.
+Coresets Anchor Points can be interpreted as a
+coreset, broadly defined as a small "summary" of a
+large set of data (Feldman, 2020; Guo et al., 2022).
+Selecting dataset coresets for efficient model
+training is widely-explored in prior work, per-
+formed through various techniques including clus-
+tering (Kaufman and Rousseeuw, 2009; Reza Zan-
+jirani Farahani, 2009), gradient-matching (Mirza-
+soleiman et al., 2020; Killamsetty et al., 2021a),
+bi-level optimization (Borsos et al., 2020; Killam-
+setty et al., 2021b), and submodularity-based meth-
+ods (Kai Wei, 2015). We use a clustering-based
+approach, but focus on summarizing data for model
+evaluation rather than training.
+3 Problem Set-Up
+Let D = {(xi, yi)}Ki=1 be a language classification
+benchmark. D is partitioned into a training split
+Dtrain and one or more evaluation splits Deval,
+each drawn i.i.d fromD. We are givenM models to
+evaluate, denoted as the target set T = {ϕm}Mm=1.
+Each unique ϕm corresponds to a model fine-tuned
+on Dtrain or paired with a specific prompt template
+that directs the model at solving D. The dataset
+has an evaluation metric (accuracy, F1-score, etc.)
+to measure the aggregate performance Pm of each
+ϕm on an evaluation split Deval.
+We additionally have access to the instance-level
+predictions of a source set of N model and prompt
+template pairs S = {ϕn}Nn=1 over the entirety of
+Deval, where N ≥ 10 in practice. S and T are dis-
+joint. The predictions occupy an N × |Deval| ×Y
+tensor PS, where Y is the cardinality of the classifi-
+cation task. In practice, the N source models could
+be open-source models that can be run locally for
+free while target models might be closed-source
+and/or more expensive. Note that the one-time
+cost of evaluating these N models is offset by the
+innumerable amount of development-time evalua-
+tions that can be replaced with evaluations over the
+representative subset we will extract.
+Towards Micro-Benchmarking We aim to ex-
+tract a development set from a large benchmark
+that captures the benchmark’s broad coverage and
+reliable ranking power while being as small as
+possible, improving performance interpretability
+and evaluation efficiency. We refer to this objec-
+tive as micro-benchmarking. The technique must
+1) acquire a small representative subset of evalu-
+ation points from the large benchmark ( Xacq ⊆
+Deval, |Xacq| ≪ |Deval|), 2) leverage the predic-
+tions of target models {ϕm}Mm=1 on the subset to
+produce scores S1...M that correlate as much as pos-
+sible with model performances P1...M on the entire
+[PDF PAGE 4]
+dataset Deval, and 3) estimate instance-level perfor-
+mance on untested points from Deval. Note that the
+third objective is not essential to model benchmark-
+ing, but aids in achieving greater interpretability of
+model behavior.
+4 Micro-Benchmarking Approach
+We measure how well an example (x1, y1) repre-
+sents another example using the Pearson correla-
+tion of correct class confidence in the two exam-
+ples measured across the predictions of the source
+models in S = {ϕn}Nn=1. If our data is not anno-
+tated, we can instead compute Y Pearson correla-
+tions (one across each class) per example pair and
+average them. However, model confidences are
+bounded by [0, 1] and thus can only follow a linear
+trend for a bounded range. Akin to Miller et al.
+(2021), we take the logit transform of the confi-
+dences to scale the axes from [0,1] to [− inf, + inf]
+prior to computing correlations. We denote this
+composite function as CORR S. The task of se-
+lecting a Xacq that is maximally representative of
+Deval for all models in S reduces to solving a K-
+Medoids problem that maximizes the correlation
+between the selected and the remaining points:
+min
+Xacq
+BX
+i=1
+X
+xjeval∈Qi
+1 − CORR S(xiacq, xjeval) (1)
+where B is the number of anchor points and Qi
+is the set containing all xeval that are more strongly
+correlated with xiacq than any other xjacq. This ob-
+jective makes the assumption that the estimate for
+ϕm(xeval) leverages only the most strongly corre-
+lated ϕm(xiacq). We efficiently solve this objective
+using the Partitioning Around Medoids (PAM) al-
+gorithm (Kaufman and Rousseeuw, 2009).
+4.1 Anchor Point Techniques
+We present two techniques for leveraging anchor
+points to benchmark model performance with min-
+imal evaluation examples.
+Technique 1: Anchor Point Predictor We pro-
+pose the Anchor Points Predictor, an ensemble
+of univariate linear regression models that use
+model predictions on each anchor point to estimate
+predictions on all other points in Xeval. Specifi-
+cally, anchor point ϕ(xiacq) is used to estimate all
+ϕ(xeval) ∈ Qi. These instance-level prediction es-
+timates can then be used to detect regions of model
+weaknesses (see Section 4.1) and compute an es-
+timate of any performance metric for the target
+model. This technique requires that the trend lines
+fitted to source model predictions explains the vari-
+ance in target model predictions well. We explore
+when this is the case in Appendix A. Algorithms
+1 and 2 show pseudocode for fitting and making
+predictions with the Anchor Point Predictor Model.
+Technique 2: Anchor Point Weighted Score
+Rather than attempting to estimate exact model
+performance at the instance-level, we can aim to
+produce a score for each target model that highly
+correlates with the model’s performance on Deval.
+Using the predictions of the source model set S,
+we select N ∈ 1...B anchor points according to
+Equation 1. Each of these pointsxacq,i strongly cor-
+relates with a subset of the untested points inDeval,
+namely all xjeval ∈ Qi. We propose the Anchor
+Point Weighted (APW) score, a weighted average
+of the model’s correct class probability predictions
+on the anchor points with weights proportional to
+cluster size.
+AP W(ϕi) = 1|Deval| BXi=1 |Qi| ∗ϕi(xiacq)[yi] (2)
+Anchor Point Maps To highlight the insights
+provided by anchor points, namely model strengths
+and weaknesses in distinct regions of a dataset, we
+propose to visualize the cross-model correlative
+space from which anchor points are drawn. We
+compute pairwise correlations between all points
+using CORR S, creating a |Deval| × |Deval| corre-
+lation matrix C. We then represent the distance
+matrix Z as a positive, monotonically decreasing
+function of correlation: Z = 1 − C. Finally,
+we cast the points to a high-dimensional contin-
+uous space using Multi-Dimensional Scaling on
+Z and project the space to two components with
+U-MAP (McInnes et al., 2018). This technique
+visualizes the dataset in a space where a model’s
+performance on each point generalizes to the local
+neighborhood of that point.
+5 Predictive Correlations
+To motivate our approach, we first show that lan-
+guage models make predictions with consistent
+structure. For many pairs of points from a given
+dataset, the predicted probability of the correct
+class strongly correlates across models.
+[PDF PAGE 5]
+(a) Pairwise Correlation Matrix of ALL-Family Correct
+Class Confidences on 50 QQP Examples. Rich structure
+indicates the relatedness of various examples. Many are
+strongly correlated.
+(b) Correct Class Confidences of 87 Language Model
+Predictions from all model families on Two Selected QQP
+examples. A model correctly classifying one example
+is predictive of the model correctly classifying the other.
+This phenomenon is very common.
+Figure 3: Predictive Correlations at the Instance-Level Across Language Models
+Experimental Set-Up We obtain a diverse
+set of language models from HuggingFace
+and the OpenAI API: 27 BERT-family models,
+11 non-instruction-tuned GPT-family models, 5
+instruction-tuned GPT-family models, and 5 GPT-
+3/3.5 variants (all listed in Tables 9 - 10). We
+denote these model sets as the BERT-family, GPT-
+family, InstructGPT-family, and OpenAI-family
+respectively. For six datasets from the GLUE
+benchmark (Wang et al., 2019), we finetune each
+BERT-family model on the training split Dtrain
+and obtain its predicted probability of the correct
+class on each instance in the validation split Deval.
+For the other model families we zero-shot prompt
+for the same datasets using three multiple-choice
+prompts per dataset (Appendix D). We obtain the
+predicted probability of each class by performing
+softmax over the log probabilities of candidate an-
+swer sequences. Thus, we obtain a prediction ma-
+trix P for each model family and dataset with size
+Nsubjects × |Deval| matrix where Nsubjects = 27
+for PBERT , 30 for PGP T, 15 for PIGP T, 15 for
+POAI , and 87 for their union PALL.
+Model predictions on pairs of examples are
+linearly correlated across models. The predic-
+tion matrices are approximately low-rank for all
+tasks (Table 1). This can be attributed to a simple
+phenomenon: let ϕn(x1)[y] denote the probability
+mass (equivalently, model confidence) outputted by
+ϕn on x1 ∼ Deval for a given class y. We see that
+ϕn(x1)[y] often linearly correlates with the model’s
+prediction on a different instance ϕn(x2)[y] across
+models, i.e. ϕn(x2)[y] ≈ wϕn(x1)[y] +b, where
+w and b can be found by fitting a trend line through
+the correct class confidences of all source models.
+Figure 3 visualizes this phenomenon. We first
+observe that the correlation matrices of model pre-
+dictions on the same evaluation set show rich struc-
+ture. Figure 3(b) shows a QQP example pair that is
+strongly positively correlated across models from
+all families. This suggests that evaluating a model
+on both examples is redundant. This phenomenon
+is wide-spread: it holds for many pairs of exam-
+ples across the six GLUE tasks and 87 widely-used
+language models and prompts.
+Predictive Correlations Tend to Generalize
+Across Diverse Models Figure 6 in Appendix
+A shows how well the strong trends from each fam-
+ily transfer to other families. Errors are lowest in
+the bottom row, suggesting that using source mod-
+els that span all model families result in the most
+generalizable trend lines. We also observe that the
+predictive correlations of the BERT-family do not
+generalize well to other model families, which we
+explore further in Figure 8(b). However, most er-
+rors in the table are generally low, suggesting that
+predictive correlations tend to generalize across
+diverse models.
+6 Sample-Efficient Model Evaluation
+We now evaluate the anchor point techniques and
+compare against baselines for 1) selecting repre-
+[PDF PAGE 6]
+Task BERT GPT IGPT OAI ALL
+MNLI 20.1 10.07 30.07 40.1 30.09
+SST-2 10.08 20.05 20.09 30.1 20.09
+QQP 20.06 20.06 20.1 40.09 30.09
+RTE 20.07 20.06 20.08 30.1 20.08
+MRPC 20.08 40.1 30.09 70.1 70.1
+QNLI 10.08 20.08 30.09 70.09 30.09
+Table 1: Approximate matrix rank of the correct class
+probability predictions of four model families on six
+GLUE task validation sets. We compute low-rank ma-
+trix approximations for 27 BERT-family predictions,
+30 GPT-family predictions, 15 Instruction-tuned GPT-
+family predictions (IGPT), 15 OpenAI-family predic-
+tions (OAI), and all 87 model predictions (ALL) to-
+gether. The approximations achieve very low mean
+absolute error (indicated by the subscripts), despite their
+ranks being considerably smaller than the number of
+models in each family.
+sentative evaluation subsets to rank models 1 and
+2) estimating model instance-level performance on
+held-out points in Deval .
+Subset Selection Baselines and Metrics For
+baselines, we use uniform random sampling as
+well as K-Medoids sampling over the embedding
+spaces of a generic sentence encoder– Sentence-
+BERT (Reimers and Gurevych., 2019) – and an en-
+coder fine-tuned on the dataset– the CLS token of
+bert-base-uncased (Devlin et al., 2018). For these
+techniques, we use model performance on the se-
+lected points as the estimate of aggregate model
+performance on the entire dataset. We further con-
+sider variants of these baselines that consider model
+confidence. We propose mean model confidence
+in the correct class on randomly selected points as
+one baseline. We also propose to produce a score
+estimate for each model by computing a weighted
+average of the correct class probabilities assigned
+to each selected point. The weights are propor-
+tional to the size of each selected point’s cluster
+and sum to 1, akin to Anchor Points Weighted.
+To assess the ranking performance of each tech-
+nique, we compute the Kendall rank correlation
+coefficient (Kendall’sτ) for a range of anchor point
+set sizes and report the resulting Area Under the
+Correlation Curve (AUCC) from 1 to a maximum
+budget B. We then normalize AUCC by dividing
+by the best possible area. In the experiments we
+1We also evaluate anchor point techniques for ranking
+MMLU performance in Appendix B
+use B = 30, the small data regime for which it
+is reasonable for practitioners to manually inspect
+predictions.
+Prediction Estimation Baselines and Metrics
+We consider two naive baselines: 1) using the
+instance-level predictions of a randomly selected
+source model on Deval as the estimate of each tar-
+get model’s prediction and 2) using the mean pre-
+diction of all source models on each point in Deval
+as the estimate. We also propose Nearest Source
+Neighbor, a strategy where each target model’s
+predictions on k randomly selected points are com-
+pared to the predictions of all source models on
+the same points. We select the source model with
+the most similar predictions on these k points, as
+measured with L1-distance. The predictions of this
+source model on all other points in Deval are then
+used as the estimate of the target model’s predic-
+tions.
+To measure the performance of each technique,
+we use agreement– the percentage of points for
+which the estimation technique assigns the highest
+probability to the same class as the target model.
+Anchor Points Show Competitive Performance
+at Ranking Models with Small Evaluation Sets
+Table 2 shows the Kendal’sτ AUCC of the meth-
+ods for ranking 77 models belonging to all model
+families. These curves are shown in Figures 15
+and 16. Table 7 shows performance within each
+model family. Overall, we observe that Anchor
+Points Weighted outperforms random selection in
+29 of 30 settings and Anchor Points Predictor out-
+performs random selection in 27 of 30 settings.
+Anchor Points Weighted proves to be the strongest
+among all techniques, followed by Anchor Points
+Predictor. Very small anchor point sets achieve sur-
+prisingly strong correlation, serving as reliable eval-
+uation sets that can easily be inspected by eye (e.g.
+Figure 11). Moreover, we still observe these gains
+when source models are freely-available while all
+target models are closed-source (Table 4).
+Anchor Point Weighted Correlations Are Re-
+liable, Unlike Strong Contenders We observe
+that Anchor Point Weighted (APW) performance
+tends to be more reliable across evaluation set
+sizes and test settings than APP as well as the
+baselines. We suspect APW is more reliable than
+APP because it makes a weaker assumption that
+source model predictions simply follow similar cor-
+relations as target model predictions rather than
+[PDF PAGE 7]
+Random Random Pretrained Pretrained Fine-Tuned Fine-Tuned AP AP
+Mean Weighted Weighted Weighted Predictor
+Datasets Exact Corr Exact Corr Exact Corr Corr Exact
+SST-2 0.685 0.705 0.734 0.725 0.730 0.787 0.757 0.727
+QQP 0.669 0.678 0.189 0.233 0.766 0.770 0.756 0.701
+RTE 0.366 0.308 0.143 -0.052 0.354 0.275 0.483 0.462
+QNLI 0.321 0.331 0.192 0.294 0.127 0.144 0.439 0.303
+MRPC 0.687 0.679 0.528 0.604 0.641 0.681 0.726 0.716
+MNLI 0.438 0.433 0.177 0.166 0.523 0.453 0.544 0.517
+Average 0.528 0.522 0.327 0.328 0.523 0.518 0.612 0.571
+Table 2: Area Under the (Kendall’s τ) Correlation Curve from 1 to 30 points for ranking 77 language models at 6
+General Language Understanding tasks (GLUE). We randomly select 10 models to be source models for the AP
+methods and rank the remaining 77 models, averaging over 100 randomized runs. AP Weighted and AP Predictor
+show significant gains, which are most dramatic at smaller evaluation sets (Figures 15 and 16). "Exact" indicates
+the method generates a score that is intended to approximate the true aggregate performance directly, while "Corr"
+indicates the method generates a score intended only to rank correlate with true performance. The best score is
+bolded and second best score is underlined. Table 7 shows these results broken down by model family.
+closely matching the exact regression line fitted
+to the source model predictions. This is corrobo-
+rated by results in Appendix B with the MMLU
+dataset, where APW still demonstrates superior
+performance over baselines despite a small number
+of source models, but APP performance worsens.
+We observe inconsistent and sometimes erratic
+behavior in the embedding-based baselines. De-
+spite Fine-tuned and Fine-tuned Weighted base-
+lines collectively achieving the best performance
+in 10 settings, these baselines prove to be inconsis-
+tent: Fine-tuned and Fine-tuned Weighted perform
+worse than random in 12 and 10 settings, respec-
+tively. We suspect this is because language model
+embedding spaces are not always smooth and are
+likely to be inconsistent across models.
+Anchor Points Efficiently Estimate Model Pre-
+dictions The Anchor Point Predictor can estimate
+model performance at the instance-level over the
+entire dataset. Table 3 shows the average agree-
+ment between Anchor Point estimated instance-
+level model predictions and true model predictions
+using various numbers of anchor points and ran-
+domly selected source models. The estimates of a
+small number of anchor points achieve high aver-
+age agreement with true model predictions. How-
+ever, the source model correlations do not gener-
+alize well to all target models, resulting in lower
+agreement on these outlier models and thus large
+standard deviations in Table 3. As a general rule of
+thumb, selecting a source model set that is diverse
+(e.g. comes from multiple families, see Figure 6)
+results in the best generalization. Strategies for in-
+telligently selecting source models are a promising
+direction to resolve poor anchor point generaliza-
+tion, which we discuss further in Appendix A.
+Nearest Source Neighbor is a Strong Baseline
+Nearest Source Neighbor achieves competitive per-
+formance at estimating model instance-level pre-
+dictions. The agreement achieved by this technique
+is upper bounded by the agreement of each tar-
+get model and its true nearest source model neigh-
+bor (indicated by the B = |Deval| column in Table
+3). Surprisingly, comparing just B = 10random
+points closely approaches this bound, suggesting
+that the similarity of the predictions of different
+models can be approximated cheaply. Note that
+using B = 100anchor points surpasses the upper
+bound of this baseline on 3 of the 6 datasets.
+7 Sample-Efficient Model Analysis
+We now highlight how anchor point maps provide
+fine-grained analysis of model generalization both
+within and across datasets. This is achieved in a
+sample-efficient manner using the Anchor Point
+Predictor.
+Anchor Point Maps Visualize Where Models
+Generalize Anchor Point Maps reveal the extent
+to which models learn distinct regions of dataset
+distributions. Model performance on each sample
+correlates with performance in the sample’s neigh-
+borhood, allowing the Anchor Point Predictor to
+estimate where models will fail without evaluating
+the entire dataset. Figure 1 shows the SST-2 vali-
+dation set mapped by the predictions of 60 source
+models and then colored by estimated Falcon-7B
+[PDF PAGE 8]
+Random Source Mean Source Nearest Source Neighbor Anchor Points
+Dataset |Deval| B = 0 B = 0 B = 10 B = |Deval| B = 10 B = 100
+SST-2 872 0.630.23 0.740.17 0.830.16 0.840.15 0.830.12 0.840.11
+QQP 6000 0.540.28 0.590.22 0.840.15 0.850.14 0.810.13 0.830.14
+RTE 277 0.530.32 0.580.31 0.800.21 0.810.20 0.830.17 0.850.16
+QNLI 5463 0.600.26 0.650.23 0.780.19 0.790.19 0.760.17 0.750.15
+MRPC 408 0.530.26 0.560.20 0.800.15 0.820.14 0.790.14 0.840.11
+MNLI 6000 0.400.30 0.460.28 0.710.26 0.720.25 0.790.20 0.760.20
+Average – 0.54 0.60 0.79 0.81 0.80 0.81
+Table 3: Agreement of true target model predictions and estimated target model predictions for anchor points and
+baselines, where B indicates the number of points the target models are evaluated on. We randomly select 10 models
+to be source models and estimate the predictions of the remaining 77 models, averaging over 100 randomized runs.
+Anchor Points and Nearest Source Neighbor surpass the naive baselines by a large margin. Standard deviations
+(subscripts) remain large, indicating the presence of outlier models. The B = |Deval| column is shown only for
+reference to highlight that Anchor Points can surpass the upper bound of Nearest Source Neighbor performance.
+Note that standard errors can be computed by dividing the standard deviations by 10. The best score is bolded.
+predictions using thirty anchor points. These esti-
+mated predictions are quite faithful to the model’s
+true predictions (achieving 0.09 MAE and 92%
+agreement), revealing regions where the model is
+weak. This localization of model behavior starkly
+contrasts with typical language embedding spaces,
+where model performance tends to be non-localized
+(Figure 12). However, like embedding spaces, re-
+lated examples naturally cluster together.
+Anchor Points Predict Diverse Model Behavior
+Figure 5 in the Appendix shows four Anchor Point
+Maps of 1000 QQP points, comparing the true
+and estimated predictions of deberta-v3-base and
+text-davinci-003 using 30 anchor points. The two
+models are weak in distinct regions of the dataset.
+Despite deberta-v3-base achieving stronger perfor-
+mance overall, it fails in a region of the negative
+class cluster where text-davinci-003 is mostly cor-
+rect. This is perhaps related to "no-free lunch" theo-
+rems in statistical learning theory: different models
+have biases that will lend them to perform the best
+on different inputs (Ben-David and Shalev-Shwartz,
+2014), which is obscured by single-number evalua-
+tion metrics. The fact that the same set of anchor
+points can generalize to models with diverse behav-
+iors highlights that the same underlying predictive
+correlations can engender these different behaviors.
+We explore anchor point generalization further in
+Appendix A.
+Anchor Point Maps Reveal Patterns in Model
+Knowledge To explore the characteristics of an-
+chor points beyond basic language understand-
+ing tasks, we generate an anchor point map (Fig-
+ure 4(a)) using the predictions of 14 LLMs on 6
+MMLU datasets (Hendrycks et al., 2021). Each
+dataset contains multiple choice questions from a
+distinct domain, requiring substantial real-world
+knowledge to answer. We observe overlap of all
+domains in the anchor point map, but there is a
+remarkable amount of structure: models tend to
+have correlated performance on groups of questions
+from the same domain as well as related domains.
+This is quantified is Figure 4(b), which shows the
+distribution of domains of each question type’s 10
+nearest neighbors. On average, around 60% of the
+nearest neighbors of a high school physics ques-
+tion are also from the high school physics domain.
+In contrast, a nearest neighbor of a college chem-
+istry question is equally likely to be about college
+chemistry or clinical knowledge. This suggests that
+models with strong knowledge of college chem-
+istry are likely to have strong knowledge of clinical
+knowledge as well. This is perhaps due to frequent
+co-occurrence of these subjects in pre-training data.
+Anchor Points Capture Model Performance,
+Not Language Semantics Notably, Figure 4(b)
+reveals that high school physics and college physics
+questions are often not nearest neighbors, despite
+these datasets having the largest vocabulary over-
+lap (21%) of any pair within the 6 MMLU datasets
+(Figure 14). This highlights that the semantic simi-
+larity of two questions is often a poor proxy for sim-
+ilar model performance on the questions, explain-
+ing why embedding-based approaches to sample-
+efficient model evaluation tend to fail. Anchor
+Point Selection is more akin to test-distribution
+aware active learning, where points are selected
+based on the information they provide about future
+[PDF PAGE 9]
+(a) Anchor Point Map of 6 Combined MMLU datasets.
+The map is computed using the predictions of 13 source
+models. We color each point according to the dataset to
+which it belongs. We observe that all datasets overlap,
+but points tend to cluster with other points from the same
+dataset or a related dataset.
+(b) For each question type (i.e dataset), we show the dis-
+tribution of question types of its 10 nearest neighbors (on
+average). For example, the top row shows that 49% of
+the nearest neighbors of clinical knowledge (CK) ques-
+tions tend to also be clinical knowledge, while 19% tend
+to be high school European history (HSEH). Labels: CK =
+clinical knowledge, CC = college chemistry, CP = college
+physics, GF = global facts, HSES = high school European
+history, HSP = high school physics.
+Figure 4: Analysing Patterns in Model Knowledge using MMLU Anchor Point Map.
+model predictions (MacKay, 1992; Kirsch et al.,
+2021).
+8 Limitations
+Anchor Points Show Diminishing Returns We
+discuss in Appendix A that APW correlation begins
+to plateau as the evaluation set size grows to 100
+points due to an inherent upper bound. We also
+discuss that for large evaluation sets, anchor points
+can underperform random selection. More work
+is needed to develop methods that are robust to
+evaluation set size.
+Anchor Points Do Not Always Generalize In
+order for anchor points and anchor point maps to
+generalize, the predictive trends of source mod-
+els must be consistent with that of target models.
+While Table 7 shows that anchor points often trans-
+fer both within and across model families, the cor-
+relations of randomly selected source models do
+not necessarily generalize to all target models (e.g.
+Figure 13). We currently lack rigorous theory to
+guide source model selection for evaluation of a
+given set of target models.
+Anchor Points Can be Further Optimized In
+its current form, Anchor Point Maps require com-
+puting correlations between all pairs of points in the
+dataset. This is computationally expensive for huge
+datasets. Multi-dimensional scaling with missing
+values or correlation matrix completion could dra-
+matically decrease these costs.
+9 Conclusion and Future Work
+We present Anchor Point Selection, a technique
+that finds maximally-representative subsets from
+large datasets which can be used to efficiently rank
+models and estimate model behavior over the entire
+dataset. We also present Anchor Point Maps, a
+tool to visualize how well models generalize across
+various subsets of datasets.
+Important future work includes developing bet-
+ter theory underlying when models share predictive
+correlations and designing intelligent source model
+selection strategies to ensure anchor point general-
+ization to desired sets of target models.
+The fact that diverse language models make
+highly correlated predictions on many pairs of ex-
+amples suggests that modern benchmarks contain
+many redundant examples. An interesting future
+direction would be to use predictive correlations to
+guide benchmark development by selecting fewer
+redundant examples, which would ideally lead to
+more diverse and difficult benchmarks.
+The potential to extend Anchor Point Maps and
+Anchor Point Selection to tasks beyond language
+classification is exciting. Perhaps other continu-
+[PDF PAGE 10]
+ous performance metrics are strongly correlated
+between examples, such as BLEU scores or the
+rewards given by a reward model. Exploiting such
+phenomena could allow a dramatic reduction in the
+number of examples that modern language models
+must be evaluated on, leading to reduced costs for
+model development.
+Ethics Statement
+We aim to encourage the research community to
+consider how modern NLP models can be evalu-
+ated more efficiently. While this endeavor could
+ideally reduce the compute required to develop
+models, minimizing evaluation set size poses the
+risk of excluding minority subsets of the data dis-
+tribution. This could harm model generalization
+and lead to reduced performance in rarer use cases,
+e.g. on low-resource languages. As an empirical
+example, observing where Figures 9(a) and 9(b)
+differ reveals a small subset of points in sparser re-
+gions that are poorly captured by the anchor points.
+We find that examples in this region remain poorly
+captured across random seeds and anchor point set
+sizes, highlighting a systematic lack of generaliza-
+tion to this minority subset.
+To mitigate the risks of our work, we 1) empha-
+size that our ultimate goal is not to replace large
+benchmarks but rather provide cheaper signal about
+model benchmark performance and 2) remain can-
+did about the limitations of our approach to lay
+the foundation for future work in efficient, robust
+model evaluation strategies.

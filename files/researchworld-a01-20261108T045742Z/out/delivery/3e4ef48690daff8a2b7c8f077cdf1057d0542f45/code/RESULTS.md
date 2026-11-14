@@ -1,0 +1,62 @@
+# Results hand-off (analysis position) — what each result file supports, with the headline numbers
+
+All values: medians over the 10 ex-ante targets "top10" (initial ranks 2-11 under the mean rule) unless stated, with the bootstrap
+95% interval over targets in the `*_by_rule_group.csv` files. Units: K/n = share of tasks touched, L1/n = score points raised per task (0-100
+scale), "feasible" = share of targets for which first place is attainable inside the cap (a median is over feasible targets only and is never
+compared across cells of different feasible share). Every claim names its cap. Claim IDs are those of `story-repo/plan.md` §4.
+The 10 targets are 10 models, so the bootstrap intervals are wide; strata beyond top10 (3-5, 6-10, 11-30, 31-100, >100) are in the same files.
+
+## C1 (mean = n x gap; concentrated) — supported
+`results/theory_checks.csv`: closed form vs exact solver, max abs error 0 (L1, K) and < 1e-7 (Linf) on 78-4495 targets per check (HELM, OLLB); K never below the headroom bound.
+HELM `ceil`: mean K/n = 0.07 (about 4 of 57 subjects) with L1/n = 2.84 [0.56, 3.90] (`summary_helm_main_by_rule_group.csv`).
+
+## C2 (order-statistic rules force breadth; K grows with n) — NOT supported on these data (reverse pattern)
+`summary_helm_tasksub_{gain10,front2}_by_n.csv` / `_slopes.csv` (random task subsets n = 3..48 of the 57 HELM subjects, 200 draws per n; target = the rule's own rank-5 model; targets differ between rules, see the paired set below for a like-for-like comparison):
+under mean/geomean K grows with n (median K: 2, 4, 7, 13 at n = 6, 12, 24, 48 under gain10; log-log slope 0.92) while under the median K stays at 1-2 (slope 0.30) and under min at 1-2 (slope 0 to 0.2).
+The theoretical worst case (K >= floor(n/2)+1 when the target is below the rival median everywhere) is exact in the solver (theory check P3) but real score matrices are strongly correlated across tasks, so rank-5 challengers sit just below the rival median/min and one or two tasks suffice.
+Slope CIs: `slope_*_lo/hi` are percentile bootstraps over the 200 draws within each n cell of the slope fitted to per-n *medians*; medians are integers, so those intervals are discrete and can touch the estimate (descriptive only). The informative uncertainty is `slope_*_mean_*`: slope of log mean cost (feasible draws) on log n, same bootstrap. Paired mean-rank-5 target, gain10, K: mean rule 0.84 [0.82, 0.86], median rule 0.54 [0.51, 0.56], min 0.16 [0.13, 0.19] (median-based: 0.92, 0.68, 0.20).
+
+**Paired target set** (`helm_tasksubpaired_{gain10,front2}.csv`, `summary_helm_tasksubpaired_*`; `run_robust.py tasksub --targets mean`): the target is the model at rank 2 or 5 under the *mean* rule in the same task subset, so every rule prices the same models (column `target_def = mean`; `rank_own` is its rank under the rule being priced; `rank_own = 1` means the target already wins under that rule and costs 0). Median K at n = 3, 6, 12, 24, 48, gain10, mean-rank-5 target: mean 1, 2, 4, 7, 13 (slope 0.92); median 1, 1, 2, 3, 6 (slope 0.68); min 1, 2, 2, 2, 2 (slope 0.20); for the mean-rank-2 target K = 1 under all three rules at every n. So with a paired, lower-ranked target the median rule does need more tasks as n grows, but far fewer than the worst case floor(n/2)+1 (6 of 48, not 25) and always fewer than the mean rule; the order mean > median > min in K is the same as with own-rank targets, and the reverse of the plan's expectation for min. The descriptor `n_above_lead_median` (tasks where the target already reaches the median of its strongest rival under the median rule) tracks the median-rule K through K ~ (n+1)/2 - n_above (correlation 0.95 over non-leader targets; the formula matches exactly in only 54% of draws, because of the cap, eps and which rival is the strongest): the growth is bounded by how many tasks the target already clears, not by n.
+
+
+## C3 (rule ordering depends on the cap) — ordering of L1 mostly does NOT depend on the cap; feasibility and K do
+HELM, L1 ratio to the mean rule per target (`summary_helm_main_ratio_to_mean.csv`, top10): median 0.05, min 0.03-0.06, plurality 0.03 (0.16 under front0), Condorcet 0.17, Borda 0.41, geomean 0.91, harmonic 0.84, item-count-weighted mean 0.16 (ceil) - 0.47 (front2), the same order under ceil, front0, front2, gain5/10/20 (exceptions: plurality under front0; min under gain-h).
+OLLB (n = 6), ceil (`summary_ollb_ratio_to_mean.csv`): median 0.03, Borda 0.23, Condorcet 0.51, harmonic 0.64, min 0.61, plurality 0.73, geomean 0.76, trimmed mean 0.88.
+What the cap changes is K and feasibility: mean K/n rises from 0.07 (ceil) to 0.17 (front2), 0.29 (gain10), 0.58 (gain5) on HELM while median/min/Condorcet K are cap-invariant.
+
+## C4 (feasibility is rule dependent) — supported
+HELM top10, gain5 (cap +5): feasible share mean 1.0, median 1.0, plurality 1.0, Borda 0.9, geomean/harmonic 0.8, min 0.6 (`summary_helm_main_by_rule_group.csv`); at gain10 min 0.7.
+OLLB (`summary_ollb_by_rule_group.csv`): gain5 geomean/harmonic 0.4, min 0.3, trimmed mean 0.3, mean/median 1.0; gain10 plurality 0.3 (top10) and, over all 102 sampled targets, infinite cost for Borda 37, Condorcet 62, plurality 89 (`results/ollb_ordinal_gain10.csv`).
+By rank band under emp95 (OLLB): feasible share for mean 1.0 (ranks 2-100) then 0.05 (>100); Condorcet 0.2-0.5 for ranks 6-30.
+
+## C5 (plausibility against the empirical fine-tune envelope; OLLB only) 
+emp95 (per-task 95th percentile of fine-tune minus base gain, 540 pairs): top10 feasible share mean 1.0, median 1.0, trimmed 1.0, Borda 1.0, geomean 0.9, plurality 0.9, Condorcet 0.5, harmonic 0.4, min 0.4;
+emp99: mean/median/geomean/harmonic/trimmed 1.0, min 0.5; ordinal rules at emp99 on the 10 top challengers (`ollb_ordinal_emp99_top20.csv`): Borda 1.0, Condorcet 1.0, plurality 1.0.
+Per-target table the plan asks for (each rule x each ex-ante top-10 challenger, emp95 and emp99: feasible flag, K, L1, Linf; inf = infeasible): `results/c5_top10_emp.csv`, per-cell summary `c5_top10_emp_summary.csv` (`src/c5_table.py`). Trimmed-mean K is not computed (NaN). Required L1 per task is still 4.2 points (mean) under emp95. Whether that is "plausible" depends on the envelope assumption, not on the data alone.
+
+## C6 (cost vs initial rank/gap) — see strata in the `*_by_rule_group.csv`
+Mean: L1 = n x gap exactly (C1). Rank rules are far flatter in rank than the mean on HELM; examples in the files (HELM ceil K/n, Borda 0.31 top10 vs 0.89 ranks 31-100; mean 0.07 vs 0.37).
+Per-target rows (`helm_main.csv`, `ollb_*`) give cost vs gap for the figure; `rank_mean`, `rank_rule`, `gap` are columns.
+
+## C7 robustness
+(i) raw vs normalised OLLB scores (`summary_ollb_raw_*`): **the rule ordering does not survive**. Median L1 ratio to mean at ceil 0.03 (normalised) vs 0.99 (raw); min 0.61 vs 0.91; geomean 0.76 vs 0.70; harmonic 0.64 vs 0.46; median K/n 0.17 vs 0.33. Rank rules are invariant to per-task affine rescaling in K (same ranks) so the choice of score normalisation only matters for score rules.
+**Paired normalised-vs-raw comparison** (C7 (i); `results/summary_ollb_raw_vs_norm_paired.csv`, per-target rows `ollb_raw_vs_norm_paired_per_target.csv`, `src/raw_vs_norm_paired.py`; cap ceil, all 4496 targets, groups by mean-rule rank on the normalised scores, `group_basis = raw` rows regroup by raw rank): per target, ratio = L1_rule / L1_mean under each scaling, diff = ratio_raw - ratio_norm; the table has group medians of both ratios, the median paired difference and the share of targets with raw > normalised, each with a 95% percentile bootstrap CI over targets. Median rule: top10 (10 targets) ratio 0.03 normalised vs 1.10 raw, paired difference +0.93 [-0.15, 1.27] (CI includes 0; 7 of 10 targets higher under raw, so with 10 targets the sign is not established); ranks 11-30 0.13 vs 0.84, +0.70 [0.61, 0.82]; 31-100 0.34 vs 0.78, +0.45 [0.43, 0.46]; >100 0.600 vs 0.623, +0.008 [0.007, 0.009] (negligible). The scale dependence of the median rule is therefore established for ranks 11-100 and not beyond rank 100; for the ten top challengers the point estimate is large but not significant. Min: raw is dearer in every group (top10 +0.25 [0.14, 1.56]; >100 +0.24). Geomean and harmonic go the other way for the top groups (raw cheaper, top10 -0.13 [-0.19, 0.14] and -0.27 [-0.33, 0.13], intervals include 0) and flip sign for ranks >= 31 (+0.06 to +0.12). The leaderboard leader (rank 1) is not a target; a target is also dropped if L1_mean is 0 or a cost is infeasible (none among the normalised-rank >= 2 targets; one model that leads on raw scores has L1_mean_raw = 0 and drops out of the raw-regrouped rows).
+
+(ii) slices: non-merged (`summary_ollb_nomerge_*`) and top-500 (`summary_ollb_top500_*`) give the same top10 ratios as the full board for geomean/harmonic/median (0.76/0.64/0.03), min 0.49 non-merged vs 0.61, Borda 0.19 vs 0.23 and plurality 0.51 vs 0.73 in top-500 (the rival set changes).
+(iii) task bootstrap, HELM gain10, 50 draws, 10 targets (`summary_helm_taskboot_gain10_by_rule.csv`): median L1 mean 175 (obs 162), median 7.0 (4.7), Borda 60 (55), plurality 7.0 (5.2), min 4.0 (5.3) with 30% infeasible draws.
+(iv) evaluation noise (binomial SE per cell), HELM gain10, 100 draws, 10 targets (`summary_helm_noise_gain10_by_rule.csv`): relative spread (CV of L1) mean 0.17, geomean 0.18, Borda/Condorcet 0.34, plurality 0.44, median 0.68, min 0.75 with 44% infeasible draws: the cost under mean-type rules is stable, under median/min/rank rules it is noise-driven. In absolute terms (median over targets of the 5-95% range of L1, points; `abs_spread_q05_q95_med`): mean 89, geomean 97, Borda 56, Condorcet 24, plurality 10, median 15, min 15 (L1 medians 174, 170, 50, 22, 7.6, 6.5, 7.0), so the CV exaggerates the median/min rules' noise when their L1 is small, but the spread is still 2x the median L1 there.
+(v) margin k x SE (HELM, score rules, `summary_helm_margin{1,2}se_*`): ceil top10 L1/n of mean 2.84 -> 3.44 -> 4.04 (eps, 1 SE, 2 SE), median 0.08 -> 0.14 -> 0.23, min 0.09 -> 0.12 -> 0.15; K/n of mean 0.07 -> 0.09 -> 0.11. Rank rules: not defined by `eps` (see REPRODUCE.md §5); noise robustness (iv) is the check there.
+OLLB margin (score rules, all 4496 targets, trimmed mean omitted; margin = k x 0.96 pts, the binomial SE of a difference of two top models' mean aggregate from the OLLB item counts: `summary_ollb_margin{1,2}se_*`, `ollb_margin{1,2}_score.csv`): ceil top10 L1/n mean 4.16 -> 5.12 -> 6.08, median 0.15 -> 0.47 -> 0.79, min 2.09 -> 2.41 -> 2.73, geomean 3.58 -> 4.15 -> 4.74, harmonic 3.04 -> 3.42 -> 3.82. The order (median cheapest, mean dearest) survives, but median/mean rises from 0.04 to 0.13 at 2 SE: the median rule's apparent cheapness shrinks as the required margin grows. Same cap-invariance for ceil/front2 (identical), gain10 shifts min feasibility 0.7 -> 0.6 -> 0.5.
+
+## C8 (item-count weighting; HELM) — supported
+`summary_helm_main_*` rows `wmean`: top10 L1 ratio to the equal-weight mean 0.16 (ceil), 0.47 (front2), 0.28 (gain10), 0.18 (gain20); K/n 0.02 vs 0.07 at ceil. Raising the few heavy subjects is cheap under item-count weights (L1 counts unweighted points, so the comparison is of costs for two different aggregates, each to be first under its own rule).
+
+## Condorcet proxy
+`results/condorcet_existence.csv`: HELM has a Condorcet winner (the mean-first model, Claude 3.5 Sonnet 20241022); OLLB (all four variants) has none (n = 6, 3-3 ties), so there the Condorcet requirement (beating every rival on >= 4 of 6 tasks) is a stricter condition than being Copeland-first and its cost is an upper bound.
+
+## Not done / limits to state
+- Ordinal OLLB runs use sampled targets (20 top challengers + 100 log-rank-uniform), not all 4496; Condorcet has 1 NaN (time limit) at ceil, 1 NaN for K at front2. Ordinal runs at gain5/gain20/front0 were not made, and at emp99 only for the 10 top challengers.
+- Trimmed mean was not run on the slice variants (raw, non-merged); ordinal rules not run on raw/non-merged (invariant in K for raw).
+- Noise/task-bootstrap/task-subset robustness only for caps gain10 (noise, bootstrap) and gain10/front2 (task-subset) on HELM; not OLLB.
+- No statistical-margin variant for rank rules; no exact Copeland; no OLLB `results` sub-task analysis (n = 6 only).
+- 10 targets per top10 cell: intervals are wide, and models are not independent (merges/fine-tunes of one base).

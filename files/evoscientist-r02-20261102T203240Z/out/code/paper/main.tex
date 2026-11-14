@@ -1,0 +1,163 @@
+\documentclass{article}
+\usepackage{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts,amsmath,amssymb,amsthm}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=*}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+\newcommand{\Delta}{\Delta}
+\renewcommand{\Delta}{\Delta}
+\newcommand{\simplex}{\Delta^{K-1}}
+\newcommand{\hh}{\hat h}
+\newcommand{\XC}{\mathrm{XC}}
+\newcommand{\Gini}{G}
+\newcommand{\PP}{\mathbb{P}}
+\newcommand{\EE}{\mathbb{E}}
+
+\title{How Should We Evaluate Conformal Prediction for Compositional Outputs? Geometry, Reference Measures, and Conditional Coverage}
+
+\author{Anonymous Authors}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Many predictors output a composition, a non-negative vector summing to one (softmax probabilities, topic or label proportions), and the target itself may be a composition (e.g.\ a human label distribution). Split conformal prediction gives distribution-free \emph{marginal} coverage for any set-valued summary of such outputs, but the choice of nonconformity score changes the \emph{shape} of the region on the simplex, and there is no agreed way to compare the resulting regions. We study how to evaluate conformal methods on the simplex. We (i) show that marginal coverage is blind to the geometry of the score and that comparing efficiency requires an explicit reference measure: we prove that the Aitchison measure has density $1/(\sqrt K\prod_i p_i)$ w.r.t.\ Lebesgue measure, so any Euclidean-type region touching the boundary has \emph{infinite} Aitchison volume, while Aitchison balls have vanishing Lebesgue volume near the boundary; (ii) show analytically and numerically that single-test-set binomial intervals for coverage are anti-conservative, with a closed-form false-alarm rate $2\{1-\Phi(1.96/\sqrt{1+T/(n+2)})\}$ ($T$ test points, $n$ calibration points), and recommend calibration-resampling confidence intervals; (iii) derive why unnormalised $L_2$-type scores under Dirichlet/multinomial noise undercover high-Gini predictions ($\EE\|y-\mu\|^2=\Gini(\mu)/(\phi+1)$) and check this against simulation. In a benchmark of 12 scores on 6 synthetic generators (300 calibration draws each) and on CIFAR-10H human label distributions, all scores attain the nominal marginal coverage, but their efficiency rankings differ across generators and, within a generator, across reference measures (in 14--37 of 66 score pairs, depending on the generator, two statistically significant orderings are reversed by changing the measure); conditional coverage over the simplex differs by up to 10 percentage points. No score dominates; the best choice depends on the noise model and on the measure the user cares about. We give conditions under which these conclusions should not be extrapolated.
+\end{abstract}
+
+\section{Introduction}
+A predictor whose output is a composition $\hh\in\simplex=\{p\in\mathbb R^K_{\ge0}:\sum_ip_i=1\}$ --- a softmax vector, a vector of topic proportions, an estimated mixture --- is rarely used without some statement of uncertainty. When the \emph{target} $Y\in\simplex$ is itself compositional (a distribution of human annotator labels, a mixture of components in a sample), a natural uncertainty statement is a region $C(x)\subset\simplex$ that contains $Y$ with probability $1-\alpha$. Conformal prediction \citep{vovk2005algorithmic,lei2018distribution,angelopoulos2021gentle} delivers such regions with finite-sample, distribution-free \emph{marginal} guarantees under exchangeability. It does so for \emph{any} nonconformity score, and the literature offers many: Euclidean residuals, divergences, log-ratio distances \citep{aitchison1982statistical}, likelihood-based scores, normalised or Mondrian variants. The guarantee therefore cannot be used to choose between them, and the community has no shared protocol for doing so on the simplex, where the geometry is non-Euclidean, boundaries and exact zeros are common, and noise is heteroscedastic by construction (a composition near a vertex has little room to vary).
+
+\textbf{Research question.} \emph{How should the reliability of conformal prediction regions for compositional outputs be evaluated, and under which conditions is one method preferable to another?} We break this down into five hypotheses that guided the experimental design (all stated before the main runs; each can be refuted):
+\begin{itemize}
+\item[\textbf{H1}] Realised coverage of split conformal regions follows its exact Beta law for every score, so deviations from nominal in an experiment are explained by calibration-set randomness and not by the score.
+\item[\textbf{H2}] Evaluation by coverage alone is uninformative about geometry; efficiency comparisons depend on the measure used to size regions, and rankings can reverse.
+\item[\textbf{H3}] Scores whose geometry matches the noise model (KL/Hellinger for Dirichlet or count noise; Aitchison/Mahalanobis for logistic-normal noise) are the most efficient under the data distribution.
+\item[\textbf{H4}] Unnormalised Euclidean-type scores violate conditional coverage along the Gini/concentration axis in a way predictable from the noise model; normalisation or Mondrian calibration reduces this at a price in variance (small $n$) or efficiency.
+\item[\textbf{H5}] Reporting a binomial confidence interval for coverage on one calibration split is anti-conservative; the unit of replication must be the calibration draw.
+\end{itemize}
+\textbf{Contributions.} (1) An evaluation protocol for simplex-valued conformal regions combining calibration-resampled coverage intervals, a data-driven cross-coverage efficiency measure and a family of Dirichlet reference-measure volumes, and conditional-coverage diagnostics along simplex-specific axes (\S\ref{sec:method}). (2) Four propositions with proofs (\S\ref{sec:theory}), each checked numerically: Beta law and invariance; Aitchison--Lebesgue density and its consequences for volume comparisons; Gini scaling of Dirichlet residuals; and the false-alarm rate of the naive single-split protocol. (3) A benchmark of 12 scores on 6 generators plus CIFAR-10H (\S\ref{sec:exp}) with calibration-resampling confidence intervals, paired tests and Holm correction. (4) A statement of when the conclusions do and do not extend (\S\ref{sec:disc}).
+
+\section{Related work}
+\textbf{Conformal prediction.} Split (inductive) conformal prediction \citep{papadopoulos2002inductive,lei2018distribution} gives marginal coverage with an exact Beta distribution of the realised coverage over calibration sets \citep{vovk2012conditional}; \citet{angelopoulos2021gentle} give a tutorial. Full conformal and jackknife+ \citep{barber2021predictive} trade computation for sample efficiency; we use split conformal throughout and do not study these. Locally weighted scores \citep{lei2018distribution}, conformalised quantile regression \citep{romano2019conformalized}, and Mondrian/class-conditional calibration \citep{vovk2005algorithmic,ding2023class} target conditional coverage, which cannot be achieved exactly in a distribution-free way \citep{barber2021limits}; multivalid methods \citep{jung2023batch} offer group-conditional guarantees. Weighted conformal prediction handles covariate shift when the density ratio is known \citep{tibshirani2019conformal}. \textbf{Classification and distribution-valued outputs.} For classifiers, conformal sets over \emph{labels} use scores such as $1-\hh_y$ \citep{sadinle2019least}, cumulative mass \citep{romano2020classification}, and regularised variants \citep{angelopoulos2021uncertainty}; \citet{stutz2022learning} optimise efficiency end-to-end and \citet{cresswell2024conformal} study downstream effects of set-valued outputs. \citet{javanmardi2024conformalized} predict credal sets of distributions. Our setting differs: the object being covered is a point on the simplex (a distribution), not a label. KL$(y\|\hh)$ with one-hot $y$ equals $-\log\hh_y$, so our score family contains the standard least-ambiguous-set score as a special case. \textbf{Compositional data.} The Aitchison geometry \citep{aitchison1982statistical} and isometric log-ratio coordinates \citep{egozcue2003isometric} give the simplex a vector-space structure; we use them both as a family of scores and as a measure on the simplex, and show their interaction with the usual Euclidean geometry matters for \emph{evaluation}. We are not aware of a systematic comparison of conformal methods for simplex-valued outputs; we do not claim novelty for individual conformal methods, but for the evaluation analysis.
+
+\section{Setting, methods and evaluation protocol}\label{sec:method}
+\textbf{Setting.} Data $(X_i,Y_i)\in\mathcal X\times\simplex$ are exchangeable. A predictor $\hat f$ trained on a training split gives $\hh(x)=\hat f(x)\in\simplex$. A second \emph{auxiliary} split is used only to fit score hyper-parameters (covariance, scale model, Dirichlet precision), so that the score is fixed before calibration. For a score $s(\hh,y,x)$ and calibration scores $S_1..S_n$, $\hat q$ is the $\lceil(n+1)(1-\alpha)\rceil$-th smallest ($+\infty$ if it exceeds $n$) and $C(x)=\{u\in\simplex:s(\hh(x),u,x)\le\hat q\}$. Mondrian variants calibrate $\hat q_g$ per group $g(\hh(x))$.
+
+\textbf{Scores} (Table~\ref{tab:scores}). Euclidean-type: $L_2,L_1,L_\infty$; Hellinger; $\mathrm{KL}(y\|\hh)$; Aitchison distance $\|\mathrm{clr}(y_\delta)-\mathrm{clr}(\hh_\delta)\|_2$ with additive zero replacement $p\mapsto(p+\delta)/(1+K\delta)$, $\delta=10^{-3}$ unless stated; Mahalanobis distance in clr space with the aux-split residual covariance; negative Dirichlet log-density with fitted precision (an HPD-type score; zeros replaced as above); $L_2/\sqrt{\Gini(\hh)}$ with $\Gini(p)=1-\sum_ip_i^2$ (motivated in Prop.~\ref{prop:gini}); $L_2$ locally weighted by a ridge-regression estimate of $\log$-residual \citep{lei2018distribution}; $L_2$ with Mondrian calibration by $\arg\max\hh$ or by Gini quartile of $\hh$.
+\begin{table}[t]\centering\small
+\caption{Scores. $\hh$ predicted composition, $y$ target. All are fixed functions of $(\hh,y,x)$ given the training/aux splits.}\label{tab:scores}
+\begin{tabular}{ll|ll}\toprule
+$L_2,L_1,L_\infty$ & $\|y-\hh\|_{2,1,\infty}$ & Mahal-clr & $\sqrt{r^\top\Sigma^+r},\ r=\mathrm{clr}(y_\delta)-\mathrm{clr}(\hh_\delta)$\\
+Hellinger & $\|\sqrt y-\sqrt{\hh}\|_2$ & DirNLL & $-\log\mathrm{Dir}(y_\delta;\hat\phi\,\hh_\delta)$\\
+KL & $\sum_iy_i\log(y_i/\hh_i)$ & $L_2/\sqrt{\Gini}$ & $\|y-\hh\|_2/\sqrt{\Gini(\hh)}$\\
+Aitchison & $\|\mathrm{clr}(y_\delta)-\mathrm{clr}(\hh_\delta)\|_2$ & $L_2/\hat\sigma$; Mondrian & learned scale; per-group $\hat q_g$\\\bottomrule
+\end{tabular}\end{table}
+
+\textbf{Evaluation protocol.} Given a calibration draw $\mathcal D_c$ (and hence $C$), we measure on a large test set:
+\begin{itemize}
+\item \textbf{Coverage and its uncertainty.} Realised coverage $\mathrm{Cov}(\mathcal D_c)=\PP(Y\in C(X)\mid\mathcal D_c)$. We replicate over \emph{independent calibration draws} ($R=300$ per configuration; 1000 for the coverage-law study) and report means with 95\% CIs over draws. Methods are compared on identical draws (paired tests, Wilcoxon, Holm correction).
+\item \textbf{Efficiency, two families.} (a) \emph{Cross-coverage} $\XC=\PP(Y'\in C(X))$ with $Y'$ an independent draw from the marginal of $Y$ (we pair $x_i$ with $y_j$, $j\neq i$, of the test set). It measures how often a region contains an unrelated plausible target and uses the data distribution as its reference. (b) \emph{Dirichlet reference volume} $V_a=\EE_X\,\PP_{U\sim\mathrm{Dir}(a\mathbf 1)}(U\in C(X))$; $a=1$ is the normalised Lebesgue measure on the simplex and $a\to0$ approaches the Aitchison measure (Prop.~\ref{prop:measure}). We report $a\in\{0.1,0.3,1,3\}$.
+\item \textbf{Conditional coverage.} Coverage within quintiles of $\Gini(\hh(X))$ (the natural axis of heteroscedasticity on the simplex), summarised by the worst-bin gap $\max_b|\mathrm{Cov}_b-(1-\alpha)|$ (noise floor in our setting: $0.024$, simulated for an ideal method with $n=500$ and 800 test points per bin), and by the minimum bin coverage. We also record coverage by $\arg\max\hh$ class.
+\end{itemize}
+
+\section{Theory}\label{sec:theory}
+All proofs are in Appendix~\ref{app:proofs}; numerical checks in \S\ref{sec:exp} and Appendix~\ref{app:theory}.
+\begin{proposition}[Coverage law and invariance]\label{prop:beta}
+If calibration and test scores are exchangeable with no ties, $\mathrm{Cov}(\mathcal D_c)\sim\mathrm{Beta}(n+1-l,l)$, $l=\lfloor(n+1)\alpha\rfloor$, with mean $\lceil(n+1)(1-\alpha)\rceil/(n+1)$ and variance $\approx\alpha(1-\alpha)/(n+2)$ \citep{vovk2012conditional}. For any bijection $\psi$ of $\simplex$ (e.g.\ clr/ilr), the region built from the score $s\circ\psi^{-1}$ on $\psi(Y)$ is $\psi(C)$, and $Y\in C\iff\psi(Y)\in\psi(C)$: coverage is identical in every parametrisation; only the family of regions (and hence efficiency) depends on the geometry. In particular the Aitchison score is the Euclidean score in ilr coordinates.
+\end{proposition}
+\begin{proposition}[Measures on the simplex]\label{prop:measure}
+Let $A$ be Lebesgue measure in ilr coordinates (the Aitchison measure) and $\lambda$ Lebesgue measure in coordinates $p_{1:K-1}$. Then $dA(p)=\big(\sqrt K\prod_{i=1}^Kp_i\big)^{-1}d\lambda(p)$. Consequently (a) if a region $R$ contains a relatively open neighbourhood of a point of a facet $\{p_i=0\}$ (with the other coordinates positive), $A(R)=\infty$; this holds for the $L_p$, Hellinger and KL regions as soon as $\hat q>\hh_i(x)$ (resp.\ the analogous threshold) for some $i$; (b) an Aitchison ball of radius $\rho$ around $\hh$ has $\lambda(B)\le\sqrt K e^{2K\rho}\prod_i\hh_i\cdot\omega_{K-1}\rho^{K-1}$, which tends to $0$ as $\min_i\hh_i\to0$ for fixed $\rho$. With $\mathrm{Dir}(a\mathbf 1)$ reference measures, $d\mathrm{Dir}_a/dA\propto\prod_ip_i^{a}$, so $a=1$ is Lebesgue and $a\downarrow0$ approaches (improper) $A$.
+\end{proposition}
+\begin{proposition}[Gini scaling]\label{prop:gini}
+If $y\sim\mathrm{Dir}(\phi\mu)$ then $\EE\|y-\mu\|_2^2=\Gini(\mu)/(\phi+1)$; if $y=\mathrm{Mult}(N,\mu)/N$ then $\EE\|y-\mu\|_2^2=\Gini(\mu)/N$. As $\phi\to\infty$, $\sqrt{\phi+1}(y-\mu)\Rightarrow\mathcal N(0,\mathrm{diag}(\mu)-\mu\mu^\top)$, whose trace is $\Gini(\mu)$. Hence, with a pooled threshold $\hat q$, the conditional coverage of the $L_2$ score at $x$ is approximately $\PP(\sum_j\lambda_j(\mu)Z_j^2\le(\phi+1)\hat q^2)$, $Z_j$ i.i.d.\ $\mathcal N(0,1)$, $\lambda_j$ the eigenvalues of $\mathrm{diag}(\mu)-\mu\mu^\top$ ($\sum_j\lambda_j=\Gini(\mu)$): it is decreasing in the first-order scale $\Gini(\mu)/(\phi+1)$, so $L_2$ over-covers low-Gini and under-covers high-Gini predictions. Dividing by $\sqrt{\Gini(\hh)}$ removes the first-order dependence for constant $\phi$.
+\end{proposition}
+\begin{proposition}[Naive single-split evaluation]\label{prop:naive}
+Suppose the realised coverage is approximately $\mathcal N(e,\sigma_n^2)$, $\sigma_n^2=\alpha(1-\alpha)/(n+2)$, $e$ its mean, and one evaluates it on $T$ i.i.d.\ test points with the Wald interval $\hat c\pm1.96\sqrt{\hat c(1-\hat c)/T}$. Then the probability that the interval excludes $e$ is, to first order,
+$\;2\{1-\Phi(1.96/\sqrt{1+T/(n+2)})\}$, which tends to $1$ as $T\to\infty$ at fixed $n$. Intervals over $R$ independent calibration draws have the nominal level.
+\end{proposition}
+
+\section{Experiments}\label{sec:exp}
+\textbf{Synthetic generators} ($K=5$, covariates $x\in\mathbb R^5$ standard normal, $n_{tr}=1000$, aux $500$, calibration pool $2000$, test $4000$; fixed population structure, fresh data per replicate). Mean $\mu(x)=\mathrm{softmax}(A^\top x+b)$. \emph{dir\_homo}: $\mathrm{Dir}(20\mu)$. \emph{dir\_het}: precision $20e^{1.2x_0}$. \emph{dir\_sparse}: $\mathrm{Dir}(3\mu)$ (many near-zero components). \emph{dir\_nl}: Dirichlet with a nonlinear mean the linear predictor cannot fit (bias). \emph{lnorm\_het}: logistic-normal $\mathrm{softmax}(\eta+\sigma(x)L\varepsilon)$, $\sigma(x)=0.5e^{0.5x_0}$. \emph{mult50}: $\mathrm{Mult}(50,\mu)/50$ (about 28\% exact zeros). The predictor is softmax regression fitted by cross-entropy to the soft targets. \textbf{Real data.} CIFAR-10H \citep{peterson2019human}: for each of the 10{,}000 CIFAR-10 test images \citep{krizhevsky2009learning}, the empirical distribution of $\approx$50 human labels ($80.6\%$ of entries are exactly zero); the predictor is a CIFAR-10 classifier trained on the 50{,}000 training images (details in \S\ref{sec:cifar}). Each replicate re-draws aux/calibration/test from a random permutation of the 10{,}000 images. Unless stated: $\alpha=0.1$, $n=500$, $R=300$, seeds are functions of (experiment, generator, replicate) so every table is regenerated exactly by the supplied scripts.
+
+\textbf{H1: realised coverage follows the Beta law for every score.} For 60 (generator, $n\in\{50,200,1000\}$, score) cells without Mondrian calibration ($R=1000$ draws, 20{,}000 test points each), the Kolmogorov--Smirnov test against $\mathrm{Beta}(n+1-l,l)$ rejects at 5\% in 2 of 60 cells (3.3\%, none at 1\%), no cell has $|z|>3$ for the mean, the largest deviation of mean coverage from its Beta mean is 0.0025, and the SD ratio to theory is in $[0.947,1.053]$ (Fig.~\ref{fig:law}a). Mondrian variants over-cover as expected from rounding in smaller groups (mean coverage 0.911/0.909 vs.\ 0.9005 at $n=200$, dir\_het) and at $n=30$ Mondrian-by-Gini covers 0.966 (many groups have $\hat q=\infty$, i.e.\ the region is the whole simplex). \textbf{H1 supported.}
+
+\textbf{H5: the naive protocol is anti-conservative.} Fig.~\ref{fig:law}b simulates one test set of size $T$ per calibration draw and asks whether the 95\% Wald interval excludes the exact expected coverage. With $n=200$ and $T=2000$ it does in 55.7\% of cases (Prop.~\ref{prop:naive} predicts 55.3\%); with $T=10^4$ and $n=50$, in 89.2\% (88.8\%); the prediction is within 0.03 everywhere except $n=50,T=500$ (57.9\% vs 54.7\%, where the Beta law is visibly non-normal). Intervals over $R\in\{10,30\}$ calibration draws exclude it in 4.5--6.6\% of cases. A difference of 0.5 percentage points in coverage between two scores on one split is therefore not evidence of anything at $n\le10^3$. \textbf{H5 supported.}
+
+\begin{figure}[t]
+\centering
+\begin{minipage}[t]{0.62\linewidth}\centering\includegraphics[width=\linewidth]{../figs/fig_covlaw.pdf}\\{\small (a) realised coverage vs.\ Beta law}\end{minipage}\hfill
+\begin{minipage}[t]{0.36\linewidth}\centering\includegraphics[width=\linewidth]{../figs/fig_protocol.pdf}\\{\small (b) single split vs.\ resampling}\end{minipage}
+\caption{(a) Histograms of realised coverage (1000 calibration draws, $L_2$, dir\_het) and the exact Beta law. (b) Probability that a 95\% CI excludes the exact expected coverage, averaged over scores $\{L_2,\mathrm{KL},\mathrm{Aitchison}\}$ and generators $\{$dir\_het, mult50$\}$; dash-dot line: 5\%.}\label{fig:law}
+\end{figure}
+
+\begin{figure}[t]\centering\includegraphics[width=\linewidth]{../figs/fig_ternary.pdf}
+\caption{Regions on the simplex ($K=3$, dir\_het-type generator, $n=2000$, $\alpha=0.1$) at three predicted compositions (dots). Thresholds $\hat q$: $L_2$ 0.36, KL 0.21, Aitchison 2.51, $L_2/\sqrt{\Gini}$ 0.50. All regions have the same marginal coverage.}\label{fig:tern}\end{figure}
+
+\textbf{All scores reach the nominal marginal level, so coverage cannot rank them.} Mean realised coverage at $n=500,\alpha=0.1$ is within $[0.899,0.902]$ for every non-Mondrian score and generator (95\% CIs $\le0.0018$), and within $[0.9500,0.9551]$ at $\alpha=0.05$ and $[0.8005,0.8044]$ at $\alpha=0.2$ for all scores (the upper ends correspond to Mondrian rounding). The regions themselves differ greatly (Fig.~\ref{fig:tern}).
+
+\textbf{H2/H3: efficiency depends on the generator and on the measure used.} Table~\ref{tab:eff} shows XC and the uniform-reference volume $V_1$. By XC, the best score is Hellinger (dir\_homo), DirNLL (dir\_het), Aitchison (dir\_sparse), KL (dir\_nl, mult50) and Mahalanobis-clr (lnorm\_het); for logistic-normal noise the clr-space scores are 5--10$\times$ more efficient than $L_2$ in XC (0.014 vs.\ 0.150), as H3 predicts, whereas for Dirichlet and multinomial noise KL/Hellinger win and the clr-space scores are about 2--7$\times$ \emph{worse} than KL on mult50 (XC 0.098 vs.\ 0.013) --- an Aitchison score cannot resolve exact zeros, where the choice of $\delta$ matters (below). Under the uniform measure ($V_1$) the picture reverses for log-ratio scores: Aitchison/Mahalanobis have $V_1\approx0.14$--$0.21$ on Dirichlet/multinomial generators against $0.01$--$0.07$ for most others, consistent with Prop.~\ref{prop:measure}(b)'s reverse statement that Aitchison-type regions are large in Lebesgue terms in the interior while vanishing near the boundary; conversely DirNLL, an HPD region which is Lebesgue-volume-optimal when the density is correct, is best at $V_1$ in 5/6 generators (all but lnorm\_het). Fig.~\ref{fig:rank} gives ranks under five measures. Within each generator, among the 66 score pairs, the number for which one measure significantly (Holm, $p<0.05$, paired Wilcoxon) prefers $A$ and another prefers $B$ is 35 (dir\_homo), 37 (dir\_het), 24 (dir\_sparse), 26 (dir\_nl), 14 (lnorm\_het), 26 (mult50). \textbf{H2 supported; H3 supported for the matched pairs described, with the DirNLL/HPD exception noted.} A caveat: XC is not measure-free; it uses the marginal of $Y$, which makes it a statement about \emph{this} data distribution.
+
+\begin{table}[t]\centering\scriptsize\setlength{\tabcolsep}{3pt}
+\caption{Efficiency at $n=500$, $\alpha=0.1$ (mean of 300 draws; max 95\% CI half-width 0.0034 (XC), 0.0038 ($V_1$); bold = best; full CIs in Appendix). Top: cross-coverage XC. Bottom: volume fraction $V_1$ under the uniform measure on the simplex. Lower is better.}\label{tab:eff}
+\input{../tables/main_xc_nc.tex}\\[3pt]
+\input{../tables/main_vf1_nc.tex}
+\end{table}
+
+\begin{figure}[t]\centering\includegraphics[width=0.78\linewidth]{../figs/fig_ranks.pdf}
+\caption{Rank of each score (1 = smallest region) under XC and Dirichlet reference volumes $V_{0.1},V_{0.3},V_1,V_3$, per generator. Columns disagree within generators.}\label{fig:rank}\end{figure}
+
+\textbf{H4: conditional coverage along the Gini axis.} Fig.~\ref{fig:cond} shows coverage by $\Gini(\hh)$ quintile. $L_2$ over-covers low-Gini predictions (0.98--1.00 in the first quintile) and under-covers the highest (0.81 on dir\_homo and mult50), matching Prop.~\ref{prop:gini}: at $\phi=20$ the Gaussian approximation predicts bin coverages $(0.998,0.964,0.904,0.862,0.822)$ against $(0.988,0.949,0.894,0.836,0.834)$ simulated (Appendix~\ref{app:theory}), and $\EE\|y-\mu\|^2$ matches $\Gini(\mu)/(\phi+1)$ within 5\% at $\phi\in\{3,10,20,100\}$ (4000 points). $L_2/\sqrt{\Gini}$ reduces the worst-bin gap from 0.101 to 0.032 (dir\_homo) and from 0.108 to 0.031 (mult50); Aitchison/Mahalanobis, KL and Mondrian-by-Gini are also better than $L_2$ in most generators (Appendix Table). The gap of the best methods ($0.03$--$0.05$) is still above the 0.024 noise floor: these scores equalise the first-order scale but not the shape. The ridge-learned scale $\hat\sigma$ \emph{over}-corrects (coverage 0.97 at the highest quintile) and is no better than $L_2$ by the gap on four generators. $L_2$-Mondrian by $\arg\max$ does not help along the Gini axis (gap 0.083--0.103 for $L_2$ and 0.083--0.103 Mondrian-by-argmax in dir\_het/mult50) as expected, since the groups are not aligned with the heteroscedasticity. With few calibration points Mondrian-by-Gini is worse than a plain score (Fig.~\ref{fig:ncal}, Appendix): its gap is 0.107 at $n=30$ and overtakes $L_2/\sqrt{\Gini}$ only for $n\gtrsim500$. \textbf{H4 supported; the learned normaliser is not reliably better than the closed-form one here.}
+\begin{figure}[t]\centering\includegraphics[width=\linewidth]{../figs/fig_cond.pdf}
+\caption{Coverage by $\Gini(\hh)$ quintile (error bars: 95\% CI over 300 draws; dotted: nominal).}\label{fig:cond}\end{figure}
+
+\textbf{Robustness 1: covariate shift.} We shift the test distribution of $x_0$ (which drives the noise precision in dir\_het). Unweighted split conformal loses coverage when the test distribution moves towards the noisy region (shift $-1$: $L_2$ 0.759, KL 0.757, Aitchison 0.750, $L_2/\sqrt{\Gini}$ 0.754; shift $-1.5$: 0.65--0.69) and over-covers towards the quiet region (shift $+1$: 0.975). The learned-scale score is much more robust (0.876 and 0.864), because its coverage is closer to conditional on the shifted covariate. Weighted conformal \citep{tibshirani2019conformal} with the exact density ratio restores 0.898--0.907 for all five scores (Fig.~\ref{fig:shift}). The conclusion about robustness depends on the shifted variable being one the normaliser has access to (here $x_0$ enters its features); for CIFAR-style data where only $\hh$ is available, it need not hold.
+\begin{figure}[t]\centering\includegraphics[width=0.62\linewidth]{../figs/fig_shift.pdf}
+\caption{Coverage under covariate shift of $x_0$ (dir\_het, $n=1000$, 300 draws; CIs smaller than markers).}\label{fig:shift}\end{figure}
+
+\textbf{Robustness 2: exact zeros and the Aitchison $\delta$.} On mult$N$ with $N\in\{5,\dots,1000\}$ (Appendix Fig.~\ref{fig:multN}) coverage remains nominal (0.899--0.902) for all scores and $\delta$, but the Aitchison efficiency depends strongly on $\delta$: at $N=50$, XC is 0.225, 0.097, 0.023, 0.019 for $\delta=10^{-4},10^{-3},10^{-2},10^{-1}$ (KL: 0.013), and at $N=1000$ 0.025, 0.0011, 0.0003, 0.0009 (KL 0.0002). Marginal coverage gives no warning that the score is mis-tuned. Choosing $\delta$ must be part of the evaluation, and ideally uses the aux split.
+
+\subsection{Real data: CIFAR-10H}\label{sec:cifar}
+\input{cifar_section.tex}
+
+\section{Discussion and limitations}\label{sec:disc}
+\textbf{What we can and cannot conclude.} (i) Marginal coverage of split conformal regions on the simplex is valid for all scores tested and its randomness is exactly the Beta law; evaluation papers should report intervals over calibration draws. (ii) Efficiency rankings are a property of (score, noise model, reference measure). No score was uniformly best, and the common practice of reporting a single volume or set-size number hides rank reversals that are frequent (14--37 of 66 pairs). (iii) Conditional coverage along Gini is explained by the noise scale; closed-form normalisation is a cheap, effective first-order fix. We advise reporting at least two reference measures including a data-driven one.
+
+\textbf{Limitations.} Synthetic conclusions hold for the six generators with $K=5$, $d=5$, a well-behaved softmax-regression predictor, and $n_{tr}=1000$; we did not vary $K$ (only a $K=3$ illustration), the predictor class, or the training-set size, and results for $K\gg10$ are unverified. Efficiency measures depend on Monte-Carlo reference samples (600 test points $\times$ 200 uniform draws per measure) and conditional-coverage gaps are subject to a 0.024 noise floor; the group-conditional evidence concerns the Gini and $\arg\max$ axes only, not all subgroups, and conditional validity is not guaranteed by any method here. The theory is first-order: Prop.~\ref{prop:gini} is an asymptotic approximation (checked at $\phi\ge3$), Prop.~\ref{prop:naive} uses a normal approximation to the Beta law (error up to 0.03 for $n=50$). Calibration and test data are exchangeable except in the shift experiment, which uses exact density ratios; estimated weights, label shift, and temporal shift are untested. Real-data evidence comes from a single dataset (CIFAR-10H) with a weak, non-deep predictor (see \S\ref{sec:cifar}) and may not extend to modern deep classifiers. We did not study full conformal, jackknife+, or multivalid methods, or set-valued \emph{label} predictions, and we did not tune any score beyond $\delta$ and ridge strength. Finally, we did not evaluate downstream effects on human decisions \citep{cresswell2024conformal}. These conclusions should not be extrapolated to non-exchangeable data, much larger $K$, or predictors whose outputs are saturated (near one-hot), where ties and zero replacement dominate.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+\section{Proofs}\label{app:proofs}
+\input{appendix_proofs.tex}
+\section{Additional results}\label{app:theory}
+\input{appendix_results.tex}
+\section{Reproducibility}
+Code, data-access instructions, versions, seeds, commands and run times are in \texttt{README.md}; Table~\ref{tab:map} maps every table and figure to its script. CIFAR-10H is distributed with its license in the original repository (see README for the version); no personal data are used.
+\begin{table}[h]\centering\scriptsize
+\caption{Provenance of figures and tables.}\label{tab:map}
+\begin{tabular}{ll}\toprule item & script (command)\\\midrule
+Fig.~\ref{fig:law}a,b; coverage-law/protocol numbers & \texttt{run\_bench.py covlaw}, \texttt{analyze\_synth.py}\\
+Fig.~\ref{fig:tern} & \texttt{fig\_ternary.py}\\
+Tab.~\ref{tab:eff}, Fig.~\ref{fig:rank}, Fig.~\ref{fig:cond}, appendix tables & \texttt{run\_bench.py main}, \texttt{analyze\_synth.py}\\
+Fig.~\ref{fig:shift} & \texttt{run\_bench.py shift}, \texttt{analyze\_synth.py}\\
+Fig.~\ref{fig:ncal} & \texttt{run\_bench.py ncal}, \texttt{analyze\_synth.py}\\
+Fig.~\ref{fig:multN} & \texttt{run\_bench.py mult\_N}, \texttt{analyze\_synth.py}\\
+theory checks (Jacobian, volume, Gini) & \texttt{theory\_checks.py}\\
+CIFAR-10H tables and figure & \texttt{prep\_cifar.py}, \texttt{cifar\_train.py}, \texttt{run\_cifar10h.py}, \texttt{analyze\_cifar.py}\\\bottomrule
+\end{tabular}\end{table}
+
+\newpage
+\input{checklist_filled.tex}
+\end{document}

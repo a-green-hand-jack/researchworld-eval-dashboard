@@ -1,0 +1,16 @@
+# Manuscript reading provenance
+
+The report owner read the frozen objective and all five supplied files on 2026-11-02. The idea-repo Brief initially contained only its heading; substantive context is requested through story-repo. No broad topical search or attempt to identify the prohibited study was made.
+
+Directly retrieved and inspected permitted starter sources on 2026-11-02:
+
+- https://arxiv.org/pdf/1604.04173 : Lei et al., *Distribution-Free Predictive Inference For Regression*, v2 dated 8 March 2017; abstract, introduction, split-conformal discussion and multiple-split discussion inspected. Split-conformal marginal validity and computational motivation support the manuscript background. Do not cite the paper as a novel compositional method.
+- https://arxiv.org/pdf/1904.06019 : Tibshirani et al., *Conformal Prediction Under Covariate Shift*, v3 dated 6 July 2020; abstract, quantile lemma, split-conformal and weighted split-conformal formula inspected. The weighted rule includes a test-weight atom at infinity. Known-ratio assumptions must be stated if an oracle baseline is included.
+
+Analysis derivations are integrated from experiment-repo notes/theory_checks.md. Experimental constants in the draft were checked against analysis/benchmark.py at experiment-repo main 782dd5456a538540a4940bb4116ab4260d34319d. The final evidence map must supersede draft constants if the agreed implementation changes. No pilot number is used as a confirmatory manuscript result.
+
+The report owner subsequently read the substantive Brief wiki (revision f6c4b79de1bfa7fcaf18a510524a3f43545b73da) and the complete source ledger, bibliography and Handoff in idea-repo release `context-v1` (attachment `idea-context-v1.tar.gz`). The study's context owner inspected the nine permitted primary sources to the extents recorded there; those bounded inspections support the integrated related work. In particular, Javanmardi et al. is close prior work, already using conformal simplex regions and simplex-size evaluation. No first-of-its-kind claim is made. Aitchison (1982), Vovk et al. (2005) and Papadopoulos et al. (2002) are not cited because their original full text was not obtained. The bibliography records the versions actually consulted by the study.
+
+On the following activation the report owner read experiment-repo `analysis/methods.md`, `analysis/notes/sensitivity_freeze.md`, `analysis/README.md`, `analysis/checks.py` and `analysis/notes/theory_checks.md` at source revision 4028f114094cb8d8d835b275339ec9da354b1b22. These supply the exact training/scale formulas, coefficient/data seeds, area resolution, clipping-and-closure replacement, boundary membership and infinite-threshold fallback. The manuscript was corrected to the explicit whole-simplex infinite fallback; it does not evaluate clr at a zero. No main or sensitivity result had been supplied to the report at this integration point, and no such empirical number is asserted.
+
+For checklist completion the report owner directly retrieved and read the official NeurIPS Code of Ethics at https://neurips.cc/public/EthicsGuidelines on 2026-11-03, through the research-network resource. The research-process, data, impact and reproducibility guidance was inspected; linked further-reading material was not followed. This source supplies ethical reporting guidance, not research findings.

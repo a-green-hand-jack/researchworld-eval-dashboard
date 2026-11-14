@@ -1,0 +1,1171 @@
+
+PAGE 1
+Stratified Prediction-Powered Inference
+for Hybrid Language Model Evaluation
+Adam Fisch†,∗ Joshua Maynez†,∗ R. Alex Hofer†
+Bhuwan Dhingra† Amir Globerson‡ William W. Cohen†
+†Google DeepMind ‡Google Research
+{fisch,joshuahm,rofer,bdhingra,amirg,wcohen}@google.com
+Abstract
+Prediction-powered inference (PPI) is a method that improves statistical estimates
+based on limited human-labeled data. PPI achieves this by combining small
+amounts of human-labeled data with larger amounts of data labeled by a reasonably
+accurate—but potentially biased—automatic system, in a way that results in tighter
+confidence intervals for certain parameters of interest (e.g., the mean performance
+of a language model). In this paper, we propose a method called Stratified
+Prediction-Powered Inference (StratPPI), in which we show that the basicPPI
+estimates can be considerably improved by employing simple data stratification
+strategies. Without making any assumptions on the underlying automatic labeling
+system or data distribution, we derive an algorithm for computing provably valid
+confidence intervals for population parameters (such as averages) that is based
+on stratified sampling. In particular, we show both theoretically and empirically
+that, with appropriate choices of stratification and sample allocation, our approach
+can provide substantially tighter confidence intervals than unstratified approaches.
+Specifically,StratPPI is expected to improve in cases where the performance
+of the autorater varies across different conditional distributions of the target data.
+1 Introduction
+Evaluating machine learning models requires evaluation data. In particular, to iteratively improve
+on a method during development, or to reliably report an improvement, one needs to confidently and
+quantitatively assess the performance of the method. This is especially challenging for large language
+models (LLMs), where gathering high-quality annotations for generations can be difficult and time-
+consuming—and can ultimately become quite costly if gathering more than a few hundred examples.
+One often-proposed approach to avoiding the evaluation bottleneck is to use a secondary LLM-based
+system to judge the output of the primary one. For instance, if the primary task is developing an
+LLM-based question-answering (QA) system, one can use a second LLM-based system that rates
+question/answer pairs as acceptable or not [6; 8; 17]. However, automated raters (i.e.,autoraters) may
+be biased relative to the human raters they are intended to model, as others have noted [1; 9; 18; 23].
+This can become substantially worse when models are tailored to hill climb on the autorater metrics,
+and eventually cease to become a good metric at all—a phenomenon commonly referred to as Good-
+hart’s law, or reward hacking in the context of reinforcement learning from human feedback [13; 24].
+We thus have two signals for assessing model performance. The first is human labels, which are typ-
+ically accurate, but expensive to collect. As a result, usually only a small sample size is available, and
+*Equal contribution.
+38th Conference on Neural Information Processing Systems (NeurIPS 2024).
+arXiv:2406.04291v2  [cs.LG]  3 Dec 2024
+
+PAGE 2
+an estimate based on these samples alone will have high variance. The second is autorater predictions,
+which are easy to collect for large sample sizes, but may also be systematically biased. The above may
+suggest that one must make a choice between either (i) a high-variance, but unbiased, estimate from a
+small human sample, or (ii) a lower-variance, but biased, autorater-based estimate. However, it turns
+out there are also statistically valid ways of combining the auto-rater and human data for hybrid eval-
+uations. Following [1; 3; 7] we call such methods prediction-powered inference (PPI) methods. At a
+high level,PPI-based methods operate by using a small sample of examples labeled by both humans
+and autoraters to estimate the bias of the autorater. This bias is then used as a rectifier for the autorater
+estimate. The resulting estimate can then be shown to provide improved (i.e., tighter) confidence
+intervals for properties of interest for the system being evaluated, such as its true mean accuracy.
+A weakness of standardPPI, however, is that it does not take heterogeneity into account. For example,
+in our QA setting, an autorater may have one accuracy when predicting if a model answer is correct,
+and a different accuracy when predicting if it is incorrect. This is especially true in cases where a
+correct answer is easy to verify (e.g., it is also present in Wikipedia), but harder to refute (e.g., no
+relevant external search results can be retrieved to either support or contradict it). In these settings,
+it may make sense to apply a differentPPI strategy within each subdomain, depending on the local
+quality of the autorater. Moreover, we claim that such heterogenous settings are to be quite expected in
+practical applications. Inspired by the rich prior literature on stratified sampling and survey design [12;
+19; 21], we therefore propose a stratified approach toPPI, and show that it can be very advantageous
+when performance varies across subdomains, for either the autorater, or the model being evaluated.
+On a technical level, it is not immediately clear how to apply stratification toPPI, as it involves two
+types of samples: one sample that is labeled by both humans and an autorater, and another (typically
+much larger) sample that is only labeled by the autorater. Extending the analysis of [3], in this work
+we show how confidence intervals based on the asymptotic normality of weighted M-estimators [32]
+can in fact be derived for the stratified PPI setting. The next challenge we address is how to
+determine the sample sizes used for stratification (i.e., the sample size of each stratum). Similar
+to recent work for active statistical inference [37], we further derive optimal rates that depend on
+certain moments of the underlying distribution that are generally unknown—and provide an approach
+for effectively approximating these. Finally, we provide extensive empirical evidence showing that
+our stratified approach (StratPPI) leads to considerably improved confidence intervals over both
+classical inference methods that use only human labels, and the baseline (unstratified) PPI approach.
+2 Related Work
+Prediction Powered Inference (PPI) was introduced in [1] as a method for obtaining tighter confidence
+intervals for parameters learned in supervised machine learning (e.g., coefficients in logistic
+regression) by also leveraging other model-based predictions on additional, unlabeled data. Related
+ideas were explored by [30], but with a focus on bootstrapping as a way for obtaining confidence
+intervals. PPI was then extended in several directions. For example [36] showed how the labeled
+data can be used for both estimating the parameters and the autorater model. PPI++ [3] showed how
+to obtain confidence intervals that are easy to compute efficiently, and introduced a parameter for
+weighting the predictions of the autorater such that the overall statistical efficiency can be improved.
+As noted in previous works onPPI, these approaches are closely related to other statistical methods
+for introducing control variates based on autoevaluators [9], as well as augmented inverse propensity
+weighting [27] (see discussion in [ 1; 3]). Like this paper, prior work has also focused on using
+PPI/PPI++ for evaluating machine learning systems with autoraters, including for ranking chatbots
+in the Chatbot Arena [7] and evaluating retrieval-augmented generation systems [28].
+Most relevant to our setting, the recent work of [37] focuses on active sampling of examples to label
+duringPPI, where the total number of queried labels is random, but less than the sampling budget n
+in expectation. Specifically, it proposes to label examples for which the autorater is less confident in
+its predictions, and corrects for the sampling bias with a variant of inverse propensity weighting. In
+contrast, our somewhat simplified approach takes inspiration from stratified sampling where a coarse
+stratification is defined in advance, and the total number of labeled samples is constant. Like [37],
+we derive an analogous optimal allocation strategy for a given budget, though we only apply it at the
+stratum level, and not for individual examples. Furthermore, while the variable allocation helps reduce
+variance in heterogenous settings, our stratified treatment also allows for a stratum-specific extension
+of [3]’s estimated tuning parameters that further improves performance in complementary ways.
+2
+
+PAGE 3
+In terms of stratification specifically, concurrent work [14] also proposed Bayesian variants of several
+PPI methods, including stratified approaches. In contrast, the methods here do not require introducing
+priors, do not require running expensive Bayesian inference, and give more conventional, frequentist,
+guarantees of performance. The credible intervals produced by Bayesian methods are related to, but
+different from, the confidence intervals produced here, and by other priorPPI approaches [1; 3; 7].
+Finally, there is a conceptual similarity between thePPI rectifiers and post-hoc calibration of a classi-
+fier. There is a rich literature on calibrating classifiers (e.g., [22; 25]), but there is a clear difference in
+goals between calibration andPPI: the former is aimed at modifying a learned autorater to make better
+probabilistic predictions, and the latter is aimed at obtaining better confidence intervals by making use
+of an existing autorater. That said, clearly one approach to improvingPPI is to use a better-calibrated
+classifier, perhaps by taking some of the labeled data and using it for re-calibration. This is similar
+in motivation to the cross-PPI approach of [36]. We leave such approaches as future work, but we do
+experimentally explorePPI approaches on both well-calibrated autoraters and poorly calibrated ones.
+3 Preliminaries
+We begin by briefly reviewingPPI [1], and specifically the efficientPPI++ variant of [3]. Here, and
+in the rest of the paper, upper-case letters (X) denote random variables; lower-case letters (x) denote
+constants, and script letters (X ) denote sets, unless specified. All proofs are deferred to Appendix A.
+Following [1; 3; 7], we assume an empirical sample Sn = {(X1, Y1), . . . ,(Xn, Yn)} of n i.i.d.
+examples drawn from some unknown, but fixed, distributionP, where Xi ∈ Xis an input, and Yi ∈ Y
+is the target output. We also assume a larger sample ˜SN = {( ˜X1, f( ˜X1)), . . . ,( ˜XN , f( ˜XN ))} where
+N ≫ n, for which the target outputs are not available, but we have access to anautorater function
+f : X → Y′ which provides an approximation of Y given the observed input (we use Y ′ to denote
+the output space of the autorater as it is possible that Y ̸= Y ′, e.g., if f (X) = E[Y | X]).
+As an example, assume X is a (question, model answer) tuple where the answer is produced by an
+LLM-based QA system we wish to evaluate, Y is a 0/1 “gold” human rating of correctness of the
+answer, i.e., 1{human rates model answer as correct}, and f (X), the autorater, imperfectly predicts
+this human rating Y . One value of interest is then the average accuracy of the QA system, E[Y ].
+More generally, given any convex loss functionℓθ(x, y) satisfying certain regularity conditions (see
+Definition A.1), we are interested in estimating the d-dimensional parameter θ∗,
+θ∗ = argmin
+θ∈Θ
+E[ℓθ(X, Y)]. (1)
+In the statistics literature, this is broadly referred to as M-estimation (e.g., see [29]). Here, we focus on
+mean estimation, for which the loss ℓθ(x, y) = 12 ∥y − θ∥2 has the optimum θ∗ = E[Y ]. However, ourmethod generalizes to other typical losses such as the squared loss for linear regression, where the pa-
+rameters θ∗ are the regression coefficients, or, similarly, the log loss for other generalized linear mod-
+els. Of course, the true θ∗ is generally not known, because we cannot exactly calculate the expectation
+in (1). The goal of PPI, which we share in this work, is to use both the labeled and unlabeled data Sn
+and ˜SN to obtain an asymptotically valid confidence interval Cα,j for θ∗j that for any j ∈ [d] satisfies1
+lim
+n,N →∞
+P(θ∗j ∈ Cα,j) ≥ 1 − α. (2)
+The simplest confidence interval can be obtained using standard techniques by using only the labeled
+sample Sn, and ignoring the autorater data ˜Sn. However,PPI employs a clever trick which allows
+for also using the unlabeled sample ˜SN to get tighter confidence intervals, as described next.
+3.1 A rectified prediction-powered loss
+The key idea of PPI-based methods is to use autorater predictions to derive a low variance, but
+unbiased, estimate of the objective in (1). Consider the following “rectified” prediction-powered loss:
+LPP(θ) = 1N
+NX
+i=1
+ℓθ( ˜Xi, f( ˜Xi))
+| {z }
+autorater data loss
++ 1n
+nX
+i=1
+ℓθ(Xi, Yi) − ℓθ(Xi, f(Xi))
+| {z }
+loss rectifier
+. (3)
+1In d-dimensions, we obtain a confidence interval for each coordinate. See [3] for other possible choices.
+3
+
+PAGE 4
+The rectifier term on the right hand side of (3) removes the bias of the autorater data so that LPP(θ)
+satisfies E[LPP(θ)] = E [ℓθ(X, Y)]. However, when f (X) is correlated with Y , the loss LPP(θ) will
+have lower variance. Unfortunately, f (X) may not be a good predictor of Y in all cases. In fact, it is
+even possible for LPP to be higher variance than the classical estimate (e.g., iff (X) is anti-correlated
+with Y ). Thus, to adapt to the quality of f (X),PPI++ also introduces a tuning parameter λ ∈ R:2
+LPPλ (θ) = λN
+NX
+i=1
+ℓθ( ˜Xi, f( ˜Xi)) + 1n
+nX
+i=1
+ℓθ(Xi, Yi) − λℓθ(Xi, f(Xi)). (4)
+Clearly, LPPλ still remains unbiased for any value of λ. For λ = 0, the framework reduces to classical
+inference. In most cases, however, a proper choice of λ ̸= 0 will result in lower variance. PPI++ also
+suggests how to automatically choose a data-dependent ˆλ that converges to an optimal value.
+3.2 A prediction-powered confidence interval
+We next describe thePPI++ method for deriving confidence intervals based on the rectified loss. Let
+ˆθPPˆλ = argminθ∈Θ LPPˆλ (θ). (5)
+be the prediction-powered estimate. Standard analysis for M-estimators can then be extended to show
+that the scaled difference of the estimate ˆθPPˆλ and the true θ∗ is asymptotically normally distributed.PPI++ then leverages this result to compute a confidence interval for θ∗ that is asymptotically valid.
+Theorem 1 (PPI++, [3]). Assume that ˆλ p→ λ and nN → r ≥ 0. Let Hθ∗ := E[∇2ℓθ∗ ], and
+V λf,θ ∗ := λ2Cov(∇ℓθ∗ ( ˜X, f( ˜X)), V λ∆,θ∗ := Cov(∇ℓθ∗ (X, Y) − λ∇ℓθ∗ (X, f(X))), (6)
+where λ ∈ R is a hyper-parameter. Then under the regularity conditions of Definition A.1, we have
+that √n(ˆθPPˆλ − θ∗) d→ N(0, Σλ), where Σλ := H −1θ∗ (r · V λf,θ ∗ + V λ∆,θ∗ )H −1θ∗ .
+Corollary 1 (PPI++ CI, [3]). Let bΣˆλ be the plug-in estimate for Σλ using Sn and ˜SN . Define
+CPPα,j :=
+
+ˆθPPˆλ,j ± z1− α2
+q
+n−1 bΣλjj
+
+, (7)
+where zβ denotes the β-quantile of the standard normal distribution. Then for any j ∈ [d] it holds
+that limn,N →∞ P
+ 
+θ∗j ∈ CPPα,j ≥ 1 − α.
+As mentioned above, [3] further showed that for an appropriate choice of λ (that can be analytically
+derived and estimated via a ˆλ), the trace of the covariance matrix,Tr(Σλ), is at most that of the covari-
+ance matrix derived without using autorater data, implying that thePPI++-based confidence set CPPα
+can always be at least as tight as that of the classical M-estimator (and often much tighter in practice).
+4 Stratified prediction-powered inference
+We now present our approach for improvingPPI++ estimates via stratification. In particular, we show
+how optimizing a rectified loss computed via stratified sampling can lead to a consistent, but lower
+variance, estimate of the optimal parameter θ∗, and correspondingly tighter confidence intervals.
+Consider the QA example from the previous section. For most autoraters, it is reasonable to assume
+that the strength of their performance can vary, depending on the type of input being presented. For
+instance, an autorater might be accurate at predicting whether an answer to an unambiguous question
+(e.g., “What is the capital of France?”) is correct, but relatively poor at inferring if an answer to
+an open-ended question (e.g., “What is the best way to cook a hamburger?”) is acceptable or not.
+Splitting the problem space into different domains allows us to derive a more specialized form of the
+prediction powered loss that can better adapt to this autorater heterogeneity via stratified sampling.
+Formally, assume that the input space X is partitioned in advance into K non-empty, mutually
+exclusive, and exhaustive strata A = (A1, . . . ,AK), where K is a finite integer. For each stratum,
+2As noted in [3], for some losses ℓθ we must have λ ∈ [0, 1] to guarantee convexity of LPPλ . The main focus
+of this paper, however, is on mean estimation with ℓθ(x, y) = 12 ∥y − θ∥2, which is convex for any λ ∈ R.
+4
+
+PAGE 5
+we further assume that we can estimate wk = P(X ∈ Ak) arbitrarily well using large amounts of
+unlabeled data or prior knowledge; we treat them as known constants here for simplicity. To collect
+the labeled and unlabeled datasetsSn and ˜SN , we then follow a standard stratified sampling procedure
+in which we draw two i.i.d. sets of samples of fixed size nk and Nk, respectively, from each stratum
+k, where PKk=1 nk = n and PKk=1 Nk = N. The relative sizes nk/n and Nk/N are free parameters;they can simply be the natural rates, nk/n ≈ Nk/N ≈ wk, or systematically decided (see §4.3).
+Note that this is a fundamentally different sampling model from standardPPI: here examples are i.i.d.
+within each strata, and independent (but not necessarily identically distributed) across each strata.
+Next, we define the stratified loss via the weighted sum, LSPPλ (θ) = PKk=1 wkLPPk,λk (θ), where wk is
+the stratum weight, λ = (λ1, . . . , λk) ∈ Rk are now stratum-specific tuning parameters, and LPPk (θ)
+is the conditional prediction-powered loss computed within each stratum, i.e.,
+LPPk,λk (θ) = λkNk
+NkX
+i=1
+ℓθ( ˜Xik, f( ˜Xik)) + 1nk
+nkX
+i=1
+ℓθ(Xik, Yik) − λkℓθ(Xik, f(Xik)). (8)
+As before, each LPPk,λk is an unbiased estimate of the conditional loss. Like PPI++, we also allow for
+data-dependent parameters ˆλk that we show how to automatically tune for best performance in §4.2.
+4.1 A stratified prediction-powered confidence interval
+We now present our main result, which is a confidence interval for θ∗ based on the stratified loss.
+More precisely, the result states that, as inPPI++, the minimizer of the stratified loss,
+ˆθSPPˆλ = argminθ LSPPˆλ (θ), (9)
+has an asymptotically normal distribution with mean θ∗. See Algorithm 1 for pseudocode.
+Theorem 2. Assume that ˆλk p→ λk, nN → r for any r ≥ 0, nkn → ρk for any ρk > 0, and NkN → ˜ρk
+for any ˜ρk > 0. Let Hk,θ∗ := E[∇2ℓθ∗ (X, Y) | X ∈ Ak], and
+V λkk,f,θ ∗ := λ2kCov(∇ℓθ∗ ( ˜X, f( ˜X)) | ˜X ∈ Ak), (10)
+V λkk,∆,θ∗ := Cov(∇ℓθ∗ (X, Y) − λk∇ℓθ∗ (X, f(X)) | X ∈ Ak), (11)
+where λk ∈ R is a hyper-parameter. Then, under the regularity conditions of Definition A.1,
+√n(ˆθSPPˆλ − θ∗) d→ N(0, Σλw), (12)
+where Σλw := A−1w BλwA−1w and:
+Aw :=
+KX
+k=1
+wkHk,θ∗ Bλw :=
+KX
+k=1
+w2k
+ r
+˜ρk
+· V λkk,f,θ ∗ + 1ρk · V λkk,∆,θ∗
+
+. (13)
+To obtain the result, we combine unstratifiedPPI++ with the asymptotic properties of weighted M-
+estimators [32]. The resulting confidence interval for θ∗ is then derived analogously to Corollary 1.
+Corollary 2. Let bΣˆλw be the plug-in estimate for Σλw using Sn and ˜SN . Define
+CSPPα,j :=
+
+ˆθSPPˆλ,j ± z1− α2
+q
+n−1 bΣˆλw,jj
+
+, (14)
+where zβ denotes the β-quantile of the standard normal distribution. Then for any j ∈ [d],
+lim
+n,N →∞
+P
+ 
+θ∗j ∈ CSPPα,j  ≥ 1 − α. (15)
+The form of the stratified prediction-powered confidence interval is similar to that ofPPI++, except
+that it is based off of the weighted stratum-conditional covariance matrices. The effect of this change,
+however, is significant. In fact, in the case of mean estimation, we show that the asymptotic variance
+ofStratPPI is at most that ofPPI++ (even without any additional tuning of λk and ρk).
+5
+
+PAGE 6
+Algorithm 1 Stratified prediction-powered inference for general M-estimators (StratPPI)
+Definitions: f is the autorater. Inputs {( ˜Xik, f( ˜Xik))}Nki=1 include the autorater predictions on
+sampled unlabeled data for each partition Ak, k ∈ [K]. Inputs {(Xik, Yik, f(Xik))}nki=1 include the
+autorater predictions on sampled labeled data for each partition Ak, k ∈ [K]. wk is the partition
+weight for Ak, k ∈ [K]. α is the confidence interval coverage error tolerance.
+1: # Pick weighting parameters, see §4.2.
+2: Select ˆλ = (ˆλ1, . . . ,ˆλK)
+3: # Solve for the minimizer of the stratified, prediction-powered empirical loss.
+4: ˆθSPPˆλ = argminθ LSPPˆλ (θ)
+5: # Estimate the Hessian of the true expected loss at θ∗.
+6: ˆAw = PKk=1 wknk Pnki=1 ∇2ℓˆθSPPˆλ (Xik, Yik)
+7: # Build the estimated covariance matrix from each stratified component of the loss.
+8: bΣˆλw = 0d×d
+9: for k = 1, 2, . . . , Kdo
+10: bVf = ˆλ2k dCovNk
+
+∇ℓˆθSPPˆλ ( ˜Xik, f( ˜Xik))
+
+11: bV∆ = dCovnk
+
+∇ℓˆθSPPˆλ (Xik, Yik) + ˆλk∇ℓˆθSPPˆλ (Xik, f(Xik))
+
+12: bΣˆλw = bΣˆλw + w2k ˆA−1w
+ bVf
+Nk +
+bV∆
+nk
+
+ˆA−1w
+13: # Return coordinate-wise confidence intervals for θ∗.
+14: CSPPα = nˆθSPPj ± z1− α2 qbΣˆλw,jj : j ∈ [d]o
+Proposition 1. Let λk ∈ R be any constant for all strata, and fix ρk and ˜ρk to their natural rates wk.
+Then for ℓθ(x, y) = 12 ∥y − θ∥2 and any stratification (A1, . . . ,AK), we have Tr(Σλw) ≤ Tr(Σλ),
+where Σλ is the asymptotic covariance matrix of PPI++. Furthermore, we have that equality holds
+if and only if both E[Y | X ∈ Ak] and E[f (X) | X ∈ Ak] are the same for all strata.
+More generally, although our results will hold for arbitrary stratifications, it is best if they are heteroge-
+neous, and chosen such that the individual stratum-conditional variances are minimized. For example,
+if an autorater systematically over-estimates the model’s performance on one subdomain, but sys-
+tematically under-estimates the model’s performance on another, then splitting these subdomains into
+different strata can result in a lower variance LSPPλ . Similarly, if an autorater has much higher noise
+on some subdomains than others, it can be beneficial to stratify on those subdomains—and then either
+lower λk, allocate a higher proportion of samples nk/n and Nk/N, or both for the noisier stratas.
+In §5 we empirically demonstrate that the stratified estimator can indeed lead to considerably tighter
+confidence intervals in practice, especially with additional tuning of λk and ρk, as discussed next.
+4.2 Optimal weighting of the autorater predictions
+In [3] it was shown that the optimal value of λ forPPI++ (i.e., the one minimizing the variances of
+the estimator and the corresponding confidence interval) could be found in closed form. We now
+present a simple extension of this result to the stratified case. For notational convenience, we use the
+shorthand ∇ℓk,θ := ∇ℓθ(X, Y) | X ∈ Ak and ∇ℓfk,θ := ∇ℓθ(X, f(X)) | X ∈ Ak.
+Proposition 2. Assume that ˜ρk and ρk are fixed. Then the tuning parameters (λ∗1, . . . , λ∗k), where
+λ∗k = Tr
+
+A−1w (Cov(∇ℓk,θ∗ , ∇ℓfk,θ∗ ) + Cov(∇ℓfk,θ∗ , ∇ℓk,θ∗ ))A−1w
+
+2
+
+1 + nkNk
+
+Tr
+
+A−1w Cov(∇ℓfk,θ∗ )A−1w
+ , (16)
+minimize the cumulative asymptotic variance, Tr(Σλw).
+Note that Tr(Σλw) is proportional to the total size of the confidence intervalCSPPα in (14). Furthermore,
+as in [3], we can use plug-in estimates for the terms in (16) to compute a ˆλk, where ˆλk p→ λ∗k. From
+(16), we can see that λ∗k is closely related to the correlation coefficient of the (curvature-scaled)
+6
+
+PAGE 7
+gradients for minimizing the loss on an autorater label versus a true label. Intuitively, the more
+correlated these terms are, the more we can rely on the autorater labels for finding the true minimizer
+of E[ℓθ(X, Y)]. For 1-d mean estimation in particular, we can see that λ∗k takes on a simple form:
+Example 1 (λ∗k for mean estimation). Consider the 1-d mean loss: ℓθ(x, y) = 12 (y − θ)2. Then:
+λ∗k = Cov(Y, f(X))(1 + nkNk )Var(f (X)) ≈ Cov(Y, f(X))Var(f (X)) for large Nk, (17)
+which is equivalent to the optimal linear regression coefficient, minλk E[|Y − λkf (X)|2 | X ∈ Ak].
+4.3 Optimal allocation of the sampling budget
+Our stratification approach has an additional hyperparameter ρ that can also be tuned to reduce
+variance. Recall that ρk determines the ratio between the labeled data size nk for stratum k and the
+overall data size n (i.e., Pk nk = n). ˜ρk is similarly defined for the unlabeled data. Any strictlypositive values of ρk and ˜ρk are valid to be used, though not all values will improve performance. It
+turns out that the optimal ρk values can be exactly calculated, as the following proposition shows.
+Proposition 3. Assume that λk is fixed. Then the sampling rates(ρ∗1, . . . , ρ∗k) and (˜ρ∗1, . . . ,˜ρ∗k), where
+ρ∗k = wk
+q
+Tr(A−1w V λkk,∆,θ∗ A−1w )
+PK
+k′=1 wk′
+q
+Tr(A−1w V λk′k′,∆,θ∗ A−1w ) and ˜ρ∗k = wk
+q
+Tr(A−1w V λkk,f,θ ∗ A−1w )
+PK
+k′=1 wk′
+q
+Tr(A−1w V λk′k′,f,θ ∗ A−1w ) (18)
+minimize the cumulative asymptotic variance, Tr(Σλw).
+Although the solution for ρ∗k is informative, it is not necessarily practical, as it depends on knowing
+A−1w V λkk,∆,θ∗ A−1w ; this in turn depends on θ∗ and P(X, Y), which are both unknown.3 In the special
+case of mean estimation, however, it turns out there is no dependence onθ∗. To address the remaining
+dependence on P(X, Y), we propose to use autorater confidence scores, assuming they are available.
+Specifically, assume Y is discrete, and let c(y | x) be the confidence of the autorater in label y
+given input x, where c(y | x) approximates P(Y = y | X = x). This will result in the estimate for
+Tr(A−1w V λkk,∆,θ∗ A−1w ) below, which can then be plugged into the expression for ρ∗k in Proposition 3.
+Example 2 (ρ∗k for mean estimation). Consider the 1-d mean loss: ℓθ(x, y) = 12 (y − θ)2. Then:
+Tr(A−1w V λkk,∆,θ∗ A−1w ) = Var(Y − λkf (X) | X ∈ Ak). (19)
+(19) can then be estimated using the observed, but unlabeled, samples scored by the autorater for
+each stratum k, ˜Xik = ˜xik, i = 1, . . . , Nk, as Var(Y − λkf (X) | X ∈ Ak) ≈ ˆσ2k, where
+ˆσ2k = 1Nk
+NkX
+i=1
+X
+y∈Y
+c(y | ˜xik) (y − λkf (˜xik) − ˆµk)2 and (20)
+ˆµk = 1Nk
+NkX
+i=1
+X
+y∈Y
+c(y | ˜xik) (y − λkf (˜xik)) . (21)
+For d-dimensional data, the result is similar, but with a sum of d variances (one for each dimension).
+We also provide a simplified expression for ˆσ2k in Appendix B when f (˜x) := Py∈Y c(y | ˜x) · y.
+Importantly, as we are free to use any ρk > 0, using this estimate still preserves the asymptotic
+coverage guarantees in (14), regardless of if the confidence estimate c(y | x) is calibrated or not.
+Empirically, we show that using this heuristic can indeed lead to substantial improvements.
+5 Experimental results
+We compare our stratified estimator,StratPPI, to two baselines: (i) the classical estimate, which uses
+only the labeled data, Sn; and (ii)PPI++, which uses both Sn and ˜Sn. All of our experiments focus on
+3Similarly, the optimal solution to ˜ρk also depends on the unknown θ∗ in general, though this term is less
+important to optimize if we assume N to be large. In practice, we always keep ˜ρk fixed to the natural rate, wk.
+7
+
+PAGE 8
+Figure 1: Mean estimation simulation study with K = 2 and α = 0.1. The top row plots coverage
+(i.e., the fraction of the cases where the CI contained the true parameter value θ∗). The middle row
+plots the mean CI width ( ↓ is better). Shaded areas plot the 16/84 quantiles across 5k trials. The
+bottom row plots the RMSE of ˆθSPP computed across the 5k trials, which shares the same trend
+with the mean CI width, as the estimator is unbiased. The left column shows a setting where strata
+are homogeneous, and StratPPI provides the no benefits over standardPPI++ (but is not worse).
+The middle and right columns show heterogeneous settings where the autorater has either a different
+bias (µ) or variance (σ) per stratum, in which case StratPPI helps substantially. As strata variances
+are known, we only report proportional and optimal sample allocation results forStratPPI.
+1-d mean estimation. We explore three different allocation strategies forStratPPI: the first is to set
+ρk = wk to be data proportional (StratPPI Prop.), the second is to set ρk optimally via the oracle
+ρk = ρ∗k (StratPPI Opt.), and the third is to use the approximation, ρk ∝ wk ˆσk, in Example 2 for
+λk = 1 when confidence scores are available (StratPPI Heur.). We use λ-tuning for bothPPI++
+andStratPPI, as outlined in §4.2. Additional experimental results are given in Appendix C.
+5.1 Simulation studies
+We start with a simple synthetic experiment that is an analogue of §7.7.1 in [3]. Our goal is to estimate
+the mean outcome E[Y ], where Y ∼ N(0, 1). We assume that the input space X is partitioned into
+K = 2 strata, (A1, A2), of equal mass P(X ∈ A1) = P(X ∈ A2) = 0 .5. We then assume that
+predictions are formed as f (Xik) = Yik + µk + σkϵik, where ϵik ∼ N(0, 1). In other words, the
+predictions do not depend on the covariates Xik, other than to reflect a stratum-specific noise σk and
+bias µk. We test three different scenarios: (i) where the two strata are homogeneous withµ1 = µ2 and
+σ1 = σ2; (ii) where the two strata have different prediction biases, µ1 ̸= µ2; and (iii) where the two
+strata have different prediction noise levels, σ1 ̸= σ2. For each experiment, we sample N = 10,000
+total predictions f ( ˜X) using ˜ρ1 = ˜ρ2 = 0.5, i.e., proportional to masses of the two hypothetical,
+equal-weight strata. We then vary the total number n of labeled examples Y , where the allocation is
+chosen according to ρ (which differs depending on if we are usingStratPPI Prop. orStratPPI
+Opt.). We show results in Figure 1 for the mean confidence interval (CI) size and coverage (i.e., the
+fraction of the cases where the CI contained the true parameter value θ∗) of each method, averaged
+over 1k trials. As the plots in Figure 1 illustrate, when the underlying strata are homogeneous (left col-
+umn),StratPPI behaves similar toPPI++. However, when the strata are heterogeneous (middle and
+right columns),StratPPI outperforms both baselines significantly—whereasPPI++ becomes barely
+8
+
+PAGE 9
+Figure 2: Mean estimation on real data with K = 10 and α = 0.05. The x axis plots the number
+of human-labeled examples n; the y axis plots CI width, percent reduction in CI width against the
+classical estimate , and the effective sample size (the amount of human labels necessary to match
+the same confidence interval via classical inference). Shaded areas plot the 16/84 quantiles across
+1k trials. All StratPPI methods improve over classical inference andPPI++.
+more powerful than the classical estimator. Additionally, we see that when the variance differs per
+stratum (right column), optimal allocation of the sampling budget indeed provides additional benefit.
+5.2 Real data studies
+We now demonstrate how our method performs on real datasets, where the underlying structure of
+the autorater is unknown. To partition X , we choose to focus on stratifications that are based on
+the autorater’s predictions, f (X), based on the intuition that autorater performance can often differ
+across the type of predictions that it makes. Concretely, if the output space Y ′ of f is discrete, then
+we define A = Y ′; otherwise we define A based on the equal-mass quantiles of Y ′ (which can be
+estimated by sampling a large set of unlabeled X and applying the autorater). We set K = 10. For
+all experiments, we plot performance as a function of n, where n is the number of human ratings our
+system is allowed to observe from each dataset. The remainder of the dataset (including any data
+points that are unlabeled, or labeled but with the labels removed) is used for the autorater sample ˜SN .
+Seahorse. TheSeahorse dataset [11] focuses on multilingual summarization. The authors consid-
+ered generative models that output summaries for a document, and collected labels for many systems
+that cover serveral dimensions of summary quality. We focus on one quality dimension—whether the
+summary is fully attributable to the source document—and on one summarization system—a fine-
+tuned 13B parameter mT5 model [33]. The autorater models for each dimension are also mT5-XXL
+finetuned models, which output probability scores. The data contains 2727 examples for these two
+tasks, all of which have both human ratings as well as autorater scores.
+AttributedQA. In attributed question answering [6], the goal of the QA system is to output both
+an answer, and a retrieved document that provides support for that answer. The system is only
+considered to be correct if the answer is both correct, and indeed supported by the linked document.
+We evaluate the highest-scoring “retrieve-and-read” QA system from this dataset,and define our
+autorater to be an 11B parameter T5 model [ 26] fine-tuned on a collection of natural language
+9
+
+PAGE 10
+entailment tasks [15]. Like Seahorse, the model predicts a probability for whether or not the QA
+system gave an attributable answer. This dataset has 1000 human labels and 3000 autorater labels.
+Galaxy. To demonstrate the generality ofStratPPI beyond LLM-based settings, we also consider
+the Galaxy dataset [31], where the task is to estimate the fraction of spiral galaxies in the local
+universe. The autorater used here is a ResNet classifier applied to images from the Sloan Digital
+Sky Survey (SDSS) [34]. The classifier estimates the probability that the galaxy in question is spiral.
+We use 16,743 observations from the dataset which contain both the human and autorater labels.
+Methodology. We follow a procedure similar to [ 1; 3] to study CI estimates as a function of
+n. We report results on the following estimates: Classical inference, PPI++, StratPPI Prop.
+and StratPPI Heur. We do not report StratPPI Opt. since it is unknown for real data. For
+each value of n, we sample n of the cases with human labels at an allocation rate ρk (this rate is
+determined differently inStratPPI Prop. andStratPPI Heur.). As noted above, we construct
+the unlabeled dataset ˜SN by joining the remaining labeled data (without utilizing the true labels)
+with any unlabeled data available for that dataset. We repeat this over 1000 trials, and for each
+trial we obtain the CI width. We report the mean of these widths in Figure 2, as well as the percent
+reduction in width over the classical inference baseline, |Cclassicalα |−|Cmethodα ||Cclassicalα | × 100%. We also reportthe “effective sample size”, which we define as the number of samples required to obtain a CI of
+the same width as the method at sample size n when using the classical inference baseline instead.
+Results. Figure 2 shows a large improvement forStratPPI methods over bothPPI++ and classical
+inference for most datasets. Specifically, though all CIs decrease substantially in absolute size with
+n as expected, we see that improvements in the percent reduction in CI width over PPI++ can be
+as large as 0.10 → 0.20, 0.20 → 0.30, and 0.25 → 0.35 points inSeahorse,AttributedQA, and
+Galaxy, respectively. Furthermore, we can observe that many of the datasets exhibit heterogeneous
+characteristics, for which heuristic allocation helps considerably. In Galaxy, this accounts for a +10
+percent reduction in CI width. In Seahorse andAttributedQA, the improvements are less strong
+but still clearly apparent. The practical implication of these results is that when limited by a human
+rating budget,StratPPI is able to produce an estimate of the mean with fewer human ratings via
+stratification and sampling allocation. For example, for theSeahorse dataset, we can see from the
+right column in Figure 2 that StratPPI Heur. with only 300 human ratings will be approximately
+as confident about the mean as the classical estimate that utilizes 600 human ratings, a factor of 2×.
+6 Conclusion
+As systems built on top of large language models continue to become more and more advanced,
+it becomes increasingly challenging to evaluate their performance using automatic tools. Manual
+labeling, on the other hand, is slow and expensive. Methods which therefore save on annotation
+cost are critical for reliably evaluating models, and knowing when they are improving—or degrading.
+Prediction-powered inference (PPI) is a promising class of such hybrid evaluation methods, since
+it can leveraged to provably produce statistically valid confidence intervals, while also effectively
+reducing the number of human labels needed to obtain intervals of certain width. Our results
+demonstrate that we can pushPPI even further by introducing a method for performing even lower
+variance M-estimation by employing stratified sampling. In particular, we find that stratifications
+based on the predictions of the autoraters themselves proves to be an powerful stratification technique.
+Limitations. While the confidence intervals produced byStratPPI (andPPI) enjoy coverage guar-
+antees, these guarantees are asymptotic. When finite-sample performance is of particular importance,
+techniques that afford stronger guarantees might be preferred [2; 4; 5]. We also note some non-trivial
+aspects of the stratified sampling setup: (i) the number of strata has to be fixed; if K scales with
+n a more careful treatment is required; and (ii) the assumed observation model is different from
+traditional i.i.d. settings—we must be able to sample fixed sized samples from each partition; and (iii)
+performance may not be improved if the selected stratification is not statistically useful. Furthermore,
+in practice, the human data might have already been collected, in which case the studied stratified sam-
+pling setup does not directly apply. We leave the study of such post-stratified estimators to future work.
+Broader impacts. This paper introduces a more powerful statistical method for evaluating LLMs, by
+merging human evaluations with autoraters in a way that is aware of subdomain differences. Our goal
+is to help power more reliable evaluations with lower annotation effort, both in terms of cost and time.
+10
+
+PAGE 11
+Acknowledgements. We thank Jacob Eisenstein, Jonathan Berant, Anastasios Angelopoulos, Taylan
+Cemgil, Arnoud Doucet, and Chris Dyer for helpful comments and discussions.
+References
+[1] Anastasios N. Angelopoulos, Stephen Bates, Clara Fannjiang, Michael I. Jordan, and Tijana
+Zrnic. Prediction-powered inference. Science, 382(6671):669–674, 2023. doi: 10.1126/science.
+adi6000. URL https://www.science.org/doi/abs/10.1126/science.adi6000.
+[2] Anastasios N. Angelopoulos, Stephen Bates, Adam Fisch, Lihua Lei, and Tal Schuster. Confor-
+mal risk control. arXiv preprint: 2208.02814, 2023.
+[3] Anastasios N. Angelopoulos, John C. Duchi, and Tijana Zrnic. PPI++: Efficient prediction-
+powered inference. arXiv preprint: 2311.01453, 2023.
+[4] Anastasios Nikolas Angelopoulos, Stephen Bates, Emmanuel J. Candès, Michael I. Jordan, and
+Lihua Lei. Learn then test: Calibrating predictive algorithms to achieve risk control. arXiv
+preprint: 2110.01052, 2021.
+[5] Stephen Bates, Anastasios Nikolas Angelopoulos, Lihua Lei, Jitendra Malik, and Michael I.
+Jordan. Distribution free, risk controlling prediction sets. arXiv preprint: 2101.02703, 2020.
+[6] Bernd Bohnet, Vinh Q. Tran, Pat Verga, Roee Aharoni, Daniel Andor, Livio Baldini Soares,
+Massimiliano Ciaramita, Jacob Eisenstein, Kuzman Ganchev, Jonathan Herzig, Kai Hui, Tom
+Kwiatkowski, Ji Ma, Jianmo Ni, Lierni Sestorain Saralegui, Tal Schuster, William W. Cohen,
+Michael Collins, Dipanjan Das, Donald Metzler, Slav Petrov, and Kellie Webster. Attributed
+question answering: Evaluation and modeling for attributed large language models. arXiv
+preprint: 2212.08037, 2023.
+[7] Pierre Boyeau, Anastasios N. Angelopoulos, Nir Yosef, Jitendra Malik, and Michael I. Jordan.
+Autoeval done right: Using synthetic data for model evaluation. arXiv preprint: 2403.07008,
+2024.
+[8] Jannis Bulian, Christian Buck, Wojciech Gajewski, Benjamin Börschinger, and Tal Schuster.
+Tomayto, tomahto. beyond token-level answer equivalence for question answering evaluation. In
+Yoav Goldberg, Zornitsa Kozareva, and Yue Zhang, editors,Proceedings of the 2022 Conference
+on Empirical Methods in Natural Language Processing, pages 291–305, Abu Dhabi, United
+Arab Emirates, December 2022. Association for Computational Linguistics. doi: 10.18653/v1/
+2022.emnlp-main.20. URL https://aclanthology.org/2022.emnlp-main.20.
+[9] Arun Chaganty, Stephen Mussmann, and Percy Liang. The price of debiasing automatic metrics
+in natural language evalaution. In Iryna Gurevych and Yusuke Miyao, editors, Proceedings of
+the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long
+Papers), pages 643–653, Melbourne, Australia, July 2018. Association for Computational
+Linguistics. doi: 10.18653/v1/P18-1060. URL https://aclanthology.org/P18-1060.
+[10] Wei-Lin Chiang, Lianmin Zheng, Ying Sheng, Anastasios Nikolas Angelopoulos, Tianle Li,
+Dacheng Li, Hao Zhang, Banghua Zhu, Michael Jordan, Joseph E. Gonzalez, and Ion Stoica.
+Chatbot arena: An open platform for evaluating llms by human preference. arXiv preprint:
+2403.04132, 2024.
+[11] Elizabeth Clark, Shruti Rijhwani, Sebastian Gehrmann, Joshua Maynez, Roee Aharoni, Vitaly
+Nikolaev, Thibault Sellam, Aditya Siddhant, Dipanjan Das, and Ankur Parikh. SEAHORSE:
+A multilingual, multifaceted dataset for summarization evaluation. In Houda Bouamor, Juan
+Pino, and Kalika Bali, editors, Proceedings of the 2023 Conference on Empirical Methods
+in Natural Language Processing, pages 9397–9413, Singapore, December 2023. Association
+for Computational Linguistics. doi: 10.18653/v1/2023.emnlp-main.584. URL https://
+aclanthology.org/2023.emnlp-main.584.
+[12] William G. Cochran. Sampling Techniques, 3rd Edition. John Wiley, 1977. ISBN 0-471-16240-
+X.
+11
+
+PAGE 12
+[13] Leo Gao, John Schulman, and Jacob Hilton. Scaling laws for reward model overoptimization.
+In International Conference on Machine Learning, pages 10835–10866. PMLR, 2023.
+[14] R. Alex Hofer, Joshua Maynez, Bhuwan Dhingra, Adam Fisch, Amir Globerson, and William W.
+Cohen. Bayesian prediction-powered inference. arXive preprint: 2405.06034, 2024.
+[15] Or Honovich, Roee Aharoni, Jonathan Herzig, Hagai Taitelbaum, Doron Kukliansy, Vered
+Cohen, Thomas Scialom, Idan Szpektor, Avinatan Hassidim, and Yossi Matias. True: Re-
+evaluating factual consistency evaluation. arXiv preprint: 2204.04991, 2022.
+[16] Jaehun Jung, Faeze Brahman, and Yejin Choi. Trust or escalate: Llm judges with provable
+guarantees for human agreement. arXiv preprint: 2407.18370, 2024.
+[17] Ehsan Kamalloo, Nouha Dziri, Charles Clarke, and Davood Rafiei. Evaluating open-domain
+question answering in the era of large language models. In Anna Rogers, Jordan Boyd-Graber,
+and Naoaki Okazaki, editors, Proceedings of the 61st Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers), pages 5591–5606, Toronto, Canada, July
+2023. Association for Computational Linguistics. doi: 10.18653/v1/2023.acl-long.307. URL
+https://aclanthology.org/2023.acl-long.307.
+[18] Chia-Wei Liu, Ryan Lowe, Iulian Serban, Mike Noseworthy, Laurent Charlin, and Joelle Pineau.
+How NOT to evaluate your dialogue system: An empirical study of unsupervised evaluation
+metrics for dialogue response generation. In Jian Su, Kevin Duh, and Xavier Carreras, editors,
+Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing,
+pages 2122–2132, Austin, Texas, November 2016. Association for Computational Linguistics.
+doi: 10.18653/v1/D16-1230. URL https://aclanthology.org/D16-1230.
+[19] S.L. Lohr. Sampling: Design and Analysis. Chapman & Hall/CRC Texts in Statistical Science.
+CRC Press, 2021. ISBN 9781000478235. URL https://books.google.com/books?id=
+DahGEAAAQBAJ.
+[20] Whitney K. Newey and Daniel McFadden. Chapter 36 large sample estimation and hypothesis
+testing. volume 4 of Handbook of Econometrics , pages 2111–2245. Elsevier, 1994. doi:
+https://doi.org/10.1016/S1573-4412(05)80005-4. URL https://www.sciencedirect.com/
+science/article/pii/S1573441205800054.
+[21] Jerzy Neyman. On the two different aspects of the representative method: The method of
+stratified sampling and the method of purposive selection. Journal of the Royal Statistical
+Society, 97(4):558–625, 1934. ISSN 09528385. URL http://www.jstor.org/stable/
+2342192.
+[22] Alexandru Niculescu-Mizil and Rich Caruana. Obtaining calibrated probabilities from boosting.
+In UAI, volume 5, pages 413–20, 2005.
+[23] Jekaterina Novikova, Ondˇrej Dušek, Amanda Cercas Curry, and Verena Rieser. Why we need
+new evaluation metrics for NLG. In Martha Palmer, Rebecca Hwa, and Sebastian Riedel, editors,
+Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing,
+pages 2241–2252, Copenhagen, Denmark, September 2017. Association for Computational
+Linguistics. doi: 10.18653/v1/D17-1238. URL https://aclanthology.org/D17-1238.
+[24] Richard Yuanzhe Pang, Vishakh Padmakumar, Thibault Sellam, Ankur Parikh, and He He.
+Reward gaming in conditional text generation. In Proceedings of the 61st Annual Meeting of
+the Association for Computational Linguistics (Vlume 1: Long Papers), 2023.
+[25] John Platt et al. Probabilistic outputs for support vector machines and comparisons to regularized
+likelihood methods. Advances in large margin classifiers, 10(3):61–74, 1999.
+[26] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena,
+Yanqi Zhou, Wei Li, and Peter J. Liu. Exploring the limits of transfer learning with a unified
+text-to-text transformer. Journal of Machine Learning Research, 21(140):1–67, 2020. URL
+http://jmlr.org/papers/v21/20-074.html.
+12
+
+PAGE 13
+[27] James M. Robins and Andrea Rotnitzky. Semiparametric efficiency in multivariate regression
+models with missing data. Journal of the American Statistical Association, 90(429):122–129,
+1995. ISSN 01621459. URL http://www.jstor.org/stable/2291135.
+[28] Jon Saad-Falcon, Omar Khattab, Christopher Potts, and Matei Zaharia. Ares: An automated
+evaluation framework for retrieval-augmented generation systems. arXiv preprint: 2311.09476,
+2024.
+[29] A. W. van der Vaart. Asymptotic Statistics. Cambridge Series in Statistical and Probabilistic
+Mathematics. Cambridge University Press, 1998.
+[30] Siruo Wang, Tyler H McCormick, and Jeffrey T Leek. Methods for correcting inference based
+on outcomes predicted by machine learning. Proceedings of the National Academy of Sciences,
+117(48):30266–30275, 2020.
+[31] Kyle W. Willett, Chris J. Lintott, Steven P. Bamford, Karen L. Masters, Brooke D. Simmons,
+Kevin R. V . Casteels, Edward M. Edmondson, Lucy F. Fortson, Sugata Kaviraj, William C.
+Keel, Thomas Melvin, Robert C. Nichol, M. Jordan Raddick, Kevin Schawinski, Robert J.
+Simpson, Ramin A. Skibba, Arfon M. Smith, and Daniel Thomas. Galaxy Zoo 2: detailed
+morphological classifications for 304 122 galaxies from the Sloan Digital Sky Survey. Monthly
+Notices of the Royal Astronomical Society, 435(4):2835–2860, 09 2013. ISSN 0035-8711. doi:
+10.1093/mnras/stt1458. URL https://doi.org/10.1093/mnras/stt1458.
+[32] Jeffrey M. Wooldridge. Asymptotic properties of weighted m-estimators for standard stratified
+samples. Econometric Theory, 17:451 – 470, 2001. URL https://api.semanticscholar.
+org/CorpusID:123148497.
+[33] Linting Xue, Noah Constant, Adam Roberts, Mihir Kale, Rami Al-Rfou, Aditya Siddhant,
+Aditya Barua, and Colin Raffel. mt5: A massively multilingual pre-trained text-to-text trans-
+former. arXiv preprint arXiv:2010.11934, 2020.
+[34] Donald G. York, J. Adelman, Jr. John E. Anderson, Scott F. Anderson, James Annis, Neta A.
+Bahcall, J. A. Bakken, Robert Barkhouser, Steven Bastian, Eileen Berman, William N. Boroski,
+Steve Bracker, Charlie Briegel, John W. Briggs, J. Brinkmann, Robert Brunner, Scott Burles,
+Larry Carey, Michael A. Carr, Francisco J. Castander, Bing Chen, Patrick L. Colestock, A. J.
+Connolly, J. H. Crocker, István Csabai, Paul C. Czarapata, John Eric Davis, Mamoru Doi, Tom
+Dombeck, Daniel Eisenstein, Nancy Ellman, Brian R. Elms, Michael L. Evans, Xiaohui Fan,
+Glenn R. Federwitz, Larry Fiscelli, Scott Friedman, Joshua A. Frieman, Masataka Fukugita,
+Bruce Gillespie, James E. Gunn, Vijay K. Gurbani, Ernst de Haas, Merle Haldeman, Frederick H.
+Harris, J. Hayes, Timothy M. Heckman, G. S. Hennessy, Robert B. Hindsley, Scott Holm,
+Donald J. Holmgren, Chi hao Huang, Charles Hull, Don Husby, Shin-Ichi Ichikawa, Takashi
+Ichikawa, Željko Ivezi´c, Stephen Kent, Rita S. J. Kim, E. Kinney, Mark Klaene, A. N. Kleinman,
+S. Kleinman, G. R. Knapp, John Korienek, Richard G. Kron, Peter Z. Kunszt, D. Q. Lamb,
+B. Lee, R. French Leger, Siriluk Limmongkol, Carl Lindenmeyer, Daniel C. Long, Craig
+Loomis, Jon Loveday, Rich Lucinio, Robert H. Lupton, Bryan MacKinnon, Edward J. Mannery,
+P. M. Mantsch, Bruce Margon, Peregrine McGehee, Timothy A. McKay, Avery Meiksin, Aronne
+Merelli, David G. Monet, Jeffrey A. Munn, Vijay K. Narayanan, Thomas Nash, Eric Neilsen,
+Rich Neswold, Heidi Jo Newberg, R. C. Nichol, Tom Nicinski, Mario Nonino, Norio Okada,
+Sadanori Okamura, Jeremiah P. Ostriker, Russell Owen, A. George Pauls, John Peoples, R. L.
+Peterson, Donald Petravick, Jeffrey R. Pier, Adrian Pope, Ruth Pordes, Angela Prosapio, Ron
+Rechenmacher, Thomas R. Quinn, Gordon T. Richards, Michael W. Richmond, Claudio H.
+Rivetta, Constance M. Rockosi, Kurt Ruthmansdorfer, Dale Sandford, David J. Schlegel,
+Donald P. Schneider, Maki Sekiguchi, Gary Sergey, Kazuhiro Shimasaku, Walter A. Siegmund,
+Stephen Smee, J. Allyn Smith, S. Snedden, R. Stone, Chris Stoughton, Michael A. Strauss,
+Christopher Stubbs, Mark SubbaRao, Alexander S. Szalay, Istvan Szapudi, Gyula P. Szokoly,
+Anirudda R. Thakar, Christy Tremonti, Douglas L. Tucker, Alan Uomoto, Dan Vanden Berk,
+Michael S. V ogeley, Patrick Waddell, Shu i Wang, Masaru Watanabe, David H. Weinberg,
+Brian Yanny, and Naoki Yasuda. The sloan digital sky survey: Technical summary. The
+Astronomical Journal, 120(3):1579, sep 2000. doi: 10.1086/301513. URL https://dx.doi.
+org/10.1086/301513.
+13
+
+PAGE 14
+[35] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang,
+Zi Lin, Zhuohan Li, Dacheng Li, Eric Xing, Hao Zhang, Joseph E. Gonzalez, and Ion Stoica.
+Judging LLM-as-a-judge with MT-bench and chatbot arena. In Thirty-seventh Conference
+on Neural Information Processing Systems Datasets and Benchmarks Track , 2023. URL
+https://openreview.net/forum?id=uccHPGDlao.
+[36] Tijana Zrnic and Emmanuel J. Candès. Cross-prediction-powered inference. Proceedings of the
+National Academy of Sciences, 121(15):e2322083121, 2024. doi: 10.1073/pnas.2322083121.
+URLhttps://www.pnas.org/doi/abs/10.1073/pnas.2322083121.
+[37] Tijana Zrnic and Emmanuel J. Candès. Active statistical inference. arXiv preprint: 2403.03208,
+2024.
+14
+
+PAGE 15
+A Proofs
+We begin by defining the basic regularity conditions that we assume ℓθ satisfies:
+Definition A.1 (Regularity conditions of ℓθ). Assume that
+(i) Θ is a compact subset of Rd;
+(ii) The minimizer θ∗ ∈ int(Θ) is unique with E[∇ℓθ∗ (X, Y)] = 0;
+(iii) For all (x, y) ∈ X × Y, ℓθ(x, y) is twice continuously differentiable on int(Θ);
+(iv) For all θ ∈ Θ, ℓθ(X, Y), ∂ℓθ(X,Y )∂θi , and ∂2ℓθ(X,Y )∂θi∂θj have finite expectations;
+(v) E[∇2ℓθ(X, Y)] is non-singular.
+These regularity conditions are fairly mild—for example, it is straightforward to verify that the loss of
+the mean estimator, 12 ∥y − θ∥2, satisfies Definition A.1. We note, however, thatPPI++ can be appliedto merely “smooth enough” losses, which also include non-continuously differentiable functions
+losses like the quantile loss. As we primarily focus on mean estimation in this work, for simplicity of
+analysis we only consider (the still broad class) of losses satisfying Definition A.1, though our results
+can be expected to readily extend to the more general case following a similar treatment as in [3; 29].
+To support our theoretical results, we also provide the following two lemmas.
+Lemma A.1 (Slutsky’s Theorem, general form). Let Xn
+d
+→ X and Yn
+p
+→ c, where Xn, X, and Yn are
+random vectors, and c is a constant vector. Then for any continuous functiong, g(Xn, Yn)
+d
+→ g(X, c).
+Proof. By Theorem 2.7 of [29] we have (Xn, Yn)
+d
+→ (X, c). The continuous mapping theorem then
+implies that g(Xn, Yn)
+d
+→ g(X, c).
+Lemma A.2. Under the regularity conditions of Definition A.1, we have that ˆθSPPˆλ p→ θ∗.
+Proof. Under the regularity conditions of Definition A.1 and the fact that ˆλk p→ λk where λk is
+constant, the uniform weak law of large numbers can be applied to each term in LSPPˆλ (θ) so that
+sup
+θ∈Θ
+LSPPˆλ (θ) − E[ℓθ(X, Y)] p→ 0.
+As θ∗ is unique, Θ is compact, and ℓθ is continuous it follows from Theorem 2.1 of [20] that
+ˆθSPPˆλ p→ θ∗.
+A.1 Proof of Theorem 2
+Proof. For ease of notation, we will define
+˜LfNk (θ) = 1Nk
+NkX
+i=1
+ℓθ( ˜Xik, f( ˜Xik)
+Lnk (θ) = 1nk
+nkX
+i=1
+ℓθ(Xik, Yik)
+Lfnk (θ) = 1nk
+nkX
+i=1
+ℓθ(Xik, f(Xik)).
+We will also use the following shorthand for the conditional gradients:
+∇ℓk,θ := ∇ℓθ(X, Y) | X ∈ Ak and
+∇ℓfk,θ := ∇ℓθ(X, f(X)) | X ∈ Ak.
+15
+
+PAGE 16
+As samples are i.i.d. within each stratum, the CLT gives
+p
+Nk
+
+∇ ˜LfNk (θ∗) − E[∇ℓfk,θ∗ ] d− → N0, Cov ∇ℓfk,θ∗  , (22)
+and
+√nk
+∇Lnk (θ∗) − E[∇ℓk,θ∗ ]
+∇Lfnk (θ∗) − E[∇ℓfk,θ∗ ]
+
+d
+− → N
+
+0
+0
+
+, Cov
+∇ℓk,θ∗
+∇ℓfk,θ∗
+
+. (23)
+Since samples Sn and ˜SN are independent from each other, we also have that (22) and (23) converge
+jointly. Applying Lemma A.1 for the following continuous function of ˆλk p− →λk then gives
+√n
+ 
+ˆλk · N
+
+∇ ˜LfNk (θ∗) − E[∇ℓfk,θ∗ ] +  1−ˆλk⊤  ∇ ˜Ln(θ∗) − E[∇ℓk,θ∗ ]∇ ˜Lfnk (θ∗) − E[∇ℓfk,θ∗ ]!
+d
+− → N
+
+0, λ2k nNk Cov(∇ℓfk,θ∗ ) + N 0, nnk Cov(∇ℓk,θ∗ − λk∇ℓfk,θ∗ ) (24)
+= N
+
+0, r˜ρk · V λkk,f,θ ∗ + 1ρk V λkk,∆,θ∗
+
+. (25)
+Since θ∗ satisfies E[∇ℓθ∗ ] = 0, by the law of total expectation
+KX
+k=1
+wkE[∇ℓk,θ∗ ] = E[∇ℓθ∗ ] = 0. (26)
+Using this fact, we can write
+∇LSPPˆλ (θ) =
+KX
+k=1
+wk
+
+∇
+
+ˆλk ˜LfNk (θ) + Lnk (θ) − ˆλkLfnk (θ) − E[∇ℓk,θ∗ ] . (27)
+Since samples across the K (where here K is a constant) stratas are independent, combining the
+results of (25) with (27) yields
+√n∇LSPPˆλ (θ∗) d− → N(0, Bλw). (28)
+Applying the mean value theorem, we have
+∇LSPPˆλ (ˆθSPPˆλ ) = ∇LSPPˆλ (θ∗) + ∇2LSPPˆλ (˜θ)(ˆθSPPˆλ − θ∗) (29)
+for some ˜θ between ˆθSPPˆλ and θ∗. Let A† represent the pseudoinverse of A. Then
+ˆθSPPˆλ − θ∗ = ∇2LSPPˆλ (˜θ)†
+
+∇LSPPˆλ (ˆθSPPˆλ ) − ∇LSPPˆλ (θ∗) . (30)
+As ˆθSPPˆλ p→ θ∗ per Lemma A.2, we have ˜θ p→ θ∗. Under the regularity conditions of Definition A.1
+and the fact that ˆλk p− →λk, an application of the uniform weak law of large numbers and the
+continuous mapping theorem then gives
+∇2LSPPˆλ (˜θ)† p→ ∇2E[ℓθ∗]−1, (31)
+which is a constant term. Furthermore, by the law of total expectation,
+E[∇2ℓθ∗ ]−1 =
+ KX
+k=1
+wkHk,θ∗
+!−1
+= A−1w . (32)
+Finally, the fact that ˆθSPPˆλ p→ θ∗ and θ∗ ∈ int(Θ), together with the fact that ˆθSPPˆλ is a minimum of
+LSPPˆλ , implies that ∇LSPPˆλ (ˆθSPPˆλ ) p→ 0. Combining these results with (28) via Lemma A.1 and the
+fact that A−1w is symmetric for twice continuously differentiable ℓθ gives
+√n(ˆθ − θ∗) d− → N(0, A−1w Bλw(A−1w )⊤) = N (0, A−1w BλwA−1w ). (33)
+16
+
+PAGE 17
+A.2 Proof of Corollary 2
+Proof. The regularity conditions of Definition A.1 allow us to apply Lemma 4.3 of [20] to show that
+each of the plug-in estimates for each stratum term satisfies
+bHk, ˆθSPP p→ Hk,θ∗ and bV λkk,f, ˆθSPP p→ bV λkk,f,θ ∗ and bV λkk,∆,ˆθSPP p→ bV λkk,∆,θ∗
+which implies that the weighted plug-in estimate for ˆΣˆλw satisfies ˆΣˆλw p→ Σλw. (14) is thus equivalent
+to taking the
+  α
+2 , 1 − α2  quantiles of the asymptotic normal distribution of ˆθSPP, implying (15).
+A.3 Proof of Proposition 1
+Proof. In the special case of the square loss, the Hessian is the identity matrix. Therefore, simplifying
+and applying the linearity of the trace, we have
+Tr(Σλw) =
+KX
+k=1
+w2kTr
+ r
+˜ρk
+· V λkk,f,θ ∗ + 1ρk V λkk,∆,θ∗
+
+(34)
+=
+KX
+k=1
+wkTr
+
+r · V λkk,f,θ ∗ + V λkk,∆,θ∗
+
+(35)
+= r
+KX
+k=1
+wkTr
+
+V λkk,f,θ ∗
+
++
+KX
+k=1
+wkTr
+
+V λkk,∆,θ∗
+
+(36)
+= r
+dX
+j=1
+KX
+k=1
+wkV λkk,f,θ ∗,jj +
+dX
+j=1
+KX
+k=1
+wkV λkk,∆,θ∗,jj (37)
+where we include the subscript jj to index the diagonal variance terms of both covariance matrices.
+For ease of notation, denote the conditional variances as
+Vf,j | Z = k := λ2∇ℓθ∗j (X, f(X)) | X ∈ Ak and
+V∆,j | Z = k := ∇ℓθ∗j (X, Y) − λ∇ℓθ∗j (X, f(X)) | X ∈ Ak.
+Then we can write (37) as
+r
+dX
+j=1
+KX
+k=1
+wkV λkk,f,θ ∗,jj +
+dX
+j=1
+KX
+k=1
+wkV λkk,∆,θ∗,jj =
+dX
+j=1
+rE[Var(Vf,j | Z)] + E[Var(V∆,j | Z)],
+(38)
+and apply the law of total variance to get
+Tr(Σλw) =
+dX
+j=1
+rE[Var(Vf,j | Z)] + E[Var(V∆,j | Z)] (39)
+=
+dX
+j=1
+r(Var(Vf,j ) − Var(E[Vf,j | Z])) + (Var(V∆,j) − Var(E[V∆,j | Z])) (40)
+≤
+dX
+j=1
+rVar(Vf,j ) + Var(V∆,j) (41)
+= Tr(Σλ). (42)
+Finally, (41) holds with equality iff both Var(E[Vf,j | Z]) = 0 and Var(E[V∆,j | Z]) = 0, which,
+combined with the assumption that P(Z = k) = wk > 0 for all k, is only satisfied when both
+E[Vf,j | Z] and E[V∆,j | Z] are constants.
+17
+
+PAGE 18
+A.4 Proof of Proposition 2
+Proof. By linearity of Bλw, we can rewrite Σλw = A−1w BλwA−1w as
+Σλw =
+KX
+k=1
+w2kA−1w
+ r
+˜ρk
+· V λkk,f,θ ∗ + 1ρk V λkk,∆,θ∗
+
+A−1w (43)
+=
+KX
+k=1
+w2k
+ρk
+A−1w
+ rρk
+˜ρk
+· V λkk,f,θ ∗ + V λkk,∆,θ∗
+
+A−1w (44)
+=
+KX
+k=1
+w2k
+ρk
+A−1w
+ nk
+Nk
+· V λkk,f,θ ∗ + V λkk,∆,θ∗
+
+A−1w . (45)
+By linearity of the trace, we then also have
+Tr(Σλw) =
+KX
+k=1
+w2k
+ρk
+Tr
+
+A−1w
+ nk
+Nk
+· V λkk,f,θ ∗ + V λkk,∆,θ∗
+
+A−1w
+
+. (46)
+As each term in the sum is independent, we can minimize the sum by minimizing each individual
+term, i.e.,
+λ∗k = argminλk Tr
+
+A−1w
+ nk
+Nk
+· V λkk,f,θ ∗ + V λkk,∆,θ∗
+
+A−1w
+
+(47)
+for k = 1, . . . , K. We can then directly apply Proposition 2 of [3] to get
+λ∗k = Tr
+
+A−1w (Cov(∇ℓk,θ∗ , ∇ℓfk,θ∗ ) + Cov(∇ℓfk,θ∗ , ∇ℓk,θ∗ ))A−1w
+
+2(1 + rk)Tr
+
+A−1w Cov(∇ℓfk,θ∗ )A−1w
+ , (48)
+where rk = nk/Nk.
+A.5 Proof of Proposition 3
+Proof. Following the same derivation as Proposition 2, we can rewrite
+Tr(Σλw) =
+KX
+k=1
+w2kTr
+
+A−1w
+ r
+˜ρk
+· V λkk,f,θ ∗ + 1ρk V λkk,∆,θ∗
+
+A−1w
+
+(49)
+= r
+KX
+k=1
+w2k
+˜ρk
+Tr
+
+A−1w V λkk,f,θ ∗ A−1w
+
++
+KX
+k=1
+w2k
+ρk
+Tr
+
+A−1w V λkk,∆,θ∗ A−1w
+
+, (50)
+and therefore can optimize ˜ρk and ρk independently.
+We start with ρk. Let zk = Tr
+
+A−1w V λkk,∆,θ∗ A−1w
+
+. We then solve the constrained optimization
+problem
+minimize
+KX
+k=1
+w2k
+ρk
+zk s.t.
+KX
+k=1
+ρk = 1, ρk ≥ 0. (51)
+Turning this into a Lagrangian with additional slack variables sk ≥ 0, we have
+J (ρ, µ, η, s) =
+KX
+k=1
+w2k
+ρk
+zk + µ
+ KX
+i=1
+ρk − 1
+!
++
+KX
+k=1
+ηk(ρk − s2k) (52)
+18
+
+PAGE 19
+Setting ∇J (ρ, µ, η) = 0 and solving for ρk then gives:
+∂J
+∂ρk
+= − w2k
+ρ2k zk + µ + ηk = 0 (53)
+∂J
+∂µ = 1 −
+X
+ρk = 0 (54)
+∂J
+∂ηk
+= ρk − s2k = 0 (55)
+∂J
+∂sk
+= −2ηksk = 0 (56)
+Assume that the inequality constraint is inactive, and ηk = 0. Solving for ρ∗k,
+ρ∗k = s2k =
+s
+w2kzk
+µ =⇒
+KX
+k=1
+s
+w2kzk
+µ = 1 (57)
+=⇒ √µ =
+KX
+k=1
+q
+w2kzk (58)
+=⇒ ρ∗k = wk
+√zk
+PK
+k′=1 wk′
+√zk′ . (59)
+We can now verify that the constraint is inactive, with ρ∗k ≥ 0, since PKk=1 wk = 1 , wk ≥ 0 bydefinition of a valid probability distribution, and we have zk ≥ 0 since it is a sum of non-negative
+variance terms.
+The same analysis can then be applied to ˜ρk, but for zk = Tr
+
+A−1w V λkk,f,θ ∗ A−1w
+
+.
+B A simplified estimate of the sample allocation for mean estimation
+In the setting of Example 2 (i.e., 1-d mean estimation), assume that c(y | x) ≈ P(Y = y | X = x) is
+a confidence estimate for label y ∈ Y, where Y is discrete. Then, if we define the autorater as
+f (x) =
+X
+y∈Y
+c(y | x) · y ≈ E[Y | X = x], (60)
+the term Var(Y − λkf (X) | X ∈ Ak) further simplifies to ≈ Var(Y | X ∈ Ak) for any value of
+λk. Applying the law of total variance, we can conveniently write Var(Y | X ∈ Ak) as
+Var(Y | X ∈ Ak) = E[Var(Y | X) | X ∈ Ak] + Var(E[Y | X] | X ∈ Ak), (61)
+which can be empirically estimated as ˆσk on unlabeled autorater data, ˜Xik, i = 1, . . . , Nk, via
+ˆσ2k = bENk
+
+X
+y∈Y
+c(y | ˜Xik) · y − f ( ˜Xik))
+
+ + dVarNk (f ( ˜Xik)), (62)
+where bENk and dVarNk denote the empirical mean and variance over all ˜Xik, respectively. Lastly,
+when Y is binary (which is the case in all of our experiments in §5.2), this becomes
+ˆσ2k = bENk
+h
+f ( ˜Xik)(1 − f ( ˜Xik))
+i
++ dVarNk (f ( ˜Xik)), (63)
+which can be easily calculated in Python asnp.mean(yhat * (1 - yhat)) + np.var(yhat).
+C Additional experimental results
+We also evaluateStratPPI on the Chatbot Arena dataset [10], in which we evaluate the win-rate of
+gpt-4-1106-preview overclaude-2.1.4 See Figure 3. Specifically, we use the standard Chatbot
+4https://huggingface.co/datasets/lmsys/lmsys-arena-human-preference-55k
+19
+
+PAGE 20
+Figure 3: Win-rate experiment on Chatbot Arena for gpt-4-1106-preview vs. claude-2.1.
+Scores are based on the average label (’better’ = 1 vs. ’worse’ = 0) over 10 samples from Gemini
+Ultra acting as a LLM judge. Interestingly, as these confidence scores are not calibrated, our heuristic
+becomes overly aggressive at higher n. Future work can explore how to best incorporate additional
+regularization into the estimated optimal sampling ratios ρ.
+Arena auto-eval prompt5 and map[[A»B]],[[A>B] to 1,[[A=B]] to 0.5, and[[B»A]],[[B>A]]
+to 0. We then do self-consistency sampling and take the average of 10 samples from Gemini Ultra.
+This is used as both our final autorater estimate and confidence. We find that stratification also helps
+in this setting. However, in line with prior and contemporary work [e.g., 35; 16] we found confidence
+scores from the LLM-as-a-judge to be fairly uncalibrated, which makes our heuristic allocation less
+effective at larger n (though still effective at small labeled sample sizes n). Investigating robust
+heuristics in the face of miscalibration (e.g., via regularization or recalibration) would likely help,
+and is a direction for future work.
+5https://github.com/lm-sys/arena-hard-auto/blob/main/config/judge_config.yaml
+20

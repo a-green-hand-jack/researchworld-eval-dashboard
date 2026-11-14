@@ -1,0 +1,48 @@
+\section{Setting: Targeted Investment and Aggregation Rules}
+\label{sec:method}
+
+\paragraph{Leaderboard, rule, target.}
+A leaderboard is a score matrix $X\in\mathbb{R}^{M\times n}$: $x_{jt}$ is the score (in points, 0--100) of model $j$ on sub-dataset $t$. An aggregation rule $R$ maps $X$ to a ranking. We fix a \emph{target} model $\target$ and write $x=x_{\target\cdot}$.
+
+\paragraph{Targeted investment.}
+Training on data related to sub-dataset $t$ lets the developer raise the target's score on $t$ to any $y_t\in[x_t,c_t]$, where the \emph{cap} $c_t\ge x_t$ is a modelling assumption (below); scores on other tasks are unchanged by the action, and all other models are fixed (a single deviator; no reaction by rivals). The target is \emph{first} if it is strictly above every rival under $R$; for score-valued rules $f$ this means $f(y)\ge \tau_\target+\varepsilon$ with $\tau_\target=\max_{j\ne \target}f(x_j)$ and a tie margin $\varepsilon=10^{-3}$ points, so ties never count as first place. For a rule with no valid solution inside the caps, the target is \emph{infeasible}; infeasibility is reported as a result, never dropped or replaced by a large number.
+
+\paragraph{Measuring investment.}
+For a feasible $y$ let $\delta_t=y_t-x_t$. We report three costs, each minimised separately over feasible $y$ (so the minimisers can differ): the number of tasks touched $K=|\{t:\delta_t>0\}|$, the total score points $\LL=\sum_t\delta_t$, and the largest single-task jump $\Linf=\max_t\delta_t$. $K$ and $\LL$ are the headline measures; $\Linf$ gives a \emph{uniform} reference: raising every task by the smallest feasible largest jump $\Linf$ would cost $n\Linf$ points, which we compare with the targeted $\LL\le n\Linf$. This reference ignores the cap on individual tasks (a raise of $\Linf$ may exceed a task's cap or headroom), so it is not itself an allowed investment. ``Investment'' here is score points under a cap, not training data or compute; we make no claim about how many examples it takes to gain a point.
+
+\paragraph{Caps.}
+The cap is the main assumption and the main sensitivity. With $x_{\max,t}=\max_{j\ne\target}x_{jt}$ and all caps clipped at 100: \texttt{ceil}: $c_t=100$ (unconstrained reference); \texttt{front}$h$: $c_t=\max(x_t, x_{\max,t}+h)$ (the target may at most overtake the best rival on $t$ by $h$ points, $h\in\{0,2\}$); \texttt{gain}$h$: $c_t=x_t+h$ (at most $h$ points per task, $h\in\{5,10,20\}$); \texttt{emp}$q$: $c_t=x_t+g_t^{(q)}$ where $g_t^{(q)}$ is the $q$-th percentile ($q\in\{95,99\}$) of observed fine-tune-minus-base score differences on task $t$, measured on 540 base/fine-tune pairs of the Open LLM Leaderboard (Section~\ref{sec:exp}).
+
+\paragraph{Rules.}
+\emph{Score rules} (rank by $f(x_j)$): the arithmetic mean; the geometric mean and power means $\big(\tfrac1n\sum_t (x_t+1)^p\big)^{1/p}-1$ with $p<1$, which interpolate between the mean ($p=1$) and the minimum ($p\to-\infty$); the trimmed mean (drop the $k$ smallest and largest scores); the median; the minimum. \emph{Ordinal rules} (use only within-task orderings): Borda (points per task = number of models strictly below plus half the ties, summed over tasks); plurality (number of tasks on which the model is first, ties split); and the \emph{Condorcet-winner requirement}, i.e.\ the target must beat every rival on more than half of the tasks. Being the Condorcet winner is \emph{sufficient} for first place under any Condorcet-consistent rule (Copeland, Schulze, Kemeny) but not necessary, so its minimum investment is an upper bound for those rules~\citep{brandt2016handbook}. On the Open LLM Leaderboard the deployed rule is the mean of normalised task scores; this is the headline rule there.
+
+\paragraph{Exact solvers.}
+For each rule we compute exact minima: closed forms or greedy/water-filling for the mean and power means, order-statistic arguments for the median and minimum, and mixed-integer programs (HiGHS) for the trimmed mean and the ordinal rules; every solver is checked against brute-force enumeration on small random instances (code and tests in the supplement).
+
+\subsection{Closed forms}
+\label{sec:theory}
+Write $n$ tasks, headrooms $h_t=c_t-x_t$, and let $\tau$ and $\varepsilon$ be as above.
+
+\begin{proposition}[Mean]\label{prop:mean}
+Under the arithmetic mean let $N=n(\tau+\varepsilon)-\sum_t x_t$ (the points needed). If $N\le0$ the target is already first. Otherwise the target can become first iff $\sum_t h_t\ge N$; then $\min\LL=N=n\,(\text{gap in mean score}+\varepsilon)$ \emph{independently of how the points are spread}, $\min K$ is the smallest $k$ such that the $k$ largest headrooms sum to at least $N$, and $\min\Linf$ is the $\lambda$ solving $\sum_t\min(h_t,\lambda)=N$.
+\end{proposition}
+\begin{proof}
+$\mathrm{mean}(y)\ge\tau+\varepsilon$ iff $\sum_t\delta_t\ge N$ with $0\le\delta_t\le h_t$. This is a covering constraint: the minimum of $\sum\delta_t$ is $N$ if feasible; the fewest nonzero $\delta_t$ is attained by filling the largest headrooms first; and $\max_t\delta_t$ is minimised by $\delta_t=\min(h_t,\lambda)$.
+\end{proof}
+
+\begin{proposition}[Minimum]\label{prop:min}
+Under the minimum rule let $b=\tau+\varepsilon$. The target can become first iff $c_t\ge b$ for every $t$ with $x_t<b$; then $\min K=|\{t:x_t<b\}|$ and $\min\LL=\sum_t(b-x_t)^+$.
+\end{proposition}
+\begin{proof}
+$\min_t y_t\ge b$ iff $y_t\ge b$ for all $t$; tasks with $x_t\ge b$ need no change and every other task must be raised to at least $b$.
+\end{proof}
+
+\begin{proposition}[Median, odd $n$]\label{prop:median}
+Under the median with $n$ odd let $b=\tau+\varepsilon$ and $m=(n+1)/2$. The target is first iff at least $m$ tasks end at or above $b$; hence $\min K=\max(0,m-|\{t:x_t\ge b\}|)$ if enough tasks with $x_t<b$ have $c_t\ge b$ (else infeasible), and $\min\LL$ is the sum of the $\max(0, m-|\{t:x_t\ge b\}|)$ smallest shortfalls $b-x_t$ among them.
+\end{proposition}
+\begin{proof}
+For odd $n$, $\mathrm{median}(y)\ge b$ iff at least $m$ entries are $\ge b$. Tasks already above $b$ count for free; each further task costs at least its shortfall, and raising exactly to $b$ suffices.
+\end{proof}
+
+For even $n$ (the Open LLM Leaderboard has $n=6$) the median is the mean of two middle order statistics, and for the other rules no simple closed form exists; the solvers handle them, and Section~\ref{sec:results} checks the closed forms above against the solver output on every target.
+Propositions~\ref{prop:mean}--\ref{prop:median} already show where the rules differ: the mean pays for \emph{points} ($n$ times the gap) and can place them on a single task ($K$ can be $1$) or spread them evenly at the same cost in points, whereas the minimum and the median pay for \emph{specific entries}: $K$ is the number of tasks on which the target is below the bar $b$ (minimum), respectively $m$ minus the number already above it (median), while the points needed can be small. One might therefore expect breadth-demanding rules (median, minimum) to need the most investment, the minimum to need all $n$ tasks, and targeting to pay off most for the mean. Proposition~\ref{prop:min} shows that the second expectation is false; Section~\ref{sec:results} shows from the data that the first and third fail as well.

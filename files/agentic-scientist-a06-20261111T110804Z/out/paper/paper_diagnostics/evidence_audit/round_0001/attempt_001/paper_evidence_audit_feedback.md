@@ -1,0 +1,26 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T14:57:58.751414+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `3`
+- audit_json_path: `work/results/a06/claude/20261111_111240/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/a06/claude/20261111_111240/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/a06/claude/20261111_111240/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+All headline and per-case numbers reproduce from the sealed episodes, the replay files and the manifest, but three statements go beyond what the evidence supports: the compute-time wording, one limitation phrase and an inference about the N=60 optimism.
+
+## Findings
+- `supp-compute-cpu-time` (Supplementary Information, Evaluation protocol and provenance (Compute)): The only grounded source is the evaluator's per-episode duration_seconds. It is wall-clock time (time.monotonic) around the whole episode loop: request building, the call to the reporter, response parsing and scoring. It is not reporter CPU time, and no artifact records the baseline-replay duration.
+  - claim: The reporter's CPU time per seed (250 calls) averaged 6.2 s, 50 s over the eight sealed seeds. Replaying the baselines takes about three seconds.
+  - evidence: paper_data.json final_evaluation.evaluation_evidence.episodes[*].duration_seconds (mean 6.244, sum 49.95); source_evidence/evaluator/evaluate_final.py lines 870-892 (t0 = time.monotonic(), covers build_request, call, parse_response and score_reporter); analysis/final_per_case.py lines 40-41; no timing field in analysis/reconstructed_baselines.json; claims_grounding.json claim on reporter CPU time cites only final.evidence.episodes.
+  - requested_fix: Reword to "evaluator-recorded wall-clock time per seed (250 episodes' reporter calls plus scoring) averaged 6.2 s, about 50 s over eight seeds". Drop "CPU time" and delete the unsupported "about three seconds" replay-time sentence, or mark it as an unrecorded informal observation.
+- `limits-halving-undercoverage` (Discussion and Limitations, item (6) Residual failures): Undercoverage appears only in real-outcome halving (P4, 0.89) and in the real exhaustive N=600 case (P6, 0.83). The synthetic halving case P2 has EB-IRT coverage 0.96, so "in halving" as written overgeneralizes. The abstract correctly restricts this to halving on real outcomes.
+  - claim: undercoverage at N=600 and in halving (0.83--0.89)
+  - evidence: paper.tex Table tab:cases: P2 Cov. EB-IRT 0.96, P4 0.89, P6 0.83; paper_data.json episodes: P2 coverage mean 0.958, P4 0.8875, P6 0.8333; paper.tex abstract wording "under halving on real outcomes".
+  - requested_fix: Change to "undercoverage at N=600 (0.83) and in real-outcome halving (0.89)".
+- `results-n60-advantage-inference` (Results, Optimism of best-of-search reporting (Question budget)): The measured quantity is the naive estimate's bias against the selected configuration's own fresh-question accuracy (0.051 at N=60). Comparing it with the spread of pool accuracies (0.107 to 0.166) supports only that the two magnitudes are similar. No artifact measures the reported advantage over alternatives or its relation to true between-configuration differences. The measured N=60 bias is 0.051 against a spread of about 0.059. The claim is also grounded only to final.evidence.episodes.
+  - claim: so at small N the reported advantage of the selected configuration over its alternatives is as large as the differences it is meant to reveal
+  - evidence: claims_grounding.json claim "naive optimism at N=60 (0.051) is comparable to that spread"; source_evidence/evaluator/final_manifest.json per_config_pool_accuracy (min 0.1067, max 0.166); paper.tex Results Question budget paragraph.
+  - requested_fix: Limit the sentence to "the optimism at N=60 is of the same order as the spread of configuration pool accuracies", and delete or qualify the inference about the reported advantage over alternatives.

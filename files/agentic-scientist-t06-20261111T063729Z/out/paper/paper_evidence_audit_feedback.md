@@ -1,0 +1,15 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T08:55:23.423250+00:00`
+- ok: `True`
+- verdict: `pass`
+- finding_count: `0`
+- audit_json_path: `work/results/t06/claude/20261111_064241/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/t06/claude/20261111_064241/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/t06/claude/20261111_064241/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+The manuscript's numbers, tables, figures and Supplementary text match claims_grounding.json, paper_data.json, derived/final_stats.json and the staged candidate source. It also keeps the no-winner, qualified-outcome and unverified-comparator limits.
+
+## Findings
+- None.

@@ -1,0 +1,1763 @@
+                                                           PPI++: Efficient Prediction-Powered Inference
+                                                             Anastasios N. Angelopoulos1∗ John C. Duchi2 ∗               Tijana Zrnic3 ∗
+                                                          1 Department of Electrical Engineering and Computer Sciences, UC Berkeley
+                                                           2 Departments of Statistics and Electrical Engineering, Stanford University
+                                                            3 Department of Statistics and Stanford Data Science, Stanford University
+arXiv:2311.01453v1 [stat.ML] 2 Nov 2023
+
+
+
+
+                                                                                                   Abstract
+                                                         We present PPI++: a computationally lightweight methodology for estimation and infer-
+                                                    ence based on a small labeled dataset and a typically much larger dataset of machine-learning
+                                                    predictions. The methods automatically adapt to the quality of available predictions, yielding
+                                                    easy-to-compute confidence sets—for parameters of any dimensionality—that always improve
+                                                    on classical intervals using only the labeled data. PPI++ builds on prediction-powered infer-
+                                                    ence (PPI), which targets the same problem setting, improving its computational and statistical
+                                                    efficiency. Real and synthetic experiments demonstrate the benefits of the proposed adaptations.
+
+
+                                          1        Introduction
+                                          We cannot realize the promise of machine learning models—their ability to ingest huge amounts
+                                          of data, predict accurately in many domains, their minimal modeling assumptions—until we can
+                                          effectively, efficiently, and responsibly use their predictions in support of scientific inquiry. This
+                                          paper takes a step toward that promise by showing how, in problems where labeled observations
+                                          or precise measurements of a phenomenon of interest are scarce, we can leverage predictions from
+                                          machine-learning algorithms to supplement smaller real data to validly increase inferential power.
+                                              There is no reason to trust black-box machine-learned predictions in place of actual measure-
+                                          ments, calling into question the validity of studies naively using such predictions in data analysis.
+                                          Angelopoulos et al.’s Prediction Powered Inference (PPI) [2] tackles precisely this issue, providing
+                                          a framework for valid statistical inference—computing p-values and confidence intervals—even us-
+                                          ing black-box machine-learned models. The idea of PPI is to combine a small amount of labeled
+                                          data with a larger collection of predictions to obtain valid and small confidence intervals. While
+                                          the framework applies to a broad range of estimands and arbitrary machine-learning models, the
+                                          original proposal has limitations:
+                                          (L1) for many estimands, such as regression coefficients, computing the intervals is intractable,
+                                               especially in high dimensions;
+
+                                          (L2) when the provided predictions are inaccurate, the intervals can be worse than the “classical
+                                               intervals” using only the labeled data.
+                                          PPI++ addresses both limitations.
+                                             To set the stage, for observations (X, Y ) ∼ P and a loss function ℓθ (x, y), we wish to estimate
+                                          and perform inference for the d-dimensional parameter
+
+                                                                                  θ⋆ = arg min{L(θ) := E[ℓθ (X, Y )]}.                                 (1)
+                                                                                            θ∈Rd
+                                              ∗
+                                                  The authors are ordered alphabetically.
+
+
+                                                                                                      1
+Typical loss functions include the squared error for linear regression, ℓθ (x, y) = 21 (x⊤ θ − y)2 , or
+the negative log-likelihood of a conditional model for Y given X, ℓθ (x, y) = − log pθ (y | x). We
+                                         iid                              ei iid
+receive n labeled data points (Xi , Yi ) ∼ P and N unlabeled data points X   ∼ PX , where Xi and X   ei
+have identical distributions. The key assumption is that we also have access to a black-box model
+f mapping X to predictions Yb = f (X), which we use to impute labels for X       ei . PPI [2] performs
+inference on a so-called rectifier (an analog of a control variate or debiasing term) to incorporate
+these black-box predictions; we reconsider their methodology to provide two main improvements,
+adding the ++.
+
++Computational efficiency. The original prediction-powered inference constructs a confidence
+set for θ⋆ by searching through all possible values of the estimand θ and performing a hypothesis
+test for each. Some estimands, such as means, admit simplifications, but others, such as logistic
+regression or other generalized linear model (GLM) coefficients, do not. When it does not simplify,
+the original PPI method [2] grids the space of θ and tests each potential parameter separately; this
+is both inexact and intractable, especially in more than two dimensions.
+    To address problem (L1), we develop computationally fast convex-optimization-based algo-
+rithms for computing prediction-powered point estimates and intervals for a wide class of estimands,
+which includes all GLMs. The algorithms use the asymptotic normality of these point estimates
+and are thus asymptotically exact, computationally lightweight, and easy to implement. We show
+that the resulting intervals are asymptotically equivalent to an idealized version of the intervals
+obtained via the testing strategy (with an infinite grid). In practice, the intervals are often tighter,
+especially in high dimensions.
+    An important consequence of this theory appears when we wish to estimate only a single co-
+ordinate θj⋆ in the model, such as a causal parameter, while controlling for other covariates and
+adjusting for nuisance parameters. Whereas the original PPI [2] implicitly requires a multiplicity
+correction over the entire parameter vector, PPI++’s improved statistical efficiency in the pres-
+ence of nuisances allows for inference on single coordinates of regression coefficients while avoiding
+multiplicity correction.
+
++Power tuning. To address problem (L2), we develop a lightweight modification of PPI that
+adapts to the accuracy of the predictive model f . The modification automatically selects a param-
+eter λ to interpolate between classical and prediction-powered inference. The optimal value of this
+λ admits a simple plug-in estimate, which we term power tuning, because it optimizes statistical
+power. Our experiments and theoretical results indicate that power tuning is essentially never
+worse than either classical or prediction-powered inference, and it can outperform both substan-
+tially. Power tuning improves the performance of the original PPI algorithms when f is not highly
+accurate, and, when f is accurate, it can sometimes guarantee full statistical efficiency.
+
+
+2    Preliminaries
+We formalize our problem setting while recapitulating the prediction-powered-inference (PPI) ap-
+                                                                  iid
+proach [2]. Recall that we have n labeled data points, (Xi , Yi ) ∼ P, i ∈ [n], as well as N unlabeled
+data points, Xei iid
+                 ∼ PX , i ∈ [N ], where the feature distribution is identical across both datasets,
+P = PX × PY |X . In addition to the data, we have access to a machine-learning model f that
+predicts outcomes from features.
+
+
+
+                                                   2
+   Define the population losses
+
+                            L(θ) := E[ℓθ (X, Y )] and Lf (θ) := E[ℓθ (X, f (X))].
+
+The starting point of PPI and our approach is the recognition that E[ℓθ (X, f (X))] = E[ℓθ (X,
+                                                                                            e f (X))]
+                                                                                                 e =
+ f
+L (θ), so that the “rectified” loss,
+
+                                                        e f (θ) − Lf (θ),
+                                    LPP (θ) := Ln (θ) + L N        n
+
+where
+                 n                              n                                     N
+              1X                           1X                       e f (θ) := 1
+                                                                                 X
+  Ln (θ) :=      ℓθ (Xi , Yi ), Lfn (θ) :=    ℓθ (Xi , f (Xi )) and L N            ℓθ ( X
+                                                                                        ei , f (X
+                                                                                                ei )),
+              n                            n                                   N
+                i=1                            i=1                                   i=1
+
+is unbiased for the true objective: E[LPP (θ)] = L(θ).
+     In the original, PPI first forms (1−α)-confidence sets for the gradient of the loss ∇L(θ), denoted
+Cα∇ (θ), and then constructs the confidence set CαPP for θ⋆ as
+
+                                      CαPP = {θ ∈ Rd s.t. 0 ∈ Cα∇ (θ)}.                              (2)
+
+Constructing Cα∇ (θ) for a fixed θ is a trivial application of the central limit theorem to ∇LPP (θ).
+The issue is that forming the confidence set for every θ ∈ Rd is computationally infeasible, because
+one cannot simply iterate through every possible value.
+
+2.1     Computational efficiency: overview
+We take PPI as our point of departure, but adopt a different perspective. In particular, the rectified
+loss leads to the prediction-powered point estimate,
+                                                                       e f (θ) − Lfn (θ).
+                     θ̂PP = arg min LPP (θ), where LPP (θ) := Ln (θ) + L                            (P1 )
+                                                                         N
+                               θ
+
+This estimate (along with its forthcoming variant (Pλ )) is the main object of study in this paper,
+and we derive its asymptotic normality about θ⋆ . This result is the keystone to our efficient PPI++
+algorithms, allowing us to construct confidence intervals of the form
+                                        n                     √ o
+                                 CαPP = θ̂jPP ± z1−α/2 · σ̂j / n ,                                (3)
+
+where σ̂j2 is a consistent estimate of the asymptotic variance of θ̂jPP and zq denotes the q-quantile
+of the standard normal distribution. Similar confidence intervals centered around θ̂PP apply when
+performing inference on the whole vector θ⋆ rather than a single coordinate θj⋆ .
+    It should be clear that the set (3) is easier to compute than the set (2). The latter requires
+the analyst to “iterate through all θ ∈ Rd ” and test optimality separately; the former has no such
+requirement. Indeed, PPI++ simply requires placing error bars around a point estimate. This per-
+spective, though simple, results in far more efficient algorithms. In Section 3, we provide algorithms
+for generalized linear models, and in Section 4, we show the case of general M-estimators. In Sec-
+tion 5, we show that the PPI++ intervals are asymptotically equivalent to the naive strategy (2),
+so the increased computational efficiency comes with no cost in terms of statistical power.
+
+
+
+
+                                                      3
+2.2      Power tuning: overview
+The prediction-powered estimator (P1 ) need not outperform classical inference when f is inaccuate:
+limitation (L2) of PPI. We thus generalize PPI to allow it to adapt to the “usefulness” of the supplied
+predictions, yielding an estimator never worse than classical inference. To do so, we introduce a
+tuning parameter λ ∈ R, defining
+
+                   θ̂λPP = arg min LPP            PP                     ef        f
+                                    λ (θ), where Lλ (θ) := Ln (θ) + λ · (LN (θ) − Ln (θ)).                 (Pλ )
+                              θ
+
+Certainly the objective remains unbiased for any λ, as E[LPP       λ (θ)] = L(θ). The problem (Pλ )
+recovers (P1 ) when λ = 1 and reduces to performing classical inference, ignoring the predictions,
+when λ = 0. In Section 6, we show how to optimally tune λ to maximize estimation and inferential
+efficiency, yielding a data-dependent tuning parameter λ̂. This adaptively chosen λ̂ leads to better
+estimation and inference than both the classical and PPI strategies. (In fact, sometimes it is fully
+statistically efficient, though that is not our focus here.) Section 7 puts everything together through
+a series of experiments highlighting the benefits of PPI++.
+
+2.3      Related work
+Angelopoulos et al. [2] develop prediction-powered inference (PPI) to allow estimation and inference
+using black-box machine learning models; our work’s debt to the original proposal and motivation
+is clear. The PPI observation model—where we receive n labeled observations and N unlabeled
+observations—also centrally motivates semi-supervised learning and inference [21, 22, 17]. This line
+of work also considers the problem of inference with a labeled dataset and an unlabeled dataset;
+the key point of departure is PPI’s access to a pretrained machine learning model f . Fitting
+empirically strong predictive models of a target Y given X has been and remains a major focus
+of the machine learning literature [11], so that leveraging these models as black boxes, in spite of
+the lack of essentially any statistical control over them (or even knowledge of how they were fit),
+provides a major opportunity to leverage modern prediction techniques. This enables PPI to apply
+to estimation problems where, for example, high-performance deep learning models exist to impute
+labels (such as AlphaFold [10] or CLIP [12]), and, though we may have no hope of understanding
+precisely what the models are doing, to obtain more powerful inferences in those settings.
+    One may also take a perspective on the PPI++ approach coming from the literatures on semi-
+parametric inference, causality, and missing data [13, 3, 14, 18, 7], as well as that on survey
+sampling [16]. We only briefly develop the connections, but it is instructive to formulate our prob-
+lem as one with missing data, where the dataset {X    ei }N has no labels. Consider now augmented
+                                                          i=1
+inverse propensity weighting (AIPW) estimators [13, 18], focusing in particular on estimating the
+mean E[Y ]. Then because we know the ratio r = n/N (the propensity score, or probability of
+missingness, in the causal inference literature), AIPW [13, 18] estimates E[Y ] by
+                     n                                    X   n                     N                 
+        AIPW      1X                                  1                             X
+   θ̂          :=       (Yi − Ê[Y | X = Xi ]) +                  Ê[Y | X = Xi ] +     Ê[Y | X = Xi ]
+                                                                                                   e
+                  n                                N +n
+                    i=1                                      i=1                    i=1
+                     n                          X  n              N         
+                  1X                        1                     X
+                =       (Yi − f (Xi )) +               f (Xi ) +      f (Xi )
+                                                                          e                                 (4)
+                  n                      N +n
+                    i=1                            i=1            i=1
+                     n                       n                 N         
+                  1X             1        1X               1 X e
+                =       Yi +       n    −       f (Xi ) +          f (Xi ) ,
+                  n          1+ N         n                N
+                    i=1                     i=1              i=1
+
+
+
+                                                        4
+where in the first line Ê denotes the estimated conditional expectation of Y given X, and in the
+second we have replaced it with the black-box predictor f . This corresponds to the particular
+              1
+choice λ = 1+r   in the PPI++ estimator (Pλ ). The point of emphasis in PPI is distinct, however;
+while semiparametric inference in principle allows machine learning to estimate nuisance parameters
+(E[Y | X] in the AIPW estimator (4)), we develop easy-to-compute, practical, and assumption-light
+estimators, where we truly treat f as an unknown black box, and PPI++ leverages the predictions
+as much as is possible. The practicality is essential (as our experiments highlight), and it reflects
+the growing trend in science to use the strength of modern machine-learned predictors f to impute
+labels Y . The debiasing (Pλ ) thus directly allows arbitrary imputation of missing labels, avoiding
+challenges in more common imputation approaches [15]. We remark in passing that survey sampling
+approaches frequently use auxiliary data to improve estimator efficiency [16], but these techniques
+are limited to simple estimands and do not use machine learning. See also Angelopoulos et al. [2]
+for more discussion of related work.
+
+
+3    PPI++ for generalized linear models
+Generalized linear models (GLMs) make the benefits and approach of PPI++ clearest. In the basic
+GLM case, the loss function takes the form
+
+                           ℓθ (x, y) = − log pθ (y | x) = −yθ⊤ x + ψ(x⊤ θ),                        (5)
+
+where pθ (y | x) = exp(yx⊤ θ − ψ(x⊤ θ)) is the probability density of y given x and the log-partition
+function ψ is convex. The setting (5) captures the familiar linear and logistic regression, where
+in the former case, we have y ∈ R and set ψ(s) = 12 s2 , and in the latter, we have y ∈ {0, 1} and
+ψ(s) = log(1 + es ).
+    For any loss of the form (5), the key to computational efficiency is that LPPλ (θ) is convex for
+                       f
+λ ∈ [0, 1]. Indeed, λLN (θ) is convex in θ, while
+                     e
+
+                                            n                                 n
+                                       1X                                1X
+               Ln (θ) − λLfn (θ) = −      (Yi − λf (Xi ))θ⊤ Xi + (1 − λ)    ψ(Xi⊤ θ)
+                                       n                                 n
+                                           i=1                                i=1
+
+consists of linear and convex components. Thus, LPP      λ (θ) is a sum of convex terms, and one can
+            PP
+solve for θ̂λ efficiently [4]. In this setting, the following corollary of our forthcoming Theorem 1
+shows that the prediction-powered point estimate is asymptotically normal around θ⋆ .
+                                                                      n
+Corollary 1. Assume that λ̂ = λ + oP (1) for some limit λ, N            → r, ψ is twice continuously
+differentiable, and that Hθ⋆ := E[ψ ′′ (X ⊤ θ⋆ )XX ⊤ ] is nonsingular. Define the covariance matrices
+                                                                
+                          λ        2         ′   ⊤ ⋆
+                        Vf,θ ⋆ := λ Cov (ψ (X θ ) − f (X))X         and
+                                                                             
+                         λ                       ′   ⊤ ⋆
+                        V∆,θ ⋆ := Cov (1 − λ)ψ (X θ )X + (λf (X) − Y )X         .
+
+Then                                   √                           
+                                                           d
+                                           n(θ̂λ̂PP − θ⋆ ) → N 0, Σλ ,
+                             
+where Σλ := Hθ−1
+               ⋆   rV λ +Vλ
+                     f,θ⋆
+                                −1
+                          ∆,θ⋆ Hθ⋆ .
+
+
+Corollary 1 allows the construction of confidence intervals centered around θ̂λ̂PP ; see Algorithm 1.
+
+
+                                                      5
+Algorithm 1 PPI++: Prediction-powered inference for GLMs
+Input: labeled data {(Xi , Yi )}ni=1 , unlabeled data {X
+                                                       ei }N , predictive model f , error level
+                                                           i=1
+    α ∈ (0, 1), coefficient index j ∈ [d] of interest
+ 1: Select tuning parameter λ̂                                                    ▷ set tuning parameter
+ 2: θ̂ PP = arg minθ LPP (θ)                                          ▷ prediction-powered point estimate
+      λ̂              λ̂
+             1   P n    ′′    ⊤ PP        ⊤
+                                                P N     ′′ e ⊤ PP e e ⊤
+ 3: Hb =
+           N +n ( i=1 ψ (Xi θ̂λ̂ )Xi Xi +         i=1 ψ (Xi θ̂λ̂ )Xi Xi )
+ 4: V           d N +n ((ψ ′ (X ⊤ θ̂PP ) − f (Xi ))Xi )
+     bf = λ̂2 · Cov
+                                  i λ̂
+ 5: V       d n ((1 − λ̂)ψ ′ (X ⊤ θ̂PP ) + (λ̂f (Xi ) − Yi )Xi )
+     b∆ = Cov
+                                 i λ̂
+    b      b −1  n b
+ 6: Σ = H ( N Vf + V∆ )H
+                       b      b −1                                                     ▷ covariance estimate
+                                                                               q 
+                                                                                 Σ
+Output: prediction-powered confidence interval CαPP = θ̂λ̂,j       PP ± z           jj
+                                                                                  b
+                                                                          1−α/2    n     for coordinate j
+
+
+
+    We develop results on the optimal choice of λ̂ in Section 6. For now, a reasonable heuristic is
+to simply think of λ̂ = 1 when the predictive model f is accurate and λ̂ = 0 when it is not. When
+                                             λ
+the model f is good and λ̂ = 1, we expect V∆,θ ⋆ = Cov((f (X) − Y )X) ≈ 0, so that the asymptotic
+             λ                        n
+covariance Σ is proportional to r = N ; a large unlabeled data size N makes this covariance tiny.
+Otherwise, when the model f is bad and λ̂ = 0, the covariance reduces to the classical [19, 9]
+sandwich-type GLM covariance
+
+                                       Hθ−1                    −1
+                                          ⋆ Cov(∇ℓθ ⋆ (X, Y ))Hθ ⋆ .
+
+
+    Building on Corollary 1, we construct confidence intervals for θ⋆ using a plug-in estimator for Σλ .
+For concreteness, we provide the general confidence interval construction for GLMs in Algorithm 1;
+instatiations for particular choices of the loss (5) follow. In the algorithm, for any map g, we use
+Cov
+ d n (g(Xi , Yi )) to denote the empirical covariance of g(Xi , Yi ) computed on the labeled data, and
+Cov
+ d N +n (g(Xi )) to denote the empirical covariance of g(Xi ) computed on the labeled and unlabeled
+data combined. The guarantees of Algorithm 1 follow from Corollary 1.
+Corollary 2. Let the conditions of Corollary 1 hold. Then, for each coordinate j ∈ [d], the
+prediction-powered confidence interval in Algorithm 1 has valid coverage:
+
+                                    lim P θj⋆ ∈ CαPP = 1 − α.
+                                                    
+                                         n
+
+    Algorithm 1’s efficient implementation separates it from the original PPI methodology [2], which
+in general requires performing a hypothesis test for each possible θ. For example, their algorithm
+for logistic regression discretizes the parameter space and performs a hypothesis test for each grid
+point, which is essentially non-implementable in more than two or three dimensions and prone to
+numerical inaccuracies.
+
+  Example 3.1 (Linear regression): To obtain confidence intervals on the jth coefficient of a
+  d-dimensional linear regression, run Algorithm 2 with ψ(s) = 12 s2 , so ψ ′ (s) = s and ψ ′′ (s) ≡ 1.
+  The Hessian simplifies to Hb = 1 (Pn Xi X ⊤ + PN X       e e⊤
+                                  N +n   i=1    i      i=1 i Xi ). ♢
+
+  Example 3.2 (Logistic regression): To obtain confidence intervals on the jth coefficient
+  of a d-dimensional logistic regression, run Algorithm 2 with ψ(s) = log(1 + es ). Here, one
+                         es                                    es
+  substitutes ψ ′ (s) = 1+e        ′′      ′         ′
+                            s and ψ (s) = ψ (s)(1 − ψ (s)) = (1+es )2 . ♢
+
+
+
+                                                     6
+    Example 3.3 (Poisson regression): A variable Y ∼ Poisson(λ) has probability mass p(y) =
+    λy e−λ                     x⊤ θ gives GLM p (y | x) = exp(yx⊤ θ − e−x⊤ θ − log(y!)). Thus one
+      y! , and the choice λ = e                θ
+    runs Algorithm 2 with ψ(s) = e , ψ (s) = −e−s , and ψ ′′ (s) = e−s . ♢
+                                    −s    ′
+
+
+
+3.1     General exponential-family regression
+The results of Section 3 immediately extend to exponential-family regression models with a general
+vector-valued sufficient statistic T (x, y). In this case, the conditional likelihood becomes
+                                                                      
+                                pθ (y | x) = exp T (x, y)⊤ θ − ψ(θ, x) ,
+
+where ψ(θ, x) = log exp(T (x, y)⊤ θ)dν(y | x) for some carrier measure ν on Y . The log-partition
+                     R
+
+ψ(θ, x) is always C ∞ and convex in θ [5], and it induces induces the convex loss
+
+                                          ℓθ (x, y) = −T (x, y)⊤ θ + ψ(θ, x).                        (6)
+
+Taking T (x, y) = yx recovers the GLM losses (5), but the loss (6) allows a broader class of models.
+
+    Example 3.4 (Multiclass logistic regression): In k-class multiclass logistic regression with
+    covariates x ∈ Rd , the parameter vector θ is a kd-dimensional vector whose yth block θy ∈ Rd
+    of components represent parameters for class y ∈ [k]. The sufficient statistic is T (x, y) = Ey x,
+    where Ey is the matrix (0d×(y−1)d , Id×d , 0d×(K−y)d )⊤ , and
+
+                                                                   k
+                                                                  X                  
+                                                      ⊤                         ⊤
+                                ℓθ (x, y) = −x θy + log                    exp(x θy′ ) .
+                                                                  y ′ =1
+
+                          Pk          x⊤ θy′
+    Thus ψ(θ, x) = log(    y ′ =1 e            ) is the log-partition function. ♢
+
+   The linear plus convex representation of the exponential-family loss (6) means it too admits the
+same computational efficiencies as the basic GLM approach.
+
+
+4     PPI++ for general M-estimators
+Our results on generalized linear models follow from more general results on M-estimators, which
+we turn to here. We consider convex losses ℓθ (x, y), and we continue to write
+
+                                                 θ⋆ := arg min E[ℓθ (X, Y )]
+                                                          θ
+
+as the target of interest. Our main theorem applies to what we term smooth enough losses, which
+roughly satisfy that ℓθ is differentiable at θ⋆ with probability 1 and is locally Lipschitz; see Defini-
+tion A.1 in Appendix A.1. Smooth enough losses admit the following general asymptotic normality
+result, whose proof we defer to Appendix A.1. We use the short-hand notation ∇ℓθ = ∇ℓθ (X, Y )
+and ∇ℓfθ = ∇ℓθ (X, f (X)).
+                                                  n
+Theorem 1. Assume that λ̂ = λ + oP (1) and that N     → r for some r ≥ 0. Let the losses ℓθ be
+smooth enough (Definition A.1) and let Hθ⋆ := ∇ L(θ⋆ ). Define the covariance matrices
+                                               2
+
+
+                          λ        2      f         λ                       f
+                        Vf,θ ⋆ := λ Cov(∇ℓ ⋆ ) and V∆,θ ⋆ := Cov(∇ℓθ ⋆ − λ∇ℓ ⋆ ).
+                                          θ                                 θ
+
+
+                                                              7
+Algorithm 2 PPI++: Prediction-powered inference for general M-estimators
+Input: labeled data {(Xi , Yi )}ni=1 , unlabeled data {X
+                                                       ei }N , predictive model f , error level
+                                                           i=1
+    α ∈ (0, 1), coefficient j ∈ [d] of interest
+ 1: Select tuning parameter λ̂                                                           ▷ set tuning parameter
+ 2: θ̂ PP = arg minθ LPP (θ)                                                 ▷ prediction-powered point estimate
+      λ̂                    λ̂
+           1 Pn       2
+ 3: H = n       i=1 ∇ ℓθ̂PP (Xi , Yi )
+     b
+                             λ̂
+ 4: V         d N +n (∇ℓf )
+     bf = λ̂2 Cov
+                                θ̂PP
+                                  λ̂
+ 5: V       d n (∇ℓ PP − λ̂∇ℓf )
+     b∆ = Cov
+                      θ̂                θ̂PP
+                         λ̂               λ̂
+ 6: Σ
+    b =H   b −1 ( Vbf + Vb∆ )H
+                 n                   b −1                                                  ▷ covariance estimate
+                 N                                            q 
+                                           PP    PP             Σ
+                                                                b jj
+Output: prediction-powered confidence set Cα = θ̂λ̂,j ± z1−α/2   n
+
+
+
+                              p
+If the consistency θ̂λ̂PP → θ⋆ holds, then
+                                               √                   d
+                                                                           
+                                                   n(θ̂λ̂PP − θ⋆ ) → N 0, Σλ ,
+
+where                                                                     
+                                          Σλ := Hθ−1
+                                                   ⋆
+                                                             λ
+                                                       r · Vf,θ      λ
+                                                                ⋆ + V∆,θ ⋆   Hθ−1
+                                                                                ⋆ .                          (7)
+
+    The conditions sufficient for Theorem 1 to hold are standard and fairly mild. As is familiar
+from classical asymptotic theory, the one that is least straightforward to verify is the consistency
+of θ̂λ̂PP , so here we give a few sufficient conditions. At a high level, if LPP
+                                                                              λ is convex—as in the
+case of mean estimation or GLMs—or the domain Θ of θ is compact, consistency holds under mild
+additional regularity. Below we state the guarantee of consistency for convex LPP    λ (providing a
+proof in Appendix A.2); for the treatment when Θ is compact, see van der Vaart [19, Chapter 5].
+
+Proposition 1. Assume that LPP                                                      ⋆
+                                  λ (θ) is convex in θ with probability 1 and that θ is a unique min-
+                                                                ⋆
+imum of L(θ). Suppose also that ℓθ is locally Lipschitz near θ (in the sense of Definition A.1(ii)).
+            p            p
+Then, θ̂λPP → θ⋆ . If λ̂ → λ, then so long as P(LPP
+                                                  λ̂
+                                                      is convex) → 1, the same result holds.
+
+Because GLMs (5) and (6) have a convex loss LPPλ (θ) for λ ∈ [0, 1], Theorem 1 and Proposition 1
+combine to imply the asymptotic normality result of Corollary 1.
+   With Theorem 1 in hand, we can generalize PPI++ developed for GLMs to general convex
+M-estimators. In Algorithm 2 we state the main procedure, and Corollary 3 gives its validity.
+Analogously to last section, Cov         d N +n (∇ℓf ), and Cov
+                             d n (∇ℓθ ), Cov                 d n (∇ℓθ − λ̂∇ℓf ) denote empirical
+                                                    θ                        θ
+covariance matrices computed using the labeled data or the labeled and unlabeled data combined.
+
+Corollary 3. Let the assumptions of Theorem 1 hold and assume ∇2 ℓθ is continuous in θ. Then
+the prediction-powered confidence interval in Algorithm 2 has valid coverage: for any j ∈ [d],
+
+                                     lim P θj⋆ ∈ CαPP = 1 − α.
+                                                     
+                                                   n
+
+   If we seek a confidence set for the whole vector θ⋆ , rather than a single coordinate, many
+choices are possible for a resulting confidence set. The ellipse EΣ,α = {v ∈ Rd | v ⊤ Σ−1 v ≤ χ2d,1−α },
+
+
+                                                              8
+where χ2d,1−α denotes the (1 − α)-quantile of the χ2 distribution with d degrees of freedom, satisfies
+P(Z ∈ EΣ,α ) = 1 − α for Z ∼ N(0, Σ). Thus we can modify Algorithm 2 to return
+
+                                         CαPP = θ̂λ̂PP + EΣ/n,α
+                                                          b     ,
+
+which yields limn P(θ⋆ ∈ CαPP ) = 1 − α. Alternatively, we can apply the union bound, which gives
+rectangular sets of the form
+                                                         q d
+                                               z1−α/(2d)
+                                       
+                                  PP     PP
+                                 Cα = θ̂λ̂,j ±    √        Σ
+                                                           b jj     .
+                                                    n           j=1
+
+These sets guarantee lim inf n P(θ⋆ ∈ CαPP ) ≥ 1 − α.
+
+
+5    Equivalence to confidence sets from testing
+As we discuss in the introduction, the original PPI algorithm [2] constructs confidence sets by
+looping through each θ ∈ Rd and individually testing the null that ∇L(θ) = 0. A few special
+cases, including means, one-dimensional quantiles, and linear regression coefficients, admit efficient
+implementations; however, the general algorithm is intractable. Algorithm 2, on the other hand,
+is computationally straightforward. This computational efficiency comes at no cost in terms of
+statistical power: we show that the confidence sets from Theorem 1 with λ = 1 are asymptotically
+equivalent to a careful choice of confidence sets (2) obtained by testing ∇L(θ) = 0.
+    To conduct the comparison, we study the asymptotic distribution of the test statistics the two
+approaches rely on. Because the original prediction-powered inference only considers the unweighted
+variant (λ = 1), we focus on the estimate (P1 ) and not (Pλ ). Theorem 1 suggests that given any
+             p
+estimate Σb→   Σ, we consider the test statistic
+                                              √ −1/2 PP
+                                    Tn (θ) := nΣ b     (θ̂ − θ).
+                                                  d n (∇ℓθ − ∇ℓf ) and Vbf (θ) := Var
+For the original approach (2), letting Vb∆ (θ) := Var                             d N (∇ℓf ), the
+                                                               θ                         θ
+relevant test statistic is
+                                    √            n     −1/2
+                           Un (θ) := n Vb∆ (θ) + Vbf (θ)      ∇LPP (θ).
+                                                  N
+Both approaches leverage asymptotic normality; in particular,
+                                     d                              d
+                             Tn (θ⋆ ) → N(0, Id ) and Un (θ⋆ ) → N(0, Id ).
+Therefore, each implies an asymptotically exact χ2 -based (1 − α)-confidence set
+                    n                         o              n                        o
+           CαPP,T := θ : ∥Tn (θ)∥22 ≤ χ2d,1−α   and CαPP,U := θ : ∥Un (θ)∥22 ≤ χ2d,1−α ,
+
+which satisfy limn P(θ⋆ ∈ CαPP,T ) = 1−α and limn P(θ⋆ ∈ CαPP,U ) = 1−α. We remark in passing that
+CαPP,U has asymptotically correct level α, while the original PPI approach [2, Thm. B.1] applies a
+union bound over the d coordinates and is thus conservative, making CαPP,U tighter than the original
+PPI confidence set and the coming equivalence stronger.
+    Theorem 2 shows the asymptotic equivalence of CαPP,T and CαPP,U . For this, we require an
+additional condition beyond the losses ℓθ being smooth enough (Definition A.1), which we term
+stochastic smoothness. To avoid distracting technical definitions, we state it in Assumption A1 in
+Appendix A.3, which includes the proof of Theorem 2. The condition holds if, for example, ∇ℓθ is
+locally Lipschitz in a neighborhood of θ⋆ , but can also hold for non-differentiable losses.
+
+                                                    9
+Theorem 2. Let the loss functions ℓθ be smooth enough (Definition A.1) and in addition assume
+they are stochastically smooth (Assumption A1). Then CαPP,T and CαPP,U are asymptotically equiv-
+alent in that, for any c < ∞,
+                                      √                        √
+                 lim sup sup P(θ⋆ + h/ n ∈ CαPP,T ) − P(θ⋆ + h/ n ∈ CαPP,U ) = 0.
+                      n       ∥h∥≤c
+
+
+Furthermore, for any tn ≫ √1n and c > 0, lim supn sup∥h∥≥c P(θ⋆ + htn ∈ CαPP,T ) = 0.
+
+    In words, the probability of including any point within ∼ √1n of θ⋆ in the confidence set is the
+same for PPI++ (with no power tuning) and a sharper variant of the PPI proposal (2) based on
+point-wise testing. Moreover, this neighborhood of θ⋆ is the only relevant region of the parameter
+space: all points more than ∼ √1n away from the optimum have vanishing probability of inclusion.
+When we tune the parameter λ, as we consider in the next section, the confidence sets PPI++ yields
+are only smaller, yielding further improvements.
+
+
+6     Power tuning
+The last component of PPI++ is to adaptively tune the weighting parameter λ and thus, in ad-
+dition to computational benefits, to achieve statistical efficiency improvements over “standard”
+prediction-powered inference, yielding benefits over classical inference as a side benefit. Towards
+this goal, we show how to optimally tune the weighting parameter λ. Along the way we make a few
+theoretical remarks on the consequent statistical efficiency (see also the working note [1]). While
+we cannot expect PPI++ to guarantee full statistical efficiency for any distribution—this would re-
+quire modeling assumptions that PPI++ explicitly avoids by providing a wrapper around black-box
+prediction models f —we demonstrate that it always improves over classical inference and in some
+cases is fully statistically efficient.
+
+6.1     The optimal weighting parameter λ
+Our first step is to derive the value λ⋆ of λ minimizing the asymptotic variance Tr(Σλ ) of the
+prediction-powered estimate, where we recall the asymptotic covariance
+                                                                       
+                      Σλ = Hθ−1⋆   rλ2 Cov(∇ℓfθ⋆ ) + Cov(∇ℓθ⋆ − λ∇ℓfθ⋆ ) Hθ−1
+                                                                            ⋆
+
+
+
+from definition (7). One could straightforwardly choose alternative scalarizations of Σλ , such as
+the maximum diagonal entry maxj Σλjj , to yield different minimizing λ, but the principles remain
+the same. (See Appendix A.4 for the quick proof.)
+Proposition 2. The prediction-powered estimate θ̂λPP has minimal asymptotic variance for
+                                                               f             f
+                                        Tr(Hθ−1                                             −1
+                                              ⋆ (Cov(∇ℓθ ⋆ , ∇ℓθ ⋆ ) + Cov(∇ℓθ ⋆ , ∇ℓθ ⋆ ))Hθ ⋆ )
+              λ⋆ := arg min Tr(Σλ ) =                                   f
+                                                                                                    .
+                          λ                       2(1 + r)Tr(Hθ−1             −1
+                                                                ⋆ Cov(∇ℓθ ⋆ )Hθ ⋆ )
+
+
+   A few remarks are in order here; we defer discussion of empirical implications of this tuning to
+the next section and focus on analysis here. Substituting λ⋆ into the expression (7) for Σλ yields
+optimal asymptotic variance
+                                                                   f              f
+         λ⋆           −1             −1     Tr(Hθ−1                                             −1 2
+                                                  ⋆ (Cov(∇ℓθ ⋆ , ∇ℓθ ⋆ ) + Cov(∇ℓθ ⋆ , ∇ℓθ ⋆ ))Hθ ⋆ )
+      Tr(Σ    ) = Tr(Hθ⋆ Cov (∇ℓθ ) Hθ⋆ ) −
+                                 ⋆
+                                                                               f
+                                                                                                      .
+                                                      4(1 + r)Tr(Hθ−1                 −1
+                                                                      ⋆ Cov(∇ℓθ ⋆ )Hθ ⋆ )
+
+
+
+                                                      10
+The first term is the cumulative variance of the classical estimate, while the second term is non-
+negative. Therefore, we see that with the optimal choice of λ, PPI++ per Algorithm 2 (asymptot-
+ically) dominates classical inference. Furthermore, the improvement over classical inference grows
+with the correlation of the true gradients and those with predicted labels. By the Cauchy-Schwarz
+inequality and the law of total variance, we have
+              ⋆                                 1
+         Tr(Σλ ) ≥ Tr Hθ−1             −1
+                                                    Tr Hθ−1                    −1
+                                                                                 
+                         ⋆ Cov(∇ℓθ ⋆ )Hθ ⋆   −            ⋆ Cov(E[∇ℓθ ⋆ | X])Hθ ⋆
+                                              1+r
+                     r                                1
+                        Tr Hθ−1             −1
+                                                        Tr Hθ−1                     −1
+                                                                                      
+                  =           ⋆ Cov(∇ℓθ ⋆ )Hθ ⋆   +            ⋆ E[Cov(∇ℓθ ⋆ | X)]Hθ ⋆   ,
+                    1+r                             1+r
+with equality in the first step if and only if ∇ℓθ⋆ (x, f (x)) = cE[∇ℓθ⋆ (x, Y ) | X = x] for some fixed
+c ≥ 0. The last bound is the minimal asymptotic variance of any estimator given both a labeled
+and unlabeled sample (see [1]). Essentially, PPI++ is always more efficient than classical estimators,
+and it can achieve optimal statistical efficiency if the black-box prediction function f is sufficiently
+strong.
+
+6.2    A plug-in estimator and tuning procedure
+In finite samples, λ⋆ admits the natural plug-in estimate
+                            b −1 (Cov
+                         Tr(H                          d n (∇ℓf , ∇ℓ PP ))H −1 )
+                                  d n (∇ℓ PP , ∇ℓf ) + Cov
+                             θ̂PP        θ̂       PP  θ̂       PP   θ̂
+                                                                    θ̂       PP      θ̂
+                  λ̂ =                             −1 d          f
+                                                                                          ,            (8)
+                                           n
+                                     2(1 + N )Tr(H PP CovN +n (∇ℓ PP )H
+                                                 b                     b −1 )
+                                                   θ̂            θ̂     θ̂PP
+                                                                                                    √
+where θ̂PP = θ̂λPP is any estimate obtained by taking a fixed λ ∈ [0, 1], as each of these is n-
+consistent (Theorem 1), and H   b θ = ∇2 Ln (θ) is the empirical Hessian. The estimate λ̂ is consistent,
+              p
+satisfying λ̂ → λ⋆ , as (when the losses are smooth enough as in Definition A.1) each individual term
+consistently estimates its population counterpart. Theorem 1 thus implies the following corollary.
+Corollary 4. Let λ̂ be the estimate (8) and the conditions of Theorem 1 hold. Then
+                                          √ PP           d        ⋆
+                                           n(θ̂λ̂ − θ⋆ ) → N(0, Σλ ).
+
+    The astute reader may notice that both λ⋆ and λ̂ may fail to lie on the region [0, 1], which is the
+only region in which we can guarantee convexity—and thus tractability of computing θ̂λ̂PP —even
+for GLMs. (This may occur, for example, if the predictions f (Xi ) are anti-correlated with the
+true outcomes Yi ; see Example 6.1.) In this case, we can take one of two approaches: the first,
+naively, is to simply clip λ̂ to lie in [0, 1] in Algorithm 1 or 2. The second is to use classical one-step
+estimators [e.g. 19, Chapter 5.7]. In this case, we recognize that Theorem 1 implies that for any
+                 √
+fixed λ, θ̂λPP is n-consistent, and take a single Newton step on LPP     λ̂
+                                                                            ,
+
+                                    PP
+                                  θ̂os := θ̂λPP − ∇2 LPP
+                                                      λ̂
+                                                         (θ̂λPP )−1 ∇LPP
+                                                                      λ̂
+                                                                         (θ̂λPP ).
+
+          PP and the resulting inferences “one-step PPI.” The difference between the one-step
+We call θ̂os
+estimator and θ̂λ̂PP , where we clip λ̂ to be in [0, 1], is usually empirically immaterial; we explore this
+in Appendix B. We have the following corollary [19, Thm. 5.45].
+Corollary 5. Let λ̂ be the estimate (8) and the conditions of Theorem 1 hold. Then
+                                          √       PP         d        ⋆
+                                              n(θ̂os − θ⋆ ) → N(0, Σλ ).
+
+                                                        11
+    Using the plug-in estimate (8) thus yields a prediction-powered point estimate with minimal
+asymptotic variance, which in turn implies smaller confidence intervals than both PPI according
+to problem (P1 ) and classical inference.
+
+    Example 6.1 (Optimal tuning for mean estimation): The mean-estimation objective with
+    PPI++ is always convex for any choice of λ ∈ R, thus obviating the need for clipping or one-step
+    corrections. Let θ⋆ = E[YP ] = arg minθ E[ℓ θ (Y )] for the loss  ℓθ (y) = (y − θ)2 . Then for any
+                                 n               N                  n
+    λ ∈ R, we have θ̂λPP = n1 i=1 Yi + λ( N1 i=1 f (X    ei ) − 1
+                                              P                   P
+                                                                n   i=1 f (Xi )). Substituting into the
+                    ⋆
+    expression for λ from Proposition 2 gives
+                                                    Cov(Y, f (X))
+                                          λ⋆ =                      .
+                                                  (1 + r)Cov(f (X))
+    We use the plug-in estimator
+                                                   Cov
+                                                   d n (Yi , f (Xi ))
+                                        λ̂ =
+                                               (1 + n )Cov
+                                                    N
+                                                       d N +n (f (Xi ))
+
+    of λ⋆ in our experiments. ♢
+
+
+7        Experiments
+We evaluate the benefits of the proposed methodology in simulation and on real data. First, we
+study the effect of power tuning by comparing power-tuned PPI (PPI++) to both classical and
+prediction-powered inference (PPI). We also compare to the original PPI approach for generic M-
+estimators involving gridding Rd to test ∇LPP (θ) = 0. Code implementing the PPI++ methods
+used in the experiments is available in the ppi-py package.1
+
+7.1        The benefits of power tuning
+Our first set of experiments investigates tuning the weighting λ via Proposition 2 and the plug-
+in (8), which we use in the estimator (Pλ ) for θ̂λ̂PP . We first perform experiments with simulated
+data, then revisit the real-data experiments that Angelopoulos et al. [2] consider. In all experiments,
+we set α = 0.1.
+
+7.1.1       Simulation studies
+Each simulation experiment follows a similar pattern. We sample two i.i.d. datasets, {(Xi , Yi )}ni=1
+and {(X ei , Yei )}N , the first serving as the labeled data and the second as the unlabeled data (so
+                   i=1
+the algorithms have no access to {Yei }N    i=1 ). We corrupt the labels to form simulated predictions
+         n                   N
+{f (Xi )}i=1 and {f (Xi )}i=1 by adding noise to the true labels Yi and Yei . We compute the average
+                        e
+coverage and confidence interval width over 100 trials for the following methods:
+        • PPI with no power tuning, equivalent to setting λ = 1 (green);
+        • Classical inference, equivalent to setting λ = 0 (blue);
+        • Power-tuned PPI using the estimate (8) for λ̂ (orange).
+We set N = 10000 and vary the labeled sample size n as well as the noise level in the predictions.
+We choose the noise levels heuristically to represent low, medium, and high noise.
+    1
+        https://github.com/aangelopoulos/ppi py
+
+
+                                                        12
+                            coverage                                            width
+             1.0                                                                             PPI
+                                                              0.8
+                                                                                             classical
+             0.8                                              0.6                            tuned PPI
+     = 0.1
+
+                                                              0.4
+             0.6                                              0.2
+                                                              0.0
+             1.0
+                                                              0.8
+             0.8                                              0.6
+     =1
+
+
+
+
+                                                              0.4
+             0.6                                              0.2
+                                                              0.0
+             1.0
+                                                              0.8
+             0.8                                              0.6
+     =2
+
+
+
+
+                                                              0.4
+             0.6                                              0.2
+                                                              0.0
+                   200    400       600   800         1000          200   400         600   800    1000
+                                n                                                 n
+   Figure 1. Mean estimation simulation study. The left column shows coverage, the right column
+   shows confidence interval width. The top, middle, and bottom rows correspond to noise levels σ = 0.1,
+   σ = 1, and σ = 2, respectively.
+
+
+Mean estimation. The goal is to estimate the mean outcome E[Y ], where Y ∼ N(0, 1). We
+                                                iid
+form predictions as f (Xi ) = Yi + σϵi , ϵi ∼ N(0, 1). We set the noise level σ to be 0.1, 1, and 2,
+successively. There are no covariates in this problem. We show the results in Figure 1. We see that
+tuned PPI is essentially never worse than either baseline. When the noise is low, PPI++ behaves
+similarly to standard PPI (λ = 1). When the noise is high, PPI++ behaves like classical inference
+(λ = 0). In the intermediate noise regime, PPI++ significantly outperforms both baselines.
+
+Linear regression. The goal is to estimate the coefficients of a linear regression model Y =
+X ⊤ θ + ϵ, where X ∼ N(0, Id ), θ ∈ Rd , and ϵ ∼ N(0, 1), in dimension d = 2. We use predictions
+f (Xi ) = Xi⊤ θ+ϵi , where ϵi ∼ N(−2, σ 2 ). We vary the noise level σ ∈ {0.1, 0.5, 1}, plotting results in
+Figure 2. The results are qualitatively similar to those in Figure 1: PPI++ adaptively interpolates
+between classical inference and standard PPI as the noise level changes, outperforming both.
+
+Logistic regression. The goal is to estimate the coefficients of a logistic regression model, P(Y =
+                                 θ⊤ x
+1) = µθ (X), where µθ (x) = e θ⊤ x for θ ∈ Rd with dimension d = 2. We draw X ∼ N(0, Id ) and
+                              1+e
+to simulate a binary classifier f with error σ, we set the predictions f (Xi ) to be Yi but randomly
+flipped with probability σ. We vary the flipping probability σ ∈ {0.01, 0.1, 0.2}, presenting results
+in Figure 3. As before, PPI++ successfully adapts to the varying noise in the predictions.
+
+
+
+                                                         13
+                             coverage                                         width
+             1.0                                                                          PPI
+                                                         0.3
+                                                                                          classical
+             0.8                                                                          tuned PPI
+     = 0.1
+                                                         0.2
+
+             0.6                                         0.1
+
+             1.0
+                                                         0.3
+             0.8
+     = 0.5
+
+
+
+
+                                                         0.2
+
+             0.6                                         0.1
+
+             1.0
+                                                         0.3
+             0.8                                         0.2
+     =1
+
+
+
+
+             0.6                                         0.1
+
+                   1000   2000   3000    4000    5000          1000    2000     3000   4000     5000
+                                 n                                              n
+   Figure 2. Linear regression simulation study. The left column shows coverage, the right column
+   shows confidence interval width. The top, middle, and bottom rows correspond to noise levels σ = 0.1,
+   σ = 0.5, and σ = 1, respectively.
+
+
+7.1.2    Real data experiments
+We now revisit five experiments on real data that Angelopoulos et al. perform [2], where we replicate
+their experimental settings, comparing to classical inferential approaches (that do not use the
+unlabeled data) as well.
+
+Mean estimation on deforestation data. The goal is to estimate the mean deforestation
+rate in the Amazon based on satellite imagery data [2]. The dataset includes 1596 total pairs of
+observations and predictions, where the observations indicate whether deforestation occurred in a
+given randomly sampled region and the predictions are probits corresponding to these indicators.
+We take these predictions from the same gradient-boosted classifier as in [2], which is fit on a
+publicly available machine learning system that released tree canopy forest cover predictions at
+30m resolution in the years 2000 and 2015. Generally, when the amount of forest cover in 2015 is
+substantially lower than in 2000, the model predicts that deforestation occurred.
+    Of the 1596 total data points, we vary n, and then randomly take a labeled subset of size n and
+use N = 1596 − n as unlabeled. Figure 4 shows the results of the procedures over 100 random splits
+into labeled and unlabeled data. For small n, PPI++ behaves similarly to standard PPI. When n is
+large, meaning the unlabeled dataset size N is small, classical inference outperforms standard PPI;
+PPI++ outperforms both.
+
+
+
+                                                    14
+                                          coverage                                                 width
+                1.0                                                       1.5
+                                                                                                              PPI
+                                                                                                              classical
+                                                                          1.0                                 tuned PPI
+     = 0.01
+                0.8
+                                                                          0.5
+                0.6
+
+                1.0                                                       1.5
+
+                0.8                                                       1.0
+     = 0.1
+
+
+
+
+                                                                          0.5
+                0.6
+
+                1.0                                                       1.5
+
+                0.8                                                       1.0
+     = 0.2
+
+
+
+
+                                                                          0.5
+                0.6
+                            200         400     600     800    1000                   200    400      600   800     1000
+                                               n                                                     n
+   Figure 3. Logistic regression simulation study. The left column shows coverage, the right column
+   shows confidence interval width. The top, middle, and bottom rows correspond to noise levels
+   σ = 0.01, σ = 0.1, and σ = 0.2, respectively.
+
+
+                1.0                                                          0.08                             PPI
+                                                                                                              tuned PPI
+     coverage
+
+
+
+
+                0.8                                                                                           classical
+                                                                     width
+
+
+
+
+                                                                             0.06
+                0.6                                                          0.04
+                      200         400         600     800     1000                  200     400     600     800     1000
+                                               n                                                     n
+   Figure 4. Mean estimation on deforestation data. The left panel shows coverage and the right shows
+   width.
+
+Mean estimation on galaxy data. The goal is to estimate the fraction of spiral galaxies in
+the local universe based on images from the Sloan Digital Sky Survey (SDSS) and a pre-trained
+ResNet classifier, as in [2]. The scale of the universe makes human labeling of galaxies impossible,
+so scientists wish to use a computer-vision-based classifier to study the development of the universe.
+The classifier ingests images of galaxies and outputs an estimated probability that the galaxy is
+spiral. The dataset includes 1,364,122 total observations, of which we randomly take n to serve as
+the labeled data and N = 1,364,122 − n as the unlabeled data, for varying n. We show the results
+in Figure 5 over 100 random splits into labeled and unlabeled data. As the predictions are very
+accurate in this problem, PPI++ and standard PPI are basically indistinguishable, and both are
+
+
+                                                                     15
+significantly more powerful than classical inference.
+
+                 1.0                                             0.10                          PPI
+                                                                 0.08                          tuned PPI
+      coverage
+
+                 0.8                                                                           classical
+
+
+
+
+                                                         width
+                                                                 0.06
+                 0.6                                             0.04
+                       200    400    600    800   1000                  200    400    600   800      1000
+                                      n                                                n
+   Figure 5. Mean estimation on galaxy data. The left panel shows coverage and the right shows
+   width.
+
+Linear regression on census data. In this experiment, the goal is to estimate the coefficients
+of a linear regression model relating age (1-99) and sex (M/F) to income based on census data
+from California, as in [2]. We download the data through the Folktables [8] interface and use an
+XGBoost model [6] taking as input the ten covariates available in Folktables (including age, sex,
+the binary indicator of private health insurance) to produce predictions. We train the model on
+the entire census dataset in the year 2018 and use it to predict income for the year 2019. The 2019
+data includes 377,575 observations, of which we randomly take n as labeled and N = 377,575 − n
+as unlabeled, for varying n. We show the results in Figure 6 over 100 random splits into labeled
+and unlabeled data. PPI++ is visually indistinguishable from standard PPI with λ = 1.
+
+                 1.0                                             1000
+                                                                                               PPI
+                                                                 750                           classical
+      coverage
+
+
+
+
+                 0.8                                                                           tuned PPI
+                                                         size
+
+
+
+
+                                                                 500
+                 0.6                                             250
+                             500    1000   1500   2000                        500    1000   1500     2000
+                                      n                                                n
+   Figure 6. Linear regression on census data. The left panel shows coverage and the right shows
+   width.
+
+
+Logistic regression on census data. The goal is to estimate the coefficients of a logistic regres-
+sion model relating income ($) to the binary indicator of private health insurance based on census
+data. The setup otherwise resembles the previous experiment: we train an XGBoost model to
+predict income from ten other covariates, we have 377,575 total observations, and so on. Figure 7
+shows the results over 100 random splits into labeled and unlabeled data. Tuned PPI behaves
+similarly to PPI, and both are more powerful than classical inference for all values of n.
+
+7.2     Comparison to confidence sets from testing
+The final comparison is to the naive implementation of prediction-powered inference [2, Algorithm
+3]. We do not apply power tuning in this comparison as the goal is to understand the independent
+effect of the gridding procedure, which tests for “each” θ whether ∇LPP (θ) = 0 is plausible, versus
+the technique proposed herein. The gridding means the original PPI method has much larger
+computational cost than the proposed method, while it is also less accurate (leading to larger sets,
+
+                                                         16
+                                                                                            1e 5
+                       1.0
+                                                                                                                             PPI
+     coverage                                                                         1.5                                    classical
+                       0.8
+
+
+
+
+                                                                               size
+                                                                                                                             tuned PPI
+                                                                                      1.0
+                       0.6
+                             500   1000       1500       2000      2500                     500      1000       1500       2000       2500
+                                                n                                                                 n
+   Figure 7. Logistic regression on census data. The left panel shows coverage and the right shows
+   width.
+
+as in Figure 8). This follows because, to remain valid, the gridding method necessarily includes an
+extra grid point along each dimension. Furthermore, the method often outputs infinite sets because,
+in an effort to avoid an infinite runtime, the algorithm simply terminates grid refinement after a
+certain number of iterations. See Figure 8 for the median interval width for varying dimension d
+and limit on the number of grid points before the algorithm returns an infinite set.
+
+                                       coverage                                                    width
+                       1.0                                                                                                        Testing
+     grid limit 100
+
+
+
+
+                                                                                                                                  Efficient
+                       0.8
+                                                                width
+
+
+
+
+                                                                        66.0
+                       0.6                                              33.0
+                                                                         0.0
+                             1     2      3          4      5                   1           2        3      4          5
+                                          d
+                       1.0                                                                                                        Testing
+     grid limit 1000
+
+
+
+
+                                                                        66.0                                                      Efficient
+                       0.8
+                                                                width
+
+
+
+
+                                                                        33.0
+                       0.6
+                                                                         0.0
+                             1     2      3          4      5                   1           2        3      4          5
+                                          d
+                       1.0                                                                                                        Testing
+     grid limit 5000
+
+
+
+
+                                                                        66.0                                                      Efficient
+                       0.8
+                                                                width
+
+
+
+
+                                                                        33.0
+                       0.6
+                                                                         0.0
+                             1     2      3          4      5                   1           2        3      4          5
+                                          d                                                          d
+   Figure 8. Comparison of PPI++ logistic regression, as in Algorithm 1, and standard PPI logistic
+   regression [2, Algorithm 3]. The left panel shows coverage and the right shows width.
+
+
+
+Acknowledgements
+The authors would like to acknowledge the support of the Mohamed bin Zayed University of
+Artificial Intelligence and president Eric Xing as well as Barbara Engelhardt for their organization
+
+                                                                           17
+of the Michael Jordan Symposium, which led to this idea and collaboration. We also thank Michael
+Jordan for his encouragement. JCD’s work was additionally supported by the Office of Naval
+Research Grant N00014-22-1-2669 and as a Thomas and Polly Bredt Faculty Scholar.
+
+
+References
+ [1] A. Angelopoulos, J. C. Duchi, and T. Zrnic.       A note on statistical efficiency in
+     Prediction-Powered Inference. 2023. URL https://web.stanford.edu/~jduchi/projects/
+     AngelopoulosDuZr23w.pdf.
+
+ [2] A. N. Angelopoulos, S. Bates, C. Fannjiang, M. I. Jordan, and T. Zrnic. Prediction-powered
+     inference. arXiv:2301.09633, 2023.
+
+ [3] P. Bickel, C. A. J. Klaassen, Y. Ritov, and J. Wellner. Efficient and Adaptive Estimation for
+     Semiparametric Models. Springer Verlag, 1998.
+
+ [4] S. Boyd and L. Vandenberghe. Convex Optimization. Cambridge University Press, 2004.
+
+ [5] L. D. Brown. Fundamentals of Statistical Exponential Families. Institute of Mathematical
+     Statistics, Hayward, California, 1986.
+
+ [6] T. Chen and C. Guestrin. XGBoost: A scalable tree boosting system. In Proceedings of the
+     22nd ACM SIGKDD Conference on Knowledge Discovery and Data Mining (KDD), pages
+     785–794, 2016.
+
+ [7] V. Chernozhukov, D. Chetverikov, M. Demirer, E. Duflo, C. Hansen, W. Newey, and J. Robins.
+     Double/debiased machine learning for treatment and structural parameters. The Econometrics
+     Journal, 21(1):C1–C68, 2018.
+
+ [8] F. Ding, M. Hardt, J. Miller, and L. Schmidt. Retiring Adult: New datasets for fair machine
+     learning. Advances in Neural Information Processing Systems 34, 2021.
+
+ [9] B. Efron. Exponential Families in Theory and Practice. Cambridge University Press, 2022.
+
+[10] J. Jumper, R. Evans, A. Pritzel, T. Green, M. Figurnov, K. Tunyasuvunakool, O. Ronneberger,
+     R. Bates, A. Zidek, A. Bridgland, C. Meyer, S. A. A. Kohl, A. Potapenko, A. J. Ballard,
+     A. Cowie, B. Romera-Paredes, S. Nikolov, R. Jain, J. Adler, T. Back, S. Petersen, D. Reiman,
+     M. Steinegger, M. Pacholska, D. Silver, O. Vinyals, A. W. Senior, K. Kavukcuoglu, P. Kohli,
+     and D. Hassabis. Highly accurate protein structure prediction with AlphaFold. Nature, 596:
+     583–589, 2021.
+
+[11] Y. LeCun, Y. Bengio, and G. Hinton. Deep learning. Nature, 521(7553):436–444, 2015.
+
+[12] A. Radford, J. W. Kim, C. Hallacy, A. Ramesh, G. Goh, S. Agarwal, G. Sastry, A. Askell,
+     P. Mishkin, J. Clark, G. Krueger, and I. Sutskever. Learning transferable visual models from
+     natural language supervision. In Proceedings of the 38th International Conference on Machine
+     Learning, 2021.
+
+[13] J. M. Robins and A. Rotnitzky. Semiparametric efficiency in multivariate regression models
+     with missing data. Journal of the American Statistical Association, 90(429):122–129, 1995.
+
+
+
+                                               18
+[14] J. M. Robins, A. Rotnitzky, and L. P. Zhao. Estimation of regression coefficients when some
+     regressors are not always observed. Journal of the American Statistical Association, 89(427):
+     846–866, 1994.
+
+[15] D. B. Rubin. Multiple imputation. In Flexible Imputation of Missing Data, Second Edition,
+     pages 29–62. Chapman and Hall/CRC, 2018.
+
+[16] C.-E. Särndal, B. Swensson, and J. Wretman. Model assisted survey sampling. Springer Science
+     & Business Media, 2003.
+
+[17] S. Song, Y. Lin, and Y. Zhou. A general m-estimation theory in semi-supervised framework.
+     Journal of the American Statistical Association, pages 1–11, 2023.
+
+[18] A. Tsiatis. Semiparametric Theory and Missing Data. Springer, 2006.
+
+[19] A. W. van der Vaart. Asymptotic Statistics. Cambridge Series in Statistical and Probabilistic
+     Mathematics. Cambridge University Press, 1998.
+
+[20] A. W. van der Vaart and J. A. Wellner. Weak Convergence and Empirical Processes: With
+     Applications to Statistics. Springer, New York, 1996.
+
+[21] A. Zhang, L. D. Brown, and T. T. Cai. Semi-supervised inference: General theory and esti-
+     mation of means. The Annals of Statistics, 47:2538–2566, 2019.
+
+[22] Y. Zhang and J. Bradic. High-dimensional semi-supervised learning: in search of optimal
+     inference of the mean. Biometrika, 109(2):387–403, 2022.
+
+
+
+
+                                               19
+ A     Proofs
+ A.1     Proof of Theorem 1
+ We formally state the smoothness condition needed for Theorem 1.
+ Definition A.1 (Smooth enough losses). The loss ℓθ is smooth enough if
+ (i) the losses ℓθ (x, y) and ℓθ (x, f (x)) are differentiable at θ⋆ for P-almost every (x, y),
+(ii) the losses ℓθ are locally Lipschitz around θ⋆ : there is a neighborhood of θ⋆ such that ℓθ (x, y) is
+     M (x, y)-Lipschitz and ℓθ (x, f (x)) is M (x)-Lipschitz in θ, where E[M (X, Y )2 + M (X)2 ] < ∞,
+(iii) the population losses L(θ) = E[ℓθ (X, Y )] and Lf (θ) = E[ℓθ (X, f (X))] have Hessians Hθ⋆ =
+      ∇2 L(θ⋆ ) ≻ 0 and Hθf⋆ = ∇2 Lf (θ⋆ ).
+     The proof follows that of van der Vaart [19, Theorem 5.23], with the modifications necessary to
+ address the different observation model and empirical objective. Throughout the proof, we recall
+ the labeling conventions that a tilde e· indicates the unlabeled sample {Xei }N and a superscripted
+                                                                               i=1
+          f
+ f (i.e. · ) indicates using the machine-learning predictions f .
+     With this notational setting, given a function g, we use the shorthand notation
+                              n
+                           1X                        √
+                   En g :=       g(Xi , Yi ), Gn g = n (En g − E[g(X, Y )]) ;                    (9)
+                           n
+                                 i=1
+                                   N                                      √
+                  e f g := 1                                   e f g :=          e f g − E[g(X, f (X))]);
+                                  X
+                  E N                  g(X
+                                         ei , fi (X
+                                                  ei )),       G N            N (E N                        (10)
+                           N
+                                 i=1
+                                 n
+                             1   X                                       √
+                  Efn g :=             g(Xi , f (Xi )),       Gfn g :=       n(Efn g − E[g(X, f (X))]).     (11)
+                             n
+                                 i=1
+    The differentiability of ℓθ (x, y) and ℓθ (x, f (x)) at θ⋆ (Definition A.1(i)) and the local Lipschitz-
+ ness of the losses (Definition A.1(ii)) imply that for every (possibly random) sequence hn = OP (1),
+ we have
+                                     √
+                                                                   
+                                                                ⊤        p
+                                 G     n ℓθ⋆ + √hn − ℓθ⋆ − hn ∇ℓθ⋆ → 0
+                                                          n
+
+
+ for any of the empirical processes G ∈ {Gn , G  e f , Gfn } (see [19, Lemma 19.31]). By applying a
+                                                   N
+ second-order Taylor expansion, this implies
+                                                               
+                                                    hn 
+               nEn ℓθ⋆ + √hn − ℓθ⋆ = n L θ + √⋆
+                                                          − L(θ ) + h⊤
+                                                                 ⋆
+                                                                         n Gn ∇ℓθ⋆ + oP (1)
+                            n                         n
+                                       1
+                                     = h⊤  Hθ⋆ hn + h⊤  n Gn ∇ℓθ⋆ + oP (1).
+                                       2 n
+ Similarly, we have the two equalities
+                                                                 r                           
+                 f                                   1 ⊤ f             n ⊤ ef
+            λ̂nEN ℓθ⋆ + √hn − ℓθ⋆ = (λ + oP (1))
+               e                                       h H ⋆ hn +        h G ∇ℓθ⋆ + oP (1)
+                           n                         2 n θ             N n N
+                                                        r                 
+                                          1 ⊤ f              n ⊤ ef
+                                    =λ     h H ⋆ hn +          h G ∇ℓθ⋆ + oP (1), and
+                                          2 n θ             N n N
+                                                                                           
+                                                       1       f
+           −λ̂nEfn ℓθ⋆ + √hn − ℓθ⋆ = (λ + oP (1)) − h⊤      H    h
+                                                                ⋆ n − h ⊤ f
+                                                                         G   ∇ℓ θ ⋆ + o P (1)
+                           n                           2 n θ            n n
+                                                                     
+                                           1
+                                    = λ − h⊤    H f⋆ hn − h⊤     f
+                                                             n Gn ∇ℓθ⋆ + oP (1).
+                                           2 n θ
+
+
+                                                                20
+   Adding the preceding three equations and recalling the definition that
+
+                                  LPP                ef       f
+                                   λ (θ) = En ℓθ + λ(EN ℓθ − En ℓθ ),
+
+we have
+                                                   r                    
+    PP    ⋆ hn      PP ⋆     1 ⊤          ⊤               n ef         f
+n Lλ̂    θ +√    − Lλ̂ (θ ) = hn Hθ⋆ hn +hn Gn ∇ℓθ⋆ + λ     G ∇ℓθ⋆ − λGn ∇ℓθ⋆ +oP (1).
+             n               2                            N N
+
+   We now evaluate this expression for two particular choices of the sequence hn . First, consider
+     √
+h⋆n = n(θ̂λ̂PP − θ⋆ ).
+                    Because the losses are smooth enough (Definition A.1), θ 7→ λℓθ is locally
+Lipschitz uniformly for λ in (any) compact set, and so the consistency θ̂λ̂PP → θ⋆ implies that
+h⋆n = OP (1) (van der Vaart [19, Corollary 5.53]). This yields
+                          1                                  r                    
+    
+      PP PP       PP ⋆           ⋆⊤     ⋆     ⋆⊤                 n ef          f
+ n Lλ̂ (θ̂λ̂ ) − Lλ̂ (θ ) = hn Hθ⋆ hn + hn         Gn ∇ℓθ⋆ + λ     G ∇ℓθ⋆ − λGn ∇ℓθ⋆ + oP (1).
+                              2                                  N N
+                                                                pn f          f
+We can perform a similar expansion with hn = −Hθ−1
+                                                 ⋆ (Gn ∇ℓθ ⋆ + λ N GN ∇ℓθ − λGn ∇ℓθ ), which
+                                                                   e     ⋆         ⋆
+
+is certainly OP (1), yielding
+                                      √                   1
+                     n LPP (θ ⋆
+                                − hn /   n) − LPP ⋆
+                                                  (θ )   = − h⊤ Hθ⋆ hn + oP (1).
+                        λ̂                     λ̂           2 n
+
+By the definition of θ̂λ̂PP , the left-hand side of the first equation is smaller than the left-hand side
+of the second equation, and so
+                          1 ⋆⊤                           1
+                            hn Hθ⋆ h⋆n − h⋆n ⊤ Hθ⋆ hn ≤ − h⊤ Hθ⋆ hn + oP (1),
+                          2                              2 n
+or, rearranging,
+                                 1 ⋆
+                                  (h − hn )⊤ Hθ⋆ (h⋆n − hn ) = oP (1).
+                                 2 n
+As Hθ⋆ is positive definite, we thus must have h⋆n = hn + oP (1), that is,
+
+            √  PP
+                                                   r                      
+                          ⋆
+                            
+                                   −1                  n ef            f
+              n θ̂λ̂ − θ = −Hθ⋆ Gn ∇ℓθ⋆ + λ              G ∇ℓθ⋆ − λGn ∇ℓθ⋆ + oP (1).
+                                                       N N
+
+    It remains to demonstrate the asymptotic normality of the empirical processes on the right-hand
+side. This follows by the central limit theorem:
+                  r
+                     n ef
+      Gn ∇ℓθ + λ
+            ⋆           G ∇ℓθ⋆ − λGfn ∇ℓθ⋆
+                    N N
+            r            N                                  n
+                n    1 X                               1 X                                           
+         =λ       ·√        (∇ℓ̃fθ⋆ ,i − E[∇ℓfθ⋆ ]) + √        ∇ℓθ⋆ ,i − λ∇ℓfθ⋆ ,i − E[∇ℓθ⋆ − λ∇ℓfθ⋆ ]
+                N     N i=1                             n
+                                                           i=1
+                                                           
+         d                    f                          f
+         → N 0, λ2 r · Var(∇ℓθ⋆ ) + Var(∇ℓθ⋆ − λ∇ℓθ⋆ ) .
+                                           
+                       pn f
+                          e ∇ℓθ⋆ − λGfn ∇ℓθ⋆ →d
+Thus Hθ−1
+        ⋆   Gn ∇ℓθ⋆ + λ N GN                    N(0, Σλ ), completing the proof.
+
+
+
+
+                                                   21
+A.2    Proof of Proposition 1
+We begin by stating an auxiliary lemma.
+
+Lemma A.1. Let g : Rd → R be a convex function. Fix θ0 , θ1 ∈ Rd and t ≥ 1, and define
+θt = θ0 + t(θ1 − θ0 ). Then g(θt ) ≥ g(θ0 ) + t(g(θ1 ) − g(θ0 )).
+
+Proof. Rearranging terms, we have θ1 = 1t θt + (1 − 1t )θ0 . Applying the definition of convexity at
+θ1 gives                                                   
+                                       1                  1
+                               g(θ1 ) ≤ g(θt ) + 1 −          g(θ0 ),
+                                       t                  t
+which is equivalent to g(θt ) ≥ g(θ0 ) + t(g(θ1 ) − g(θ0 )).
+
+   Returning to Proposition 1, the local Lipschitzness condition implies there is an ϵ > 0 such that
+                                                                   p
+                                         sup       |LPP
+                                                     λ (θ) − L(θ)| → 0                            (12)
+                                     θ:∥θ−θ⋆ ∥≤ϵ
+
+by a standard covering argument. By the uniqueness of θ⋆ , for all ϵ > 0 we know there exists a
+δ > 0 such that L(θ) − L(θ⋆ ) ≥ δ for all θ on the ϵ-shell {θ | ∥θ − θ⋆ ∥ = ϵ} around θ⋆ . With this
+we can write
+
+     inf LPP         PP ⋆
+                                          (LPP                           ⋆         ⋆      PP ⋆
+                                                                                                
+            λ (θ) − Lλ (θ ) =     inf       λ (θ) − L(θ) + (L(θ) − L(θ )) + (L(θ ) − Lλ (θ ))
+  ∥θ−θ⋆ ∥=ϵ                        ∥θ−θ⋆ ∥=ϵ
+
+                                ≥ δ − oP (1),
+
+where the convergence (12) guarantees that the first and third terms above vanish.
+                                                                                    θ−θ⋆
+   Now fix any θ such that ∥θ − θ⋆ ∥ ≥ ϵ. We apply Lemma A.1 with θ0 = θ⋆ and θ1 = ∥θ−θ ⋆ ∥ ϵ.
+Combining the preceding display with Lemma A.1 gives
+
+                                                ∥θ − θ⋆ ∥
+                         LPP       PP ⋆
+                          λ (θ) − Lλ (θ ) ≥               (δ − oP (1)) ≥ δ − oP (1).
+                                                    ϵ
+Therefore, no θ with ∥θ − θ⋆ ∥ ≥ ϵ can minimize LPP    λ , and so by contradiction we have shown
+      PP   ⋆
+P(∥θ̂λ − θ ∥ < ϵ) → 1, as desired.
+    We turn to the final claim of the proposition, which allows random λ̂. The convergence (12)
+holds uniformly for λ′ in a small neighborhood of λ as well because of an identical covering argument;
+as λ̂ = λ + oP (1), with probability tending to 1 we have that λ̂ belongs to the neighborhood of λ.
+The rest of the proof is identical.
+
+A.3    Proof of Theorem 2
+We will require that the loss function is stochastically smooth in the following sense.
+
+Assumption A1 (Stochastic smoothness). There exists a compact neighborhood B of θ⋆ such that
+the classes
+
+              L := {(x, y) 7→ ∇ℓθ (x, y) : θ ∈ B}     and   Lf := {x 7→ ∇ℓθ (x, f (x)) : θ ∈ B}
+
+are both P-Donsker.
+
+
+
+
+                                                      22
+   Let Z ∼ N(0, I). We will show that, for any c < ∞,
+                                  √                                     2
+             lim sup sup P(θ⋆ + h/ n ∈ CαPP ) − P        −Σ−1/2 h + Z 2 ≤ χ2d,1−α
+                                                                                    
+                                                                                        = 0,   (13)
+                n    ∥h∥≤c
+
+
+for CαPP ∈ {CαPP,T , CαPP,U }, where Σ is the asymptotic covariance from Theorem 1 for λ = 1, i.e.
+Σ ≡ Σ1 = Hθ−1        1        1     −1
+              ⋆ (rVf,θ ⋆ + V∆,θ ⋆ )Hθ ⋆ .
+
+    The result (13) directly implies the main result of the theorem.
+                                           √
+    Let hn be any sequence such that nhn → h for some fixed h ∈ Rd . We give alternative
+representations of the statistics Tn and Un under the local alternative parameters θ⋆ + hn . We
+leverage the following two technical lemmas:
+Lemma A.2. Under the conditions of Theorem 2,
+                               p                                       p
+                Vb∆ (θ⋆ + hn ) → Var(∇ℓθ⋆ − ∇ℓfθ⋆ ) and Vbf (θ⋆ + hn ) → Var(∇ℓfθ⋆ ).
+
+Lemma A.3. Define the (sub)gradient process
+
+                    G(θ)
+                    b    := En [∇ℓθ − ∇ℓfθ ] − E[∇ℓθ − ∇ℓfθ ] + E
+                                                                e N [∇ℓf ] − E[∇ℓf ].
+                                                                       θ         θ             (14)
+
+                                                      b ⋆ ) + oP (1/√n).
+                                         b ⋆ + hn ) = G(θ
+Then, under the conditions of Theorem 2, G(θ
+   Lemma A.2 follows by the classical result [20, Lemma 2.10.14] that if F is a Donsker class, then
+F 2 = {f 2 : f ∈ F} is Glivenko-Cantelli.
+   Lemma A.3 follows by the fact that the process is asymptotically stochastically equicontinuous,
+which follows by Assumption A1; see below for the proof.
+
+Proof of Lemma A.3. We adopt the definitions of Gn g, GfN g, and Gfn g from Equations (9), (10),
+and (11), respectively. Because the process [Gn ∇ℓθ ]θ∈B converges to a (tight) Gaussian process in
+                                     √
+θ by Assumption A1, as hn = OP (1/ n) we necessarily have
+                                                               p
+                                      Gn ∇ℓθ⋆ +hn − Gn ∇ℓθ⋆ → 0
+
+(as the process is asymptotically stochastically equicontinuous by Assumption A1). Similarly,
+                                                 p                            p
+Assumption A1 implies GfN ∇ℓθ⋆ +hn − GfN ∇ℓθ⋆ → 0 and Gfn ∇ℓθ⋆ +hn − Gfn ∇ℓθ⋆ → 0. Adding and
+                                                     √
+subtracting the preceding quantities and rescaling by n, we obtain the lemma.
+
+    Now we give asymptotically equivalent formulations of Tn and Un evaluated at the alternatives
+θ⋆ + hn . We can write Tn as
+                         √ −1/2 PP                √ −1/2 PP
+          Tn (θ⋆ + hn ) = nΣ
+                           b   (θ̂ − θ⋆ − hn ) = nΣ  b     (θ̂ − θ⋆ ) − Σ−1/2 h + oP (1).
+
+Turning to Un , we let V∆,θ⋆ = Var(∇ℓθ⋆ − ∇ℓfθ⋆ ) and Vf,θ⋆ = Var(∇ℓfθ⋆ ). Then Lemma A.2 and
+Lemma A.3 give
+
+ Un (θ⋆ + hn )
+    (i) √                                          √
+    = n(V∆,θ⋆ + rVf,θ⋆ + oP (1))−1/2 G(θ
+                                     b ⋆ + hn ) + n(V∆,θ⋆ + rVf,θ⋆ + oP (1))−1/2 ∇L(θ⋆ + hn )
+    (ii) √
+     = n(V∆,θ⋆ + rVf,θ⋆ )−1/2 G(θ
+                              b ⋆ ) + (V∆,θ⋆ + rVf,θ⋆ )−1/2 Hθ⋆ h + oP (1),
+
+where step (i) follows from Lemma A.2 and (ii) from Lemma A.3 coupled with Slutsky’s lemmas
+                                                                                       √
+and that ∇L(θ⋆ + hn ) = ∇L(θ⋆ + hn ) − ∇L(θ⋆ ) = ∇2 L(θ⋆ )hn + o(∥hn ∥) = Hθ⋆ hn + o(1/ n).
+
+                                                   23
+    Rewriting the preceding two displays and applying Theorem 1 to the first, we have
+                         d                                       d
+         Tn (θ⋆ + hn ) → N(−Σ−1/2 h, I) and Un (θ⋆ + hn ) → N((V∆,θ⋆ + rVf,θ⋆ )−1/2 Hθ⋆ h, I).
+The squared norm of the latter mean satisfies
+                                              2
+                (V∆,θ⋆ + rVf,θ⋆ )−1/2 Hθ⋆ h       = hT Hθ⋆ (V∆,θ⋆ + rVf,θ⋆ )−1 Hθ⋆ h = hT Σ−1 h
+                                              2
+by the definition of Σ. Therefore, the rotational invariance of the Gaussian yields
+                                                                                    
+                                                                            2
+      ⋆           PP,T            ⋆       2     2                 −1/2            2
+   P(θ + hn ∈ Cα ) = P(∥Tn (θ + hn )∥2 ≤ χd,1−α ) = P −Σ               h + Z ≤ χd,1−α + o(1)
+                                                                            2
+                                                                                    
+                                                                             2
+      ⋆           PP,U            ⋆        2    2                 −1/2            2
+   P(θ + hn ∈ Cα ) = P(∥Un (θ + hn )∥2 ≤ χd,1−α ) = P −Σ               h + Z ≤ χd,1−α + o(1),
+                                                                                     2
+                                                                                                   (15)
+where Z ∼ N(0, I).
+   Finally, we employ a standard compactification argument. Assume for the sake of contradiction
+that
+                                  √
+                                                                           
+                                                                 2
+            lim sup sup P(θ⋆ + h/ n ∈ CαPP ) − P −Σ−1/2 h + Z ≤ χ2d,1−α > 0,
+                    n   ∥h∥≤c                                                2
+
+for one of CαPP ∈ {CαPP,T , CαPP,U }. If this is the case, then there must be a bounded subsequence of
+hn with
+                              √
+                                                                             
+                                                                    2
+                    ⋆                  PP              −1/2               2
+                 P(θ + hn / n ∈ Cα ) − P −Σ                 hn + Z ≤ χd,1−α → a > 0.
+                                                                    2
+                                                             √       √
+Take a convergent subsequence from this set, so that n(hn / n) = hn → h. The existence of this
+subsequence contradicts the limits (15). This proves the first claim of the theorem.
+                                                   √
+    For the second claim, take any tn = ω(1/ n) and δ ∈ (0, 1). Then
+                             √                               √ −1/2 PP            
+P θ⋆ + htn ∈ CαPP,T ≤ P ∥ nΣ        b −1/2 htn ∥ ≤ χd,1−α + ∥ nΣ       (θ̂ − θ⋆ )∥
+                    
+                                                                 b
+                             √                                           √                           
+                                      −1/2                                      −1/2 PP     ⋆
+                      ≤ P ∥ nΣ      b      htn ∥ ≤ χd,1−α + χd,1−δ + P ∥ nΣ   b      (θ̂ − θ )∥ > χd,1−δ .
+Taking the limit, we get
+                                  lim sup sup P θ⋆ + htn ∈ CαPP,T ≤ δ.
+                                                                 
+                                     n    ∥h∥≥c
+
+As δ was arbitrary, we conclude that lim supn sup∥h∥≥c P(θ⋆ + htn ∈ CαPP,T ) = 0.
+
+A.4     Proof of Proposition 2
+By definition
+                                                                                      
+      λ⋆ = arg min Tr Σλ = arg min Tr Hθ−1
+                                         ⋆   r · λ2 Var(∇ℓfθ⋆ ) + Var(∇ℓθ⋆ − λ∇ℓfθ⋆ ) Hθ−1
+                                                                                         ⋆   .
+                λ                    λ
+
+Writing Cov(∇ℓθ⋆ − λ∇ℓfθ⋆ ) = Cov(∇ℓθ⋆ ) + λ2 Cov(∇ℓfθ⋆ ) − λ(Cov(∇ℓθ⋆ , ∇ℓfθ⋆ ) + Cov(∇ℓfθ⋆ , ∇ℓθ⋆ ))
+and applying the linearity of the trace, λ⋆ evidently minimizes
+                                                                                  
+                         f
+ λ2 (1 + r)Tr Hθ−1             −1
+                 ⋆ Var(∇ℓθ ⋆ )Hθ ⋆   − λTr Hθ−1
+                                              ⋆   Cov ∇ℓθ⋆ , ∇ℓfθ⋆ + Cov ∇ℓfθ⋆ , ∇ℓθ⋆ Hθ−1
+                                                                                         ⋆   .
+Analytically optimizing this quadratic gives the optimal choice
+                                                                                 
+                                                   f                f
+                       Tr Hθ−1⋆   Cov   ∇ℓ θ ⋆ , ∇ℓθ⋆   + Cov   ∇ℓ  θ⋆ , ∇ℓ θ ⋆    H −1
+                                                                                    θ⋆
+                  λ⋆ =                                                                  .
+                                                              f
+                                   2(1 + r)Tr Hθ−1                    −1
+                                                      ⋆ Var(∇ℓθ ⋆ )Hθ ⋆
+
+
+
+
+                                                        24
+B     Experiments with one-step PPI
+We repeat the synthetic experiments from the main text (Section 7.1.1), but only compare PPI
+(with λ = 1), power-tuned PPI (PPI++) with clipping λ̂ to [0, 1], and one-step PPI. The figures
+below show the results in sequence; one-step PPI and power-tuned PPI overlap almost completely
+in all plots but one: Figure 10. This figure shows results from a new experiment using anticorrelated
+predictions (the same setting as in Figure 1, except that we take f (Xi ) = −Yi + ϵ). In this setting,
+one-step PPI outperforms PPI and power-tuned PPI because it allows λ̂ to be negative.
+
+                                coverage                                       width
+                   1.0                                                                     PPI
+                                                             0.8
+                                                                                           one-step PPI
+                   0.8                                       0.6                           tuned PPI
+           = 0.1
+
+
+
+
+                                                             0.4
+                   0.6                                       0.2
+                                                             0.0
+                   1.0
+                                                             0.8
+                   0.8                                       0.6
+           =1
+
+
+
+
+                                                             0.4
+                   0.6                                       0.2
+                                                             0.0
+                   1.0
+                                                             0.8
+                   0.8                                       0.6
+           =2
+
+
+
+
+                                                             0.4
+                   0.6                                       0.2
+                                                             0.0
+                         200   400       600   800   1000          200   400         600    800     1000
+                                     n                                           n
+    Figure 9. Mean estimation with one-step PPI. The left panel shows coverage and the right shows
+    width. The setup is the same as in Figure 1.
+
+
+
+
+                                                        25
+                                coverage                                          width
+               1.0                                                                            PPI
+                                                             1.0                              one-step PPI
+               0.8                                                                            tuned PPI
+       = 0.1
+                                                             0.5
+               0.6
+                                                             0.0
+               1.0
+                                                             1.0
+               0.8
+       =1
+
+
+
+
+                                                             0.5
+               0.6
+                                                             0.0
+               1.0
+                                                             1.0
+               0.8
+       =2
+
+
+
+
+                                                             0.5
+               0.6
+                                                             0.0
+                       200    400       600    800   1000            200    400         600    800     1000
+                                    n                                               n
+Figure 10. Mean estimation with one-step PPI and anticorrelated predictions. The left panel shows
+coverage and the right shows width. The setup is the same as in Figure 1, only we multiply the true
+outcomes by −1 when generating the predictions, f (Xi ) = −Yi + ϵ.
+
+
+                                coverage                                          width
+               1.0                                          0.050
+                                                                                              PPI
+                                                            0.045                             one-step PPI
+               0.8                                          0.040                             tuned PPI
+       = 0.1
+
+
+
+
+                                                            0.035
+               0.6                                          0.030
+
+               1.0                                           0.10
+
+               0.8                                           0.08
+       = 0.3
+
+
+
+
+                                                             0.06
+               0.6                                           0.04
+
+               1.0                                           0.20
+                                                             0.15
+               0.8
+       = 0.6
+
+
+
+
+                                                             0.10
+               0.6
+                                                             0.05
+                     1000    2000   3000      4000   5000           1000   2000     3000      4000     5000
+                                    n                                               n
+Figure 11. Linear regression with one-step PPI. The left panel shows coverage and the right shows
+width. The setup is the same as in Figure 2.
+
+
+                                                        26
+                              coverage                                  width
+                1.0                                   1.5
+                                                                                 PPI
+                                                                                 one-step PPI
+                                                      1.0                        tuned PPI
+       = 0.01
+
+
+
+
+                0.8
+                                                      0.5
+                0.6
+
+                1.0                                   1.5
+
+                                                      1.0
+                0.8
+       = 0.1
+
+
+
+
+                                                      0.5
+                0.6
+
+                1.0                                   1.5
+
+                                                      1.0
+                0.8
+       = 0.2
+
+
+
+
+                                                      0.5
+                0.6
+                      200   400    600   800   1000         200   400      600   800      1000
+                                  n                                       n
+Figure 12. Logistic regression with one-step PPI. The left panel shows coverage and the right shows
+width. The setup is the same as in Figure 3.
+
+
+
+
+                                                 27
+

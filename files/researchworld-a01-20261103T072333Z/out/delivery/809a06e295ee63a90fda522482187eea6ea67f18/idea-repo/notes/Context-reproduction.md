@@ -1,0 +1,14 @@
+# Context provenance and reproducibility
+
+This package contains the objective brief, source-grounded context, checked reference entries and retrieval manifests. These are not results of the score intervention study; analysis/reproduction is owned by experiment-repo. No empirical study was rerun here.
+
+- Task inputs: all five frozen files in `/initial-state/inputs/0/` were read in full; `notes/frozen-inputs.json` records SHA-256 and byte counts. Hashes were compared with the objective's frozen manifest.
+- Source reading: actual depth and source versions are in `notes/Literature.md`; direct PDF downloads and foundation records are hashed in `sources/*downloads.json`. No third-party PDF is redistributed. Record metadata and the original README remain locally for checking; manifests and our notes are delivered.
+- Retrieval: Python standard library with TLS verification. `python3 scripts/fetch_context_sources.py --out-dir retrieved-context` obtains only the direct consulted documents, checks SHA-256 and reports drift. It pins arXiv consulted versions. DOI landing HTML and Zenodo API records can change; a hash mismatch is a provenance alert, not permission to substitute a different document unnoticed. Downloads are network-dependent; no computational study runtime is claimed here. No random seed is needed; this context work contains no randomized analysis.
+- Text reading: installed Poppler `pdftotext -layout source.pdf source.txt`. Source-document section names and reading scope are in Literature. No claim is made to have read the entire handbook or every appendix. No citation graph or linked “cited by” page was traversed.
+- Actual retrieval correction: the attempted `comsoc.org/handbook/` URL returned HTTP 404. The supplied book DOI successfully resolved to the official Cambridge book metadata, which supplied the accessible Chapter 7 PDF. Optional BeautifulSoup import failed; Python's stdlib handled link extraction instead; nothing needed installation.
+- Independence record: no search for, attempt to identify, access to, or recognized encounter with prohibited material occurred in this position. Only explicitly allowed sources and direct official source documents were read. References inside allowed works were not followed.
+- Citation caveat: DOI `10.5281/zenodo.10256836` identifies *EleutherAI/lm-evaluation-harness: Major refactor*, v0.4.0 (2023), not the README's generic framework entry for v0.0.1 (2021), DOI `10.5281/zenodo.5371628`. The checked bibliography cites the actual supplied record. Paper-repo chooses citations for its final text and should preserve identity consistency.
+- Handoff: wiki Brief/Literature and release context-v1 make material readable to positions without code access. Final manuscript paths remain owned by paper-repo; story-repo's plan records that context is supplied as material for integration.
+
+Reading environment: Python 3.11.2; Poppler pdftotext 22.12.0.

@@ -1,0 +1,215 @@
+\documentclass{article}
+\usepackage{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts,amsmath,amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage[table]{xcolor}
+
+\DeclareMathOperator*{\argmax}{arg\,max}
+\input{numbers.tex}
+% \N{key}: a number read from results/ by make_numbers.py; an unknown key stops the build.
+\newcommand{\N}[1]{\ifcsname N@#1\endcsname\csname N@#1\endcsname\else\errmessage{unknown number key #1}\fi}
+\newcommand{\kst}{k^{\ast}}
+
+\title{How Few Comparisons Does It Take? Stability of Bradley--Terry Leaderboards Across Evaluation Designs}
+
+\author{Anonymous authors}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Leaderboards built from pairwise comparisons usually fit a Bradley--Terry (BT) model and report scores with confidence intervals, but it is unclear how much of a ranking claim rests on a few comparisons, whether through noise or through deliberate edits. We define four ranking claims (top-1, adjacent order, top-$k$ set, significance of a difference) and measure the smallest number $\kst$ of removed, relabelled or added comparisons that changes one, with an influence-based search verified by exact refitting (an upper bound; equal to exhaustive search on all \N{EXagree} small instances checked), against random edits and bootstrap resampling. On Chatbot Arena votes, MT-Bench expert and GPT-4 judgments, and 69 NBA seasons, claims between participants the data cannot separate flip after a handful of edits (Arena top-1: \N{AC1P10k} of \N{AN} battles), which resampling also produces. Statistically significant claims need hundreds of edits, a median \N{UAC4P1kN} of battles on Arena and \N{UMHC4P1kN} of judgments on MT-Bench, yet random removals \N{RRMHratio}$\times$ as many never changed the MT-Bench-human top-1 in \N{RRnMH} draws, and \N{RWMHratio}$\times$ as many changed its pair at ranks 2/3 in only \N{RWMHp} of draws. $\kst/N$ differs by two orders of magnitude between designs. A descriptive log-log fit of $\kst$ on the $z$-gap and the local sample size reaches $R^2=\N{SCC2r2}$, which is partly mechanical because $\kst$ is a distance to a flip in $z$ units, so it shows that the differences track claim separation, not why separation differs. Net of these two terms the dataset offsets are factors \N{SDfmin}--\N{SDfmax} in $\kst$ over all claims and perturbations; each design is one dataset, so they are not design effects. Size-matched Arena subsets and a matched human-versus-GPT-4 contrast on the same questions show the same pattern (a larger $\kst/N$ for the GPT-4 judge, whose top-1 lead is larger); but on identical Arena battles three LLM judges needed about a third of the human votes' removals for a significant pair at similar $z$, which $z$ and local size do not explain. The evidence rests on four datasets and one model class, and $\kst$ is an upper bound.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+Public model leaderboards turn large numbers of pairwise preferences---``response~A or response~B?''---into a ranking by fitting a Bradley--Terry (BT) model~\cite{bradley1952rank} and reporting scores with confidence intervals, as Chatbot Arena does for large language models~\cite{chiang2024chatbot}. Such rankings guide model selection, release claims and research comparisons, yet how strongly a stated ranking claim depends on the comparisons underneath it is rarely quantified. It matters for two reasons: the data are noisy and incomplete, and someone may alter them on purpose~\cite{min2025rigging,singh2025illusion}.
+
+We ask: \emph{how small a change to the comparison data suffices to change a ranking claim of a BT leaderboard, how does that compare with the change ordinary sampling noise already produces, and does the answer depend on the evaluation design?} We study four real datasets covering crowd votes, expert annotation, an LLM judge and sports results. Because 6 and 64 participants, or $2{,}400$ and $57{,}000$ comparisons, cannot be compared by one number, we report the size of a change on several scales and control for dataset size and sparsity with matched subsets.
+
+\paragraph{Contributions.}
+(i)~We define four ranking claims (top-1, adjacent order, top-$k$ set, statistical significance of a difference) and three perturbation families (removal, label flip, addition of comparisons), and bound the minimal number of altered comparisons $\kst$ from above by a search whose every result is verified by exact refitting; on small instances it matches exhaustive search in all \N{EXagree} uncapped cases.
+(ii)~We compare this worst case with random edits of the same size and with bootstrap resampling, on four scales (s1--s4, \S\ref{sec:method}) besides the absolute count.
+(iii)~We find that $\kst$ is governed mostly by how well the claim is separated (the $z$-gap) and the number of comparisons involving the two participants, with remaining dataset offsets of factors \N{SDfmin}--\N{SDfmax} once these are controlled (each design is a single dataset, so these are contrasts between datasets, not estimated design effects); the apparent differences between datasets in the fraction $\kst/N$ therefore track how separated the claims are (a descriptive fit that is partly mechanical, since $\kst$ is a distance to a flip in $z$ units; it does not explain why the separation differs). The conclusions are conditional on four datasets and one model class (\S\ref{sec:discussion}).
+
+\section{Related Work}
+\label{sec:related}
+\paragraph{Pairwise-comparison leaderboards.} The BT model~\cite{bradley1952rank} underlies Chatbot Arena's published rankings~\cite{chiang2024chatbot}; MT-Bench releases expert and GPT-4 pairwise judgments on the same answers~\cite{zheng2023judging}, which gives a matched contrast between a human and a model judge.
+
+\paragraph{Data-dependence of model conclusions.} Influence functions~\cite{koh2017understanding} approximate the effect of removing one training point. Broderick et al.~\cite{broderick2020automatic} turn this into a finite-sample robustness metric: approximate the effect of dropping the most influential small fraction of the data, then verify by refitting. We adapt this route to BT leaderboards, add label flips and additions, and verify every reported perturbation by exact refit.
+
+\paragraph{Manipulation and data practices.} Min et al.~\cite{min2025rigging} study vote-rigging strategies against Elo-style Arena updates; Singh et al.~\cite{singh2025illusion} analyse evaluation practices (private testing, unequal sampling) that make vote data non-random. We analyse batch BT fits rather than online Elo, and compare adversarial edits with random edits and resampling noise across evaluation designs.
+
+\paragraph{Concurrent leaderboard-ranking work.} The starter literature of this task lists a 2025 paper on how dropping a handful of preferences can change top LLM rankings~\cite{huang2025dropping}. We list it as described there and did \emph{not} read it; we therefore make no claim of being first to study the sensitivity of preference-based rankings to removed data. Our contribution rests on what we measure: label flips and additions besides removals, random and resampling baselines, several size scales, and matched contrasts across designs.
+
+\section{Method}
+\label{sec:method}
+\textbf{Model.} A dataset is a multiset of comparisons $(i,j,y)$, $y\in\{1,\tfrac12,0\}$ (win, tie, loss for $i$). BT assumes $P(i\succ j)=\sigma(\theta_i-\theta_j)$; $\hat\theta$ is the maximum-likelihood fit (ties count as half a win for each side; a $10^{-6}$ ridge fixes the scale), and the ranking is the order of $\hat\theta$. For NBA games a shared home-advantage term is added, neutral-site games have none. The fit works on aggregated pair counts, so equal comparisons are interchangeable.
+
+\textbf{Ranking claims.} C1: the identity of the top-ranked participant. C2: the order of an adjacent pair $(r,r{+}1)$. C3: the top-$k$ set ($k=3,5,10$). C4: ``$r$ is better than $r{+}1$'' at 95\%, i.e.\ the Wald $z=(\hat\theta_r-\hat\theta_{r+1})/\mathrm{se}>1.96$ (defined only when it holds in the data). A claim \emph{flips} when the perturbed fit gives a strictly opposite order (C4: $z\le1.96$).
+
+\textbf{Perturbations.} P1: remove $k$ comparisons. P2: relabel $k$ comparisons (win$\leftrightarrow$loss, tie$\leftrightarrow$win or loss). P3: add $k$ comparisons, only in pairs that contain the challenger (a rigging-style attack that needs no new pairs). $\kst$ is the smallest $k$ for which our search finds a perturbation that flips the claim. The search is greedy: rank candidate edits by their first-order influence on the claim margin (Hessian of the cell likelihood, as in~\cite{koh2017understanding,broderick2020automatic}), apply a batch worth 30\% of the remaining margin, refit exactly, repeat, and bisect the last batch. The flip is always confirmed by an exact refit, so $\kst$ is an \emph{upper bound} on the true minimum, not a proven minimum; \S\ref{sec:exp-valid} measures how loose it is. The adjacent pair at ranks $r$ and $r{+}1$ is called the $r/(r{+}1)$ pair. For C1 and C3 we take the minimum over the nearest challengers.
+
+\textbf{Baselines.} B1: the same number of uniformly random removals or relabels (the claim is tested after each draw). B2: bootstrap resampling of the comparisons (and half-subsampling), giving the probability that the claim differs from the one in the full data, the baseline uncertainty a leaderboard already reports.
+
+\textbf{Size of a change.} Because no single scale compares datasets, we report: (s1) $\kst/N$, with $N$ all comparisons; (s2) $\kst/N_{\mathrm{loc}}$, with $N_{\mathrm{loc}}$ the comparisons involving the two participants of the claim; (s3) sampling-noise units: the $z$-gap and the random/bootstrap baselines; (s4) matched-size controls: Arena subsets with the size and sparsity of MT-Bench and of an NBA season. We also fit $\log\kst=c+\beta_z\log z+\beta_N\log N_{\mathrm{loc}}$ and test whether design indicators add to it.
+
+\textbf{Replication.} Uncertainty needs a unit of replication that differs by design: NBA, one fit per regular season (69 NBA-league seasons, ABA seasons excluded because the ABA is a disconnected graph); Arena, \N{UAC1P1n} bootstrap resamples of the battles; MT-Bench, \N{UMHC1P1n} question-cluster bootstrap resamples (the same resampled questions for human and GPT-4 boards, so contrasts are paired). Replicates of one dataset are dependent, so intervals that resample replicates are conditional on that dataset; we also report intervals that resample whole datasets (only four independent designs, hence wide).
+
+\section{Experiments}
+\label{sec:experiments}
+\subsection{Data and protocol}
+\textbf{Data} (Table~\ref{tab:data}; all public, versions and checksums in \texttt{code/README.md}): Chatbot Arena 55k human votes (crowd; \N{AP} models, \N{AN} battles, \N{Atie} ties); MT-Bench human expert judgments (expert; \N{MHP} models, \N{MHN} judgments, \N{MHtie} ties) and the GPT-4 pairwise judgments on the same questions and model pairs (model judge; \N{MGN} judgments); NBA games 1947--2015 from FiveThirtyEight (sports; one board per season, 14--30 teams, no ties, e.g.\ \N{NBP} teams and \N{NBN} games in 2015). Comparisons per participant range from \N{NBcpp} (NBA 2015) to \N{Acpp} (Arena). For the matched human-versus-GPT-4 contrast we keep the \N{ALkeys} (question, turn, model-pair) keys that have both judges; \N{ALdrop} of the \N{ALg} GPT-4 rows have no human counterpart and are dropped, and one board keeps a single random human judgment per key. For a second matched contrast we use the \N{JN} Arena battles that also have verdicts from three open LLM judges (Llama-3-70B, Athene-70B, Qwen2-72B; position-averaged probabilities, argmax; tie rate \N{JHtie} for the human votes and \N{JLtie}, \N{JTtie}, \N{JQtie} for the judges); the same battle multiplicities are applied to all four boards in 40 shared bootstrap resamples. We read comparisons as exchangeable within a cell, which is an approximation (see Limitations).
+
+
+\subsection{Which ranking claims are fragile?}
+\label{sec:exp-frag}
+\emph{Claims between near-tied participants are fragile by construction.} On Arena, the top two models are statistically indistinguishable in the full data ($z=\N{AC1P10z}$): removing \N{AC1P10k} of \N{AN} battles (\N{AC1P10kN}) changes the top-1 claim, and bootstrap resampling alone changes it in \N{BFAC10} of \N{BFnA} resamples. On NBA 2015 the champion's lead over the runner-up has $z=\N{NBC1P10z}$ and \N{NBC1P10k} of \N{NBN} games (\N{NBC1P10kN}) suffice; over the 69 NBA-league seasons the median top-1 $\kst$ is \N{UNSC1P1med} removals (95\% range of seasons \N{UNSC1P1lo}--\N{UNSC1P1hi}; median \N{UNSC1P1kN} of games), and in \N{UNSC1P1fz} of seasons the leader's margin is not significant.
+
+\emph{Well-separated claims need hundreds of edits, or percent-level fractions.} MT-Bench's top model (GPT-4) leads by $z=\N{MHC1P10z}$ in the human board and $z=\N{MGC1P10z}$ in the GPT-4-judge board; flipping the top-1 claim needs \N{MHC1P10k} removals of \N{MHN} judgments (\N{MHC1P10kN}) for the expert board and \N{MGC1P10k} of \N{MGN} (\N{MGC1P10kN}) for the model judge. On Arena the adjacent pair at ranks~2/3, which is significant ($z=\N{AC2P12z}$), needs \N{AC2P12k} removals (\N{AC2P12kN} of battles). Across battle-bootstrap resamples, a significant ($z>1.96$) Arena claim (C4) flips after a median \N{UAC4P1med} removals (range over resamples \N{UAC4P1lo}--\N{UAC4P1hi}; \N{UAC4P1kN} of $N$), and a significant MT-Bench-human claim after \N{UMHC4P1med} (\N{UMHC4P1lo}--\N{UMHC4P1hi}; \N{UMHC4P1kN}).
+
+\emph{Resolved and unresolved claims differ by an order of magnitude.} Splitting the adjacent-order (C2) rows by whether the claim is already significant before any edit ($|z|\ge1.96$), the median removal $\kst$ is \N{RSNSres} (NBA seasons; \N{RSNSnres} of \N{RSNSnrows} rows resolved), \N{RSAres} (Arena resamples; \N{RSAnres} of \N{RSAnrows}), \N{RSMHres} (MT-Bench human; \N{RSMHnres} of \N{RSMHnrows}) and \N{RSMGres} (GPT-4 judge; \N{RSMGnres} of \N{RSMGnrows}) for resolved rows, against \N{RSNSunres}, \N{RSAunres}, \N{RSMHunres} and \N{RSMGunres} for unresolved ones. ``Fragile'' therefore mostly describes claims the data did not resolve in the first place.
+
+\emph{Edits that change comparisons are about twice as effective as removals.} Relabelling needs about half as many edits as removal (MT-Bench human top-1: \N{MHC1P20k} vs.\ \N{MHC1P10k}; GPT-4 judge: \N{MGC1P20k} vs.\ \N{MGC1P10k}; Arena pair 2/3: \N{AC2P22k} vs.\ \N{AC2P12k}), as expected since a relabel moves a comparison from one side to the other. Adding votes for the challenger lies in between (Arena pair 2/3: \N{AC2P32k}; MT-Bench human top-1: \N{MHC1P30k}). Table~\ref{tab:headline} gives all claims and datasets and Figure~\ref{fig:frag} shows the spread over replicate units.
+
+\begin{table}[t]
+\centering
+\caption{Smallest verified edit count $\kst$ for each dataset, claim (C1 top-1, C2 adjacent order, C4 significant difference) and perturbation family (P1 removals, P2 label flips, P3 added votes). Full fit: the single fit to all data (range over claim instances in parentheses); then the median and 2.5--97.5 percentiles over replicate units (Arena: 60 battle bootstraps; MT-Bench: 200 question-cluster bootstraps; NBA: 69 seasons) and the median $\kst/N$. $\kst$ is an upper bound on the true minimum. Source: \texttt{results/kstar\_full.csv}, \texttt{kstar\_units.csv}.}
+\label{tab:headline}
+\input{../figures/rendered/t2_headline.tex}
+\end{table}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figures/rendered/f1_fragility.pdf}
+\caption{Worst-case edit size to change a ranking claim as a fraction of all comparisons ($\kst/N$, log scale), for removals (P1), label flips (P2) and added votes (P3) and claims C1, C2, C4. Dot: median; bar: 2.5--97.5 percentile over the replicate units of one dataset, pooled over claim instances; black tick: the single full-data fit. The bars show variation across replicates of a dataset, not a design-level confidence interval.}
+\label{fig:frag}
+\end{figure}
+
+\subsection{Worst case versus random edits and sampling noise}
+\label{sec:exp-base}
+Where the claim is already within sampling noise, the worst case adds nothing beyond what noise does: the top-1 claim of Arena flips in \N{BFAC10} of full-size bootstrap resamples, and for NBA 2015 the order of the rank-3 and rank-4 teams in \N{BFNBC23}. Where the claim is well separated, resampling never moves it (MT-Bench human top-1 and Arena pair 2/3: \N{BFMHC10} and \N{BFAC22} of resamples) and random removals do not either: removing up to \N{RRMHkmax} judgments at random (\N{RRMHratio}$\times$ the worst-case $\kst$) never changed the MT-Bench-human top-1 in \N{RRnMH} draws; up to \N{RWAkmax} random battles ($\N{RWAratio}\times$ the worst case for the 2/3 pair) changed it in \N{RWAp} of \N{RWnA} draws. For the GPT-4-judge board the random baseline reaches only \N{RRMGkmax} removals (\N{RRMGratio}$\times$ $\kst$) and also never flips. The exception is the 2/3 pair of the human board (not significant: $z=\N{MHC2P12z}$, worst case $\kst=\N{MHC2P12k}$): \N{RWMHkmax} random removals (\N{RWMHratio}$\times$ the worst case) changed it in \N{RWMHp} of \N{RWnMH} draws. These ratios are lower bounds, because the random curves stop at the budget stated and show no flip there; the worst case is therefore at least this much smaller than a random loss of comparisons, and the gap between ``unlucky'' and ``adversarial'' grows with the separation of the claim (Figure~\ref{fig:random}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figures/rendered/f2_worst_vs_random.pdf}
+\caption{Random edits against the worst case. Curves: share of draws in which the claim fitted on the full data no longer holds after $k$ random removals (solid) or label flips (dashed), with 95\% Wilson bands (100--200 draws); vertical lines: worst-case $\kst$ for removals (solid) and flips (dashed); dotted horizontal line: share of bootstrap resamples of all comparisons in which the claim differs from the full-data fit. Rows: the top-1 claim (C1), the adjacent pair at ranks 1/2 and the pair at ranks 2/3 (C2). A right-pointing marker at the end of a curve means that no random edit changed the claim up to the largest size tried, so the ratio of that size to $\kst$ is a lower bound. The NBA panel is season 2015 only.}
+\label{fig:random}
+\end{figure}
+
+\subsection{Do evaluation designs differ?}
+\label{sec:exp-design}
+\textbf{On the fraction $\kst/N$ they differ by two orders of magnitude} (Figure~\ref{fig:scales} in the appendix). The median over replicates of $\kst/N$ for an adjacent order claim (C2, removal) is \N{UNSC2P1kN} for NBA seasons, \N{UAC2P1kN} for Arena, \N{UMHC2P1kN} for MT-Bench expert and \N{UMGC2P1kN} for the GPT-4 judge. As a fraction of the comparisons that involve the two participants (s2) the spread is smaller: \N{UNSC2P1kNloc}, \N{UAC2P1kNloc}, \N{UMHC2P1kNloc}, \N{UMGC2P1kNloc}.
+
+\textbf{The ordering follows how well separated the claims are} (Figure~\ref{fig:pred}). The median $z$ of these claims is \N{UNSC2P1z} (NBA), \N{UAC2P1z} (Arena), \N{UMHC2P1z} (MT-Bench human) and \N{UMGC2P1z} (GPT-4 judge), and the share of claims with $z<1.96$ (so not even significant in the data) is \N{UNSC2P1fz}, \N{UAC2P1fz}, \N{UMHC2P1fz} and \N{UMGC2P1fz}. Over all \N{SCC2rows} (dataset, replicate, claim) rows of the removal family, $\log\kst=c+\beta_z\log z+\beta_N\log N_{\mathrm{loc}}$ fits with $R^2=\N{SCC2r2}$ and residual s.d.\ \N{SCC2res} (log units), with $\beta_z=\N{SCC2uz}$ [\N{SCC2uzlo}, \N{SCC2uzhi}] and $\beta_N=\N{SCC2uN}$ [\N{SCC2uNlo}, \N{SCC2uNhi}] for C2 (similar for C1: $\beta_z=\N{SCC1uz}$, $R^2=\N{SCC1r2}$). The high $R^2$ is partly mechanical: $\kst$ is the number of edits needed to close a gap of $z$ standard errors, so it must grow with $z$ and with the local sample size. The fit describes how $\kst$ varies with claim separation; it does not explain why the separation differs between designs, which is where any design effect would sit. The pooled rows include the three LLM-judge boards on Arena battles (the \emph{model-judge} design together with the MT-Bench GPT-4 board). These intervals resample replicates within each dataset and the NBA seasons. Resampling datasets as clusters gives much wider ranges ($\beta_z\in$ [\N{SCC2dzlo}, \N{SCC2dzhi}], $\beta_N\in$ [\N{SCC2dNlo}, \N{SCC2dNhi}]), so the exponents are only loosely pinned down by the few independent datasets (NBA seasons, Arena with its judge relabellings, MT-Bench human, MT-Bench GPT-4); we read them as evidence that $\kst$ grows about linearly in the $z$-gap and sub-linearly in the local sample size, not as exact laws. For significance claims (C4), which are defined only above $z=1.96$, the slope is steeper ($\beta_z=\N{SCC4uz}$), as expected for a distance to a threshold. Adding design indicators changes the fit little ($R^2$ \N{SM0r2} to \N{SM1r2}) as a descriptive fit, not a causal explanation, and the dataset offsets are modest relative to the other variation: expert $\N{SMexpert}$, model judge (GPT-4 on MT-Bench and the Arena LLM judges) $\N{SMmodel}$, sports $\N{SMsports}$ log-units against crowd votes (factors \N{SFexpert}, \N{SFmodel}, \N{SFsports}; for adjacent-order removals, with no valid dataset-level interval since each design is a single dataset; across all \N{SDn} claim-by-perturbation fits the offsets range from \N{SDmin} to \N{SDmax} log-units, factors \N{SDfmin}--\N{SDfmax}, the sports offset being most negative for significance claims).
+
+\textbf{Matched controls} (Figure~\ref{fig:size}). Size and sparsity alone do not make Arena fragile or robust: an Arena subset of the 6 best-covered models with the size of MT-Bench-human has a median C2 $\kst$ of \N{MAmtdenseC2med} (range \N{MAmtdenseC2lo}--\N{MAmtdenseC2hi}, \N{MAmtdenseC2kN} of $N$, median $z=\N{MAmtdenseC2z}$; \N{MAmtdenseC2n} draws), against \N{UMHC2P1med} for MT-Bench-human itself ($z=\N{UMHC2P1z}$); a 30-model sparse subset matched to an NBA season has a median of \N{MAnbalikeC2med} (\N{MAnbalikeC2lo}--\N{MAnbalikeC2hi}; $z=\N{MAnbalikeC2z}$; \N{MAnbalikeC2n} of 100 draws had all claims defined), like the NBA seasons (\N{UNSC2P1med}). The Arena models are closer in score than the MT-Bench ones, so their $z$ is lower at equal size, and $\kst$ follows $z$.
+
+\textbf{Human versus GPT-4 judge on the same questions.} This is the cleanest design contrast (Figure~\ref{fig:matched}). On the same resampled questions, the GPT-4 board needs \N{PANC10}$\times$ as large a fraction of edits ($\kst/N$ ratio, median [95\% interval]) to change the top-1 claim, since its lead is larger (difference in $z$: \N{PAdzC10}); with one human judgment per aligned key the ratio is \N{PBNC10}. The same holds for the 2/3 pair (\N{PANC22}), but not for lower-ranked pairs, where the ratio is compatible with~1 (3/4 pair: \N{PANC23}). On MT-Bench the judge type therefore matters through how it spreads the models, not as a separate sensitivity. We cannot say how this generalises: there is one expert board and one GPT-4 judge.
+
+\textbf{Crowd versus three LLM judges on identical Arena battles} (Figure~\ref{fig:judges} in the appendix). Here the top-1 claim is a near-tie on every board ($z=\N{JHC10z}$ for the human votes, \N{JLC10z}, \N{JTC10z}, \N{JQC10z} for the judges) and $\kst$ is small and not clearly different (human \N{JHC10k}; judges \N{JLC10k}, \N{JTC10k}, \N{JQC10k}; paired ratio judge/human \N{JRLC10}, \N{JRTC10}, \N{JRQC10}). For the pair at ranks 2/3 of each board, which is clearly significant everywhere ($z=\N{JHC22z}$ human; \N{JLC22z}, \N{JTC22z}, \N{JQC22z}), the judge boards need about a third of the removals ($\kst=\N{JHC22k}$ human vs.\ \N{JLC22k}, \N{JTC22k}, \N{JQC22k}; paired ratio \N{JRLC22}, \N{JRTC22}, \N{JRQC22}, 40 shared resamples) at nearly the same $z$. The pair may not consist of the same models on every board, and $z$ and $N_{\mathrm{loc}}$ do not capture this difference; Qwen's tie rate (\N{JQtie}) is close to the human one (\N{JHtie}) and its ratio is as low, which argues against the tie rate alone. The judges' tie rates differ from the human one (\N{JLtie}--\N{JQtie} against \N{JHtie}) and this is not separated from the other differences between the label sources. We did not identify the cause, so $z$ and local size are not the whole story for $\kst$ when the labels come from a different judge.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figures/rendered/f4_size_control.pdf}
+\caption{Size and sparsity control (s4), removal family. Arena subsampled to $N$ comparisons (line and band: median and 2.5--97.5 percentile over 30 draws), Arena subsets matched to MT-Bench (6 models, dense; 6 random models) and to an NBA season (30 models, sparse), against the real MT-Bench and NBA boards and the full Arena. A real board lying on the matched-Arena marker at the same $N$ is not distinguished from Arena by size and sparsity alone.}
+\label{fig:size}
+\end{figure}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figures/rendered/f5_matched_mtbench.pdf}
+\caption{Matched human versus GPT-4 contrast, removal family: $\log(\kst_{\mathrm{GPT\text{-}4}}/\kst_{\mathrm{human}})$ on the same 200 question-cluster bootstrap replicates, per claim instance. Left: one random human judgment per (question, turn, model-pair) key, so equal $N$; right: all human judgments ($N$ about 1.85 times larger). Positive: the GPT-4 board needs more edits. Filled markers: the 95\% range excludes 0.}
+\label{fig:matched}
+\end{figure}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figures/rendered/f6_predictors.pdf}
+\caption{What predicts $\kst$ (removals). Left: $\kst$ against $z$ for C2 pair instances (800-point subsample per design, display only). Middle: log-log regression coefficients of $\kst$ on $z$ and $N_{\mathrm{loc}}$ (thin: bootstrap over replicate units, conditional on the datasets; wide pale: datasets as clusters, 12--72 clusters). Right: design shifts in $\log\kst$ relative to crowd votes (units bootstrap only). Descriptive, not a causal model.}
+\label{fig:pred}
+\end{figure}
+
+\subsection{How loose is the search, and how robust are the results?}
+\label{sec:exp-valid}
+\textbf{The upper bound} (Figure~\ref{fig:valid} in the appendix). On \N{EXn} small instances (3-participant boards, exhaustive search up to $k=14$; \N{EXcap} of \N{EXall} instances were capped and are excluded), the greedy search with exact refit returned the exhaustive minimum in all \N{EXagree}. This certifies the search only on small boards: for the real boards $\kst$ remains an upper bound of unknown looseness. The influence prediction of the score-gap change is accurate for small edit budgets (median absolute relative error \N{APamed} at a quarter of $\kst$, \N{APbmed} at $\kst$ edits, worst case \N{APbmax} over \N{APn} cases) but a one-shot linear estimate of $\kst$ can be far off (GPT-4 judge top-1: \N{MGC1P10klin} predicted vs.\ \N{MGC1P10k} verified); we therefore always refit.
+
+\textbf{Modelling choices} (Table~\ref{tab:sens}). Dropping ties (Arena 2/3 pair: $\kst$ \N{SEAtiehalf2} $\to$ \N{SEAtiedropped2}; MT-Bench human: \N{SEMHtiehalf2} $\to$ \N{SEMHtiedropped2}; GPT-4 judge \N{SEMGtiehalf2} $\to$ \N{SEMGtiedropped2}) changes $\kst$ by a factor up to about 2 and in either direction, and the Arena top-1 stays a near-tie ($\kst=\N{SEAtiedropped0}$). Without the home-advantage term the median NBA top-1 $\kst$ is \N{SENBnohome} (vs.\ \N{UNSC1P1med}), with playoffs \N{SENBwithplayoffs}. Pooling 5, 10, 20 seasons gives \N{SEnbapooled5}, \N{SEnbapooled10}, \N{SEnbapooled20} games for the top-1 claim. The ranker itself matters as much as an adversarial edit: online Elo with $K=4$ agrees with BT at Kendall $\tau=\N{ELA4tau}$ on Arena and $\N{ELA32tau}$ at $K=32$, and gives the same top-1 as the reference arrival order in only \N{ELA4top} of random orders ($K=4$). On NBA, BT agrees with FiveThirtyEight's Elo at $\tau=\N{SNtau}$ on average across \N{SNn} seasons (same top team in \N{SNsame}).
+
+\textbf{Uncertainty scale.} The Wald standard error behind $z$ is within \N{SEratiomin}--\N{SEratiomax} of the bootstrap one (it is too large, hence $z$ conservative, by up to about 40\% on Arena and MT-Bench, where ties are treated as half-wins).
+
+
+
+\section{Discussion and Limitations}
+\label{sec:discussion}
+
+\textbf{What the evidence supports.} For leaderboard claims between participants that the data cannot already separate (Arena top-1, the middle of an NBA season), changing a handful of comparisons is enough, but so is resampling: the worst-case size is not an extra vulnerability beyond what the published uncertainty already shows. For claims that are statistically significant, the number of comparisons needed is much larger than any random loss (random removals $\N{RRMHratio}\times$ as many never changed the MT-Bench-human top-1, and $\N{RWMHratio}\times$ as many changed its pair at ranks 2/3 in \N{RWMHp} of draws) yet remains small in relative terms: from about \N{UAC4P1kN} of the battles on Arena to a few percent on MT-Bench. A manipulator who needs $\kst$ edits may therefore succeed with a number of votes far below the sample size, in line with the vote-rigging concern~\cite{min2025rigging}, although our edits use full knowledge of the data and carry no cost or detectability constraint.
+
+\textbf{Designs.} Differences in $\kst/N$ between crowd, expert, model-judge and sports data are large, but they are mostly accounted for by the separation of the claims and the local sample size; with those controlled the remaining dataset offsets are factors \N{SDfmin}--\N{SDfmax} in $\kst$ over all claims and perturbations (about 1.2 or less for adjacent-order removals); these are single-dataset contrasts, not estimated design effects. The matched human/GPT-4 contrast and the Arena subsets agree, but on identical Arena battles three LLM judges needed only about a third of the removals of the human votes to change a significant pair at nearly the same $z$, which the $z$-gap and local size do not explain. We do not claim a population-level design effect: each design is represented by a single dataset.
+
+\textbf{Limitations.} (1)~$\kst$ is an upper bound found by greedy search with exact refits, certified against exhaustive search only on 3-participant boards. (2)~Four datasets (with three LLM-judge relabellings of one of them) and one ranking model: BT misspecification (intransitivity, judge position bias in the GPT-4 judge, non-stationarity of NBA and of Arena over time, user heterogeneity) is not modelled, and comparisons within a cell are treated as exchangeable although MT-Bench judgments share questions (handled in the intervals by the question-cluster bootstrap, not in the fit). (3)~Perturbations are mathematical edits to votes: additions are restricted to pairs containing the challenger; we make no claim about what a real manipulator can do or how detectable it is. (4)~The scaling fit is exploratory (fitted after seeing the results), its dataset-level uncertainty is wide, and replicates within a dataset are dependent. (5)~Not done: the larger Arena 140k set, and WebDev Arena were not analysed, and the LLM-judge labels on Arena battles (no declared licence, research use only) enter only the matched contrast above; there is no Arena time split (the 55k release has no timestamp or user column); the top-$k$ (C3) claim has no battle-bootstrap summary for Arena. (6)~The Arena top-1 is a statistical tie in this release, so fragility numbers for C1 on Arena say more about the tie than about the platform today.
+
+
+\textbf{Broader impact.} Showing how few comparisons can change a ranking could help someone who wants to manipulate a leaderboard. We analyse existing public data only, release no attack tooling beyond the analysis code, and consider that operators benefit more from knowing which claims are close to a tie and which are not; we recommend reporting such margins next to rankings.
+
+\section*{LLM assistance}
+Large language models (Claude) were used throughout this study: for literature reading (abstract level), writing the analysis and plotting code, and drafting this text. The work was carried out by a set of automated agents with separate roles (analysis, figures, venue, writing, reviews). All numbers in this paper are produced by the committed code from the pinned public data and are read into the text by \texttt{paper/make\_numbers.py}; authors answer for the content. We did not open the starter-literature item on dropping preferences~\cite{huang2025dropping}, nor search for work citing it; no excluded material was encountered.
+
+\bibliographystyle{plain}
+{\small\bibliography{refs}}
+
+\appendix
+\section{Data, licences and reproduction}
+\label{app:repro}
+\begin{center}\small
+\begin{tabular}{@{}p{0.46\linewidth}p{0.17\linewidth}p{0.11\linewidth}p{0.17\linewidth}@{}}
+\toprule
+Data & Version (commit) & Licence & Used\\\midrule
+Chatbot Arena 55k votes (HF \texttt{lmarena-ai/arena-human-preference-55k}) & \texttt{18c29834\ldots} & apache-2.0 & yes\\
+MT-Bench human/GPT-4 judgments (HF \texttt{lmsys/mt\_bench\_human\_judgments}) & \texttt{f7d2896d\ldots} & cc-by-4.0 & yes\\
+NBA game records (FiveThirtyEight \texttt{nba-elo}) & \texttt{4c1ff5e3\ldots} & CC-BY-4.0 & yes\\
+LLM-judge labels on Arena (HF \texttt{potsawee/chatbot-arena-llm-judges}) & \texttt{638a7e3b\ldots} & undeclared & yes, matched judge contrast only\\
+\bottomrule
+\end{tabular}
+\end{center}
+Full commits and sha256 checksums are in \texttt{code/README.md} and \texttt{results/MANIFEST.json}; raw data are not part of the delivery. Data are fetched and checked against pinned commits and sha256 values by \texttt{code/fetch\_data.sh}. Environment, seeds, run commands, expected run times (about one hour on two CPU cores for all analyses) and the script that produces each result file are in \texttt{code/README.md}; the figure and table generators are in \texttt{figures/}. \textbf{Excluded-source encounters:} none by any position (the starter-literature item on dropping preferences was not opened and no page citing it was read).
+
+\paragraph{Script to figure and table map.} All figures and tables are produced by \path{figures/make_figures.py} from \path{results/} (input checksums in \path{figures/rendered/PROVENANCE.json}); numbers in the text are produced by \path{paper/make_numbers.py}. Table~\ref{tab:headline} and Figures~\ref{fig:frag}, \ref{fig:scales}: \path{kstar_full.csv}, \path{kstar_units.csv}; Figure~\ref{fig:random}: \path{random_curve.csv}, \path{boot_flip.csv}; Figure~\ref{fig:size}: \path{matched_arena.csv}; Figure~\ref{fig:matched}: \path{paired_mt.csv}; Figure~\ref{fig:pred}: \path{scaling_fit.csv}; Figure~\ref{fig:judges}: \path{kstar_judges.csv}, \path{paired_mt.csv}; Figure~\ref{fig:valid}: \path{exact_check.csv}, \path{approx_check.csv}; Tables~\ref{tab:data}, \ref{tab:sens}: \path{data_summary.csv}, \path{sensitivity.csv}.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{../figures/rendered/f3_scales.pdf}
+\caption{The removal (P1) results of Figure~\ref{fig:frag} on four scales: absolute $\kst$, $\kst/N$ (s1), $\kst/N_{\mathrm{loc}}$ with $N_{\mathrm{loc}}$ the comparisons involving the claim's two participants (s2), and the claim's gap in standard errors $z$ (s3; dotted line: 1.96). Same bars as Figure~\ref{fig:frag}; the order of the designs changes with the scale.}
+\label{fig:scales}
+\end{figure}
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{../figures/rendered/f8_crowd_vs_judges.pdf}
+\caption{Crowd votes against three LLM judges on the same \N{JN} single-turn Arena battles (all boards refitted on them). Rows: C1 top-1, C2 order of the pairs at ranks 2/3 and 3/4, C4 significance of the 2/3 difference (ranks within each board's own ranking, so the pair need not be the same models). (a)~Full-data worst-case removals $\kst$, human (circle) and judge (triangle). (b)~Paired $\log(\kst_{\mathrm{judge}}/\kst_{\mathrm{human}})$ over 40 shared battle-bootstrap resamples, median and 2.5--97.5 percentile; upper bar removals, lower bar label flips; negative: the judge board needs fewer edits; filled: the range excludes 0. (c)~Unperturbed $z$ of the same pair (dotted: 1.96). Tie rates: human \N{JHtie}, judges \N{JLtie} (Llama), \N{JTtie} (Athene), \N{JQtie} (Qwen), so judge boards are not human boards with a different scorer; the resamples give only a within-dataset range, not a design-level interval.}
+\label{fig:judges}
+\end{figure}
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{../figures/rendered/f7_search_validity.pdf}
+\caption{Validity of the search (removals). Left: influence-predicted over exactly refitted change of the claim margin for edit budgets of 10--100\% of $\kst$. Middle: greedy against exhaustive $\kst$ on small instances (capped searches excluded); the title gives the agreement count. Right: one-shot linear prediction against the verified $\kst$ on the full-data fits.}
+\label{fig:valid}
+\end{figure}
+\begin{table}[h]
+\centering
+\caption{The boards: comparisons $N$, participants, comparisons per participant, tie rate and standard deviation of the BT scores (log scale). Source: \texttt{results/data\_summary.csv}.}
+\label{tab:data}
+\input{../figures/rendered/t1_data_summary.tex}
+\end{table}
+\begin{table}[h]
+\centering
+\caption{Ratio of $\kst$ under a modelling variant to the reference fit for the same claim instance (median; IQR over instances); pooled NBA windows are different boards and are reported as $\kst/N$. Source: \texttt{results/sensitivity.csv}.}
+\label{tab:sens}
+\input{../figures/rendered/t3_sensitivity.tex}
+\end{table}
+
+\input{checklist.tex}
+\end{document}

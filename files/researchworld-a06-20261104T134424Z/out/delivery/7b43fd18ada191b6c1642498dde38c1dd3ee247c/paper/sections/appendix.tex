@@ -1,0 +1,106 @@
+\section{Exact definitions of generators, procedures and estimators}\label{app:defs}
+These definitions follow the code in \texttt{analysis/} (\texttt{synth.py}, \texttt{lib.py}, \texttt{run\_grid.py}); the table of scripts is in \texttt{REPRODUCE.md}. Throughout, $S\in\{0,1\}^{K\times n}$ holds the correctness of the $K$ candidates on the $n$ tuning items, $\hat p_c$ is the row mean, $\hat c$ the selected row, and ties in an argmax are broken at random.
+
+\paragraph{Synthetic generator.} A pool of $128$ configurations and $N=20{,}000$ items. Configuration accuracies are $p_c=\mathrm{clip}(m+\tau z_c,0.01,0.99)$ with $z_c\sim N(0,1)$ ($m=0.3$ unless stated); an optional outlier raises one configuration's accuracy by a fixed amount. Each item has a latent $q_i\sim N(0,1)$ shared across configurations, and configuration $c$ has the latent $U_{ci}=\sqrt\rho\,q_i+\sqrt{1-\rho}\,e_{ci}$ with $e_{ci}\sim N(0,1)$; it is correct on item $i$ iff $U_{ci}<\Phi^{-1}(p_c)$, so every row has accuracy $p_c$ in expectation and any two rows have latent correlation $\rho$. The true accuracy $\mu_c$ of a configuration is its mean over the $N$ pool items (the pool is the population). A tuning set is $n$ items drawn with replacement; the $K$ candidates are drawn without replacement from the $128$ configurations. \emph{Generation noise} flips each evaluation of a candidate (and of the baseline) with probability $\varepsilon$ independently, and the truth becomes $\mu_c+\varepsilon(1-2\mu_c)$. \emph{Leakage}: each candidate shows $\ell$ tuning items with their answers in the prompt, which turns an incorrect outcome on such an item into a correct one with probability $0.9$; the truth is unchanged, and the held-out split scores its report half without leakage.
+
+\paragraph{Search procedures.} \emph{Best-of-$K$}: $\hat c=\arg\max_c\hat p_c$ on all $n$ items. \emph{Successive halving}: $R=\lceil\log_2K\rceil$ rounds; the $n$ items are cut into $R$ consecutive blocks; in round $r$ the survivors are scored on block $r$ only and the better $\lceil|\text{alive}|/2\rceil$ stay; the report is the survivor's score on all $n$ items. \emph{Successive rejects}: budget $B=nK/4$ evaluations, $\bar\ell=\tfrac12+\sum_{i=2}^{K}1/i$; in phase $j=1,\dots,K-1$ the survivors are scored on the first $n_j=\min\{n,\max\{1,\lceil (B-K)/(\bar\ell(K+1-j))\rceil\}\}$ items and the worst is removed; the report is the winner's mean over the first $n_{K-1}$ items. \emph{Greedy coordinate ascent}: the $K$ candidates form a factorial grid ($4\times4\times4$, or $8\times4\times4$ for $K=128$); start at a random cell and, for the factors in random order, move to the best level given the others on all $n$ items, for at most $10$ sweeps; the report is the final cell's score.
+
+\paragraph{Claim test and baseline.} The baseline is pool configuration $0$, scored on the same $n$ items as the candidates (on the report items for the held-out split), with the same generation noise. For any method with point report $\hat\theta$ and critical value $z$ ($1.645$; the simultaneous critical value $c$ for the simultaneous bound), the claim is $(\hat\theta-\hat p_{\text{base}})/\mathrm{dse}>z$, where $\mathrm{dse}$ is the standard deviation (ddof 1) of the per-item differences $S_{\hat c,i}-S_{\text{base},i}$ divided by $\sqrt{n_{\text{rep}}}$ ($n_{\text{rep}}$ the number of report items). The false-claim rate is the mean of the claim indicator over repetitions with $\mu_{\hat c}\le\mu_{\text{base}}$. A false ship is $\hat\theta\ge\mu_{\text{base}}+0.02$ and $\mu_{\hat c}<\mu_{\text{base}}+0.02$.
+
+\paragraph{Reporting methods.} All intervals are $95\%$ ($\alpha=0.05$) and Wilson intervals use the number of items the report was computed from.
+\emph{Naive}: $\hat p_{\hat c}$ with a Wilson interval on $n$. \emph{Held-out split}: the search runs on the first $\lfloor n/2\rceil$ items (the tuning set is in random order), the report is the pick's mean on the remaining items with a Wilson interval on their number. \emph{Five-fold cross-fitting}: $n$ items in five consecutive folds; for each fold the procedure runs on the other four and its pick is scored on the fold; the report is the pooled score over all $n$ items, with a Wilson interval on $n$; the configuration it describes is the full-data pick. \emph{Bootstrap}: $B=100$ resamples of the $n$ items with replacement; for each, the procedure is run on the resample, giving pick $\hat c_b$; the optimism is the score of $\hat c_b$ on the resample minus its score on the original items, and the optimism-corrected report is the naive score minus the mean optimism; the out-of-bag report is the mean score of $\hat c_b$ on the items absent from resample $b$; the $.632$ report is $0.368\,\hat p_{\hat c}+0.632\,\text{OOB}$; intervals are the report $\pm1.96\sqrt{\hat\theta(1-\hat\theta)/n}$, i.e.\ they ignore the selection. \emph{Simultaneous bound}: $B=300$ bootstrap resamples of the items; $c$ is the $0.95$ quantile of $\max_k|\hat p^*_k-\hat p_k|/\mathrm{se}_k$ with $\mathrm{se}_k=\sqrt{\max(\hat p_k(1-\hat p_k),10^{-4})/n}$; the interval is $\hat p_{\hat c}\pm c\,\mathrm{se}_{\hat c}$ and the point report is naive. \emph{Ladder}: $\eta=1/\sqrt n$; candidates are visited in a random order; the first sets the ladder value $\mathrm{round}(\hat p/\eta)\eta$, a later one replaces the selected configuration and the value only if $\hat p>\text{value}+\eta$; the report is the final value with a Wilson interval on $n$.
+
+\paragraph{Conditional and hybrid intervals.} Both treat $\hat p\sim N(\mu,\hat\Sigma/n)$ with $\hat\Sigma$ the sample covariance of the rows of $S$, and apply to best-of-$K$ only. To remove lattice ties each score is dithered by one uniform draw on $\pm1/(2n)$ per repetition, used for every quantity of that repetition, which leaves the argmax a random-tie argmax. Given the winner $\hat c=k$, the event $\{\hat c=k\}$ is a polyhedron in $\hat p_k$ once the component of $\hat p$ orthogonal to $\hat p_k$ is fixed (the polyhedral lemma of \citet{lee2016exact}, in the form for the winner of a maximum \citep{andrews2024winners}); its truncation interval $[V^-,V^+]$ is computed from the $K-1$ contrasts. \emph{Conditional}: the conditional law of $\hat p_k$ is $N(\theta,\sigma_k^2)$ truncated to $[V^-,V^+]$; the estimate is the $\theta$ at which the conditional CDF at the observed value equals $1/2$ and the interval endpoints are the $\theta$ at which it equals $1-\alpha/2$ and $\alpha/2$ (root-finding on $\hat p_k\pm80\sigma_k$). \emph{Hybrid}: $\beta=0.005$; $c_\beta$ is the $1-\beta$ quantile (from $1000$ Monte-Carlo draws) of $\max_j|Z_j|$ with $Z\sim N(0,\text{corr}(\hat\Sigma))$; for each $\theta_0$ on a grid of $161$ values in $\hat p_k\pm c_\beta\sigma_k$ the truncation interval is intersected with $[\theta_0-c_\beta\sigma_k,\theta_0+c_\beta\sigma_k]$, and $\theta_0$ is retained if the conditional CDF of $\hat p_k$ lies in $[a_1,1-a_1]$ with $a_1=(\alpha-\beta)/(2(1-\beta))$; the interval is the range of retained values and the point estimate is the median of the truncated normal on the restricted set (the hybrid median-unbiased estimate, always within $\hat p_k\pm c_\beta\sigma_k$). The conditional point estimate is the unrestricted conditional median.
+\emph{Validation.} (1) For $K=2$ the conditional CDF equals an independent closed form (computed with mpmath) to $\N{val_k2_cdf}$ over $2000$ draws. (2) With exact Gaussian draws and known $\Sigma$ ($\N{val_ncases}$ cases, $K=2$--$16$, $\tau$ from $0$ to $.05$, $n$ from $200$ to $1000$, $3000$ repetitions) the probability-integral transform of the conditional CDF at the true score is uniform (Kolmogorov--Smirnov $p$-values $\N{val_ks_min}$--$\N{val_ks_max}$) and both intervals cover $\N{val_cov_min}$--$\N{val_cov_max}\%$. (3) A Python port of the authors' MATLAB replication code for the conditional and hybrid routines agrees on $\N{val_akm_n}$ random covariance matrices ($\N{val_akm_skip}$ more were skipped because the port's truncated-normal quantile saturates): truncation limits to $10^{-12}$, conditional limits and median to about $10^{-6}$ standard errors, hybrid limits to within one step of our $161$-point grid (the port uses $4001$ points) and the hybrid median to $0.04$ of a step. (4) In the reference cell with known $\Sigma$ the conditional interval covers $\N{val_ref_cond_cov_known}\%$ (with $\Sigma$ estimated from Bernoulli draws: $\N{val_ref_cond_cov_est}\%$), with mean width $\N{val_ref_cond_width_mean}$ and median width $\N{val_ref_cond_width_med}$~pp.
+
+\paragraph{Real replay.} The correctness matrix $Y\in\{0,1\}^{K\times2000}$ is fixed. Each repetition draws $n$ items without replacement as the tuning set (candidates are all $K$ complete configurations, or a random subset), runs a procedure and a reporting method on them, and takes as truth the selected configuration's accuracy on the other $2000-n$ items. The baseline for claims is the hand-written default (instruction $0$, demonstration set $1$, plain layout; accuracy $19.15\%$), which is one of the candidates when all $K$ are searched. Greedy coordinate search is run on the $6\times5\times2$ grid of instruction, demonstration set and layout (all $60$ configurations), with the same random start and sweeps as in the synthetic study. In the i.i.d. arm the $n$ items are drawn with replacement and the truth is the accuracy of the selected configuration on all $2000$ items. The Gaussian-maximum prediction for the real matrix uses $\epsilon\sim\mathcal N(0,\hat\Sigma/n)$ with $\hat\Sigma$ the empirical covariance of the $0/1$ item matrix of the $K$ candidates ($5000$ draws). In the disjoint arm the truth is the accuracy on the $N-n$ remaining items ($N=2000$), so the tuning noise has covariance $(1-n/N)\hat\Sigma/n$ and the predicted gap is $N/(N-n)$ times the expected noise of the selected configuration. The generator matched to the real matrix (Appendix~\ref{app:calib}) uses the real accuracies as thresholds of a Gaussian copula with either one latent correlation or the pairwise tetrachoric correlation matrix of the real $0/1$ data (eigenvalues clipped to be positive semi-definite)..
+
+\section{Further reporting-method results}\label{app:more}
+The other methods mostly fail the criterion, for different reasons. The naive report fails in all but $\N{rel_naive_ok}$ of $106$ cells, under-covering in $\N{rel_naive_under}$. The simultaneous bound keeps the naive bias ($\N{ref_simul_bias}$~pp) but under-covers in only $\N{rel_simul_under}$ cells and over-covers in $\N{rel_simul_over}$ ($\N{ref_simul_cover}\%$ in the reference cell), at a width of $\N{ref_simul_width}$~pp: it is valid and conservative. Five-fold cross-fitting has bias near zero in $\N{rel_crossfit_okb}$ cells but under-covers in $\N{rel_crossfit_under}$ ($\N{ref_crossfit_cover}\%$ in the reference cell) because its interval ignores the variance added by selection. The bootstrap optimism correction reduces the bias from $\N{ref_naive_bias}$ to $\N{ref_boot_opt_bias}$~pp and its out-of-bag variant to $\N{ref_boot_oob_bias}$~pp (bias criterion met in $\N{rel_boot_oob_okb}$ cells) but over-covers in $\N{rel_boot_oob_over}$ cells ($\N{ref_boot_oob_cover}\%$ in the reference cell) and under-covers in $\N{rel_boot_oob_under}$, so it meets the full criterion in only $\N{rel_boot_oob_ok}$ of $106$. Our implementation of winner-aware conditional inference was run in $\N{rel_cond_cells}$ cells; it covers correctly in the reference cell ($\N{ref_cond_cover}\%$) and is outside the band in $\N{rel_cond_under}$ (under) and $\N{rel_cond_over}$ (over) of them, but its intervals are very wide ($\N{ref_cond_width}$~pp), its heavy-tailed conditional median has RMSE $\N{ref_cond_rmse}$~pp and it meets the bias criterion in $\N{rel_cond_okb}$ of them. The instability is not a coding fault (Appendix~\ref{app:defs}): the conditional median is median-unbiased, but when the winner's standardised lead over the truncation boundary is small the truncated normal is nearly flat over a long left tail in the score, so the mean error is large. In the reference cell with known $\Sigma$ the lead is below $0.5$ standard errors in $\N{val_ref_lead_lt05}\%$ of repetitions (median $\N{val_ref_lead_med}$); in the $\N{lead_ref_share_small}\%$ with a lead below $0.25$ the conditional median has median error $\N{lead_ref_condmed_err}$~pp and mean error $\N{lead_ref_condmean_err}$~pp and its interval has median width $\N{lead_ref_condwidth_med}$~pp, while the hybrid has mean error $\N{lead_ref_hyberr}$~pp at width $\N{lead_ref_hybwidth}$~pp. Over all repetitions the point-estimate RMSE is $\N{val_ref_cond_rmse}$~pp for the conditional and $\N{val_ref_hyb_rmse}$~pp for the hybrid median (median absolute error $\N{val_ref_cond_medae}$ and $\N{val_ref_hyb_medae}$~pp). With one clearly better configuration ($+5$~pp, $K=16$, $n=500$) the winner is the truly best in $\N{lead_clear_n500_best}\%$ of repetitions ($\N{lead_clear_n1000_best}\%$ at $n=1000$, where the conditional interval is $\N{lead_clear_n1000_width}$~pp wide, as wide as the naive one). The conditional interval is thus a correct but uninformative answer when the data barely separate the winner from the rest. A hybrid interval of the same family (projection interval plus the conditional test on the restricted truncation set) has coverage $\N{hy_hybrid_covmin}$--$\N{hy_hybrid_covmax}\%$ at a mean width of $\N{hy_hybrid_width}$~pp over $\N{hy_cells}$ cells of the $\tau\times n\times K$ grid ($\N{hy_reps}$ repetitions each; Fig.~\ref{fig:hybrid} in Appendix~\ref{app:figs}), against $\N{hy_naive_covmin}$--$\N{hy_naive_covmax}\%$ at $\N{hy_naive_width}$~pp for the naive interval and $\N{hy_simul_covmin}$--$\N{hy_simul_covmax}\%$ at $\N{hy_simul_width}$~pp for the simultaneous bound. It needs the full-evaluation argmax and a Gaussian approximation and was checked only at $\rho=0.5$, mean accuracy $0.3$ and $K\le64$; we do not recommend it for its point estimate. The Ladder-type report \citep{blum2015ladder} (sequential submission) reduces the naive bias but does not remove it ($\tau=0$, $n=200$, $K=16$: $\N{lad_ladder_K16_bias}$ vs.\ $\N{lad_naive_K16_bias}$~pp).
+
+\begin{table}[h]
+\centering
+\caption{Reporting methods in the reference cell, exact truth. Every row is scored against the true accuracy of the configuration it reports on: the selected configuration for all rows except the held-out split, which reports on the configuration chosen from $n/2$ items (Table~\ref{tab:fresh} compares protocols at equal total items).}\label{tab:ref}
+\input{tables/t1_reference_cell}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t1_reference_cell_note}\end{minipage}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Reporting protocols at equal total items, each scored against its own shipped configuration (reference cell).}\label{tab:fresh}
+\input{tables/t7_fresh_protocol}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t7_fresh_protocol_note}\end{minipage}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Reporting methods in the real setting (best-of-$K$ with $K=\N{real_K}$ complete configurations, disjoint truth).}\label{tab:real}
+\input{tables/t5_real_methods}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t5_real_methods_note}\end{minipage}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Reporting protocols at equal total items on the real matrix, each scored against its own shipped configuration.}\label{tab:freshreal}
+\input{tables/t8_fresh_real}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t8_fresh_real_note}\end{minipage}
+\end{table}
+
+\section{Additional synthetic results}\label{app:tables}
+\begin{table}[h]
+\centering
+\caption{Naive optimism gap by tuning-set size and number of candidates.}\label{tab:gapnk}
+\input{tables/t4_gap_by_n_K}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t4_gap_by_n_K_note}\end{minipage}
+\end{table}
+\begin{table}[h]
+\centering
+\caption{Stress cells.}\label{tab:stress}
+\input{tables/t2_stress_cells}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t2_stress_cells_note}\end{minipage}
+\end{table}
+\begin{table}[h]
+\centering
+\caption{Two tuned systems with unequal search budgets.}\label{tab:unequal}
+\input{tables/t3_unequal_budget}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t3_unequal_budget_note}\end{minipage}
+\end{table}
+
+\section{Additional figures}\label{app:figs}
+Figures~\ref{fig:hybrid}--\ref{fig:reliab} support the reporting-methods paragraph and the ranking paragraph of Sec.~\ref{sec:synth}; their numbers are in the result files named in \texttt{REPRODUCE.md}.
+\begin{figure}[tbp]
+\centering
+\includegraphics[width=\linewidth]{figures/e5b_hybrid_n200.pdf}
+\caption{Winner-aware intervals for the argmax winner ($n=200$, $\rho=0.5$, $500$ repetitions). Coverage of the nominal 95\% interval for the true score of the selected configuration (bars $\pm1.96$ s.e.; grey band: binomial Monte-Carlo band) and mean width (log scale) for the naive, simultaneous, conditional and hybrid intervals.}\label{fig:hybrid}
+\end{figure}
+
+
+\begin{figure}[tbp]
+\centering
+\includegraphics[width=\linewidth]{figures/e4c_ranking.pdf}
+\caption{Ranking five systems tuned on the same items with $K=4,8,16,32,64$ configurations (best-of-$K$, $500$ repetitions). Top: share of repetitions in which each method ranks the $K=64$ system first, against how often it is truly best (black dashed). Bottom: mean Kendall's $\tau$ between reported and true ranking.}\label{fig:rank}
+\end{figure}
+
+\begin{figure}[tbp]
+\centering
+\includegraphics[width=\linewidth]{figures/e5_reliability_argmax_rho0.5_n200.pdf}
+\caption{Reporting methods against the exact truth ($n=200$, $\rho=0.5$, best-of-$K$, $500$ repetitions). Top: bias of the reported score. Middle: coverage of the nominal 95\% interval (grey band: binomial 95\% Monte-Carlo band). Bottom: mean interval width (log scale). The conditional method lies below the plotted bias range (see panel text) and has intervals $40$--$80$~pp wide.}\label{fig:reliab}
+\end{figure}
+
+\section{Generator calibrated to the real matrix}\label{app:calib}
+To check that the synthetic generator is informative about real tuned scores, we built generator settings that match the real matrix and compared their naive gap with the real replay (Table~\ref{tab:calib}). Both settings use the $\N{real_K}$ real accuracies as the configuration accuracies and as the thresholds of a Gaussian copula over items: (i) one common latent correlation, chosen ($\rho=\N{gen_rho}$) to reproduce the mean pairwise $\varphi$ of the real $0/1$ matrix; (ii) the full matrix of pairwise tetrachoric correlations of the real data ($\N{gen_clip}$ eigenvalues clipped to make it positive semi-definite). Each generator is run on $10$ pools of $2000$ items with $300$ repetitions each, with the replay procedure of the real study. Mean accuracy, the spread of accuracies, the dispersion of item difficulty (standard deviation across items of the share of configurations solving the item: $\N{gen_sditem_real}$ real, $\N{gen_sditem_gen}$ generator) and the mean $\varphi$ are matched by the one-$\rho$ copula (the pairwise copula shares the thresholds). The one-$\rho$ copula cannot reproduce the heterogeneity of the pairwise $\varphi$ (real $\N{gen_phi_min}$--$\N{gen_phi_max}$; largest pairwise error $\N{gen_pw_err_uni}$) and overstates the gap at $K\ge4$; the pairwise copula matches every pair (largest error $\N{gen_pw_err_tet}$) and understates it slightly, probably through higher-order structure that a Gaussian copula does not carry. At mean accuracy $0.195$, latent $\rho=0.3,0.5,0.7,0.9$ correspond to an observed $\varphi$ of $\N{phimap_3},\N{phimap_5},\N{phimap_7},\N{phimap_9}$; the real $\varphi=\N{gen_phi_real}$ lies between the grid values $\rho=0.5$ and $0.9$ of the synthetic study, and the grid's mean accuracy of $0.3$ instead of $0.18$ changes $\varphi$ at equal $\rho$ by about $0.03$ ($\N{phimap_m3_r5}$ vs.\ $\N{phimap_5}$ at $\rho=0.5$). Over all $\N{gen_uni_cells}$ cells ($K=1,\dots,\N{real_K}$, $n$ up to $\N{gm_nmax}$, both arms) the one-$\rho$ copula differs from the replay by more than two Monte-Carlo s.e. in $\N{gen_uni_z2}$ cells and the pairwise copula in $\N{gen_tet_z2}$.
+\begin{table}[h]
+\centering
+\caption{Generator calibrated to the real matrix against the real replay.}\label{tab:calib}
+\input{tables/t9_generator_vs_real}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t9_generator_vs_real_note}\end{minipage}
+\end{table}
+
+\section{Real-LLM setup and compute record}\label{app:setup}
+Table~\ref{tab:setup} records the model, data revision, scoring protocol and compute of the real-LLM study as read from the committed compute log.
+\begin{table}[h]
+\centering
+\caption{Setup and compute record of the real-LLM study (read from the compute log).}\label{tab:setup}
+\input{tables/t6_setup_compute}
+\par\smallskip\begin{minipage}{.97\linewidth}\footnotesize\input{tables/t6_setup_compute_note}\end{minipage}
+\end{table}

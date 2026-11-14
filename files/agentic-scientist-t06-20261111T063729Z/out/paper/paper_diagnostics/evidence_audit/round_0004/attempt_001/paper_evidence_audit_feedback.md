@@ -1,0 +1,26 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T08:41:15.985381+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `3`
+- audit_json_path: `work/results/t06/claude/20261111_064241/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/t06/claude/20261111_064241/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/t06/claude/20261111_064241/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+Numbers, tables and figures match the evidence trail, but three wordings go beyond what it supports: an equal-fragility claim, evaluator exact-refit and certificate claims, and an inferred rating-gap claim.
+
+## Findings
+- `equal-fragility-overclaim` (Results: Crowd votes versus sports): Equal certified budgets (62 and 62) are upper bounds from one search configuration, not equal true minima. The paper itself says minimality is not claimed and that far smaller sets could exist, and the caps differ (2,713 vs 258). The wording also conflicts with the paper's own denial of any evaluation-design conclusion from two tables.
+  - claim: Hence the per-share contrast is largely a denominator effect for the top pairs, and in absolute rows the two designs are equally fragile there.
+  - evidence: paper.tex Results contrast paragraph; Method Studied configuration (the returned k is a verified upper bound and minimality is not claimed); Discussion What the evidence supports (budgets are upper bounds); paper_data.json final_evaluation episodes F1 and F3 (k=62 each, k_cap 2713 vs 258).
+  - requested_fix: Replace "equally fragile" with a statement that the studied configuration's verified upper bounds are the same number of rows (62) for the two top pairs. Add that true minima, and so relative fragility in rows, are not established.
+- `evaluator-exact-refit-ungrounded` (Introduction; Problem Setup; Supplement Algorithmic specification and Controls details): No evaluator source or spec is staged. The paper concedes that "how the evaluator's fit and acceptance test are implemented is not documented in the staged evidence" and that the construction of B1-B3 and the controls is unverified. Yet it asserts as fact that the evaluator performs an exact refit and that its budgets are certificates. Figure 1 also draws an evaluator-feedback loop that no artifact documents. The only inspectable source is the candidate's own refit (program.py), which does not establish the evaluator's procedure.
+  - claim: any reported budget is a certificate that a reversal is attainable; budgets are certificates rather than estimates; Every reported budget comes from the evaluator's own exact refit; our evaluator fixes a plain ridge-penalised BT objective; Figure 1 evaluator box (Delete rows, Exact refit, Pair reverses?, "no: search again")
+  - evidence: source_evidence/downstream holds only program.py, datasets_offline.py and the baseline; no evaluator source. paper.tex Method 3.4, Supplement Algorithmic specification and Data provenance; claims_grounding.json claim "Evaluator source for comparators B1-B3 and the controls is not staged". Round-1 audit finding evaluator-internals-unsupported.
+  - requested_fix: Qualify these statements as the paper's understanding of the task's metric, e.g. "the evaluator records k and a flip indicator for the returned set; we could not inspect how it verifies them". Drop "certificate/certified" wording or limit it to the candidate's own refit. Neutralise the Figure 1 evaluator-loop depiction or caption it as schematic and unverified.
+- `mid-pair-gap-inference` (Results: Top pairs versus mid pairs): The sentence asserts that the crowd mid pair's rating gap is small. The next sentence admits that rating gaps are not recorded, so closeness is an inference. The only grounded fact is that random removal flipped F2 in 6 of 20 draws.
+  - claim: So the crowd mid pair is sufficiently close that undirected deletion of up to 2% of rows sometimes suffices
+  - evidence: paper.tex Results Top pairs versus mid pairs ("The registry does not record rating gaps"); paper_data.json final_evaluation episodes F2 (B1_flips=6 of 20, B1_score 0.164); claims_grounding.json has no claim about rating gaps.
+  - requested_fix: Reword to "random removal flipped the crowd mid pair in 6 of 20 draws, which suggests but does not establish a small rating gap". Do not state closeness as a finding.

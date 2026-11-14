@@ -1,0 +1,85 @@
+\section{Experiments}
+\label{sec:results}
+
+\paragraph{Data and setup.}
+We use the item-level 0/1 correctness matrices released with~\citet{zhang2025benchmark} (pinned commit, MIT licence): seven Open LLM Leaderboard v2 benchmarks (ARC-C, BBH, GPQA, IFEval, MMLU-Pro, MuSR, MATH Level 5; 212--429 models, 541--12{,}032 items) and six HELM benchmarks (79--83 models, 437--2{,}047 items); duplicated model rows (identical outcomes) are removed (\cref{tab:data}, \cref{app:data}).
+Each (benchmark, regime) cell uses 30 replicate splits, $k\in\{10,25,50,100,200\}$.
+Everything on the source side (IRT fit, $d$, gp-IRT constants, ridge, $k$NN) uses source models only. Unless stated otherwise we report $k=50$ (all $k$ in \cref{app:full}).
+
+\begin{table*}[t]
+\caption{Relative RMSE (geometric mean over benchmarks of RMSE divided by that of Random+mean; $<1$ is better than a random subset; 95\% bootstrap CI over benchmarks and replicates) and Spearman $\rho$ between predicted and true scores of the target models, $k=50$. IID: random model split. Extrap-50/25: targets are the top 50\%/25\% most accurate models. Family: whole organisations held out (7 Open LLM Leaderboard benchmarks only, hence a different average). ``recalibrated'': per-target intercept and difficulty slope (\cref{sec:method}).}
+\label{tab:main}
+\centering\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccccccc}
+\toprule
+ & \multicolumn{2}{c}{IID} & \multicolumn{2}{c}{Extrap-50} & \multicolumn{2}{c}{Extrap-25} & \multicolumn{2}{c}{Family}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}
+Method (selector + estimator) & rel.\ RMSE & $\rho$ & rel.\ RMSE & $\rho$ & rel.\ RMSE & $\rho$ & rel.\ RMSE & $\rho$ \\
+\midrule
+\input{../results/tables/combined_k50}\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Main results}
+\cref{tab:main} and \cref{fig:k} summarise the comparison; per-benchmark values are in \cref{fig:heat} and \cref{app:full}.
+
+\textbf{IID split: source models help; informed selection mostly does not.}
+Every model-based estimator reduces error relative to a random-subset mean at $k=50$ (ridge 0.71, gp-IRT 0.78, p-IRT 0.83; Wilcoxon over benchmarks $p<0.01$ except p-IRT, $p=0.07$) and raises Spearman from $0.858$ to $0.89$--$0.90$. The benefit shrinks with $k$ (\cref{fig:k}): ridge reaches $0.56$ at $k=10$, and at $k=200$ the model-based and randomised methods are all within $0.80$--$0.92$. Choosing items by clustering or by information \emph{without} a model-based estimator does not help: anchors with a weighted mean are worse than random (1.13), Anchor-IRT is slightly better (0.90), and D-optimal / max-variance subsets are strongly biased (2.5--3.0$\times$ the error), because items near $50\%$ source accuracy or with large loadings are unrepresentative of the whole benchmark. Selection does matter when paired with the matching estimator: the tinyBenchmarks-style pairing (Anchor-IRT + gp-IRT, 0.71) beats Random + gp-IRT (0.78), whereas D-optimal items + p-IRT (1.00) are no better than random. The only selector that helps with a plain mean in every regime is the \emph{difficulty-stratified} sample (0.84; better on 13/13 benchmarks), which stays a random sample.
+
+\textbf{Extrapolation: model-based estimators and informed subsets fail; randomisation protects.}
+When targets are more accurate than all sources, \emph{every} method that relies on the source models for the point estimate is worse than the plain random-subset mean at $k=50$: ridge 1.82, $k$NN 2.43, p-IRT 1.66, gp-IRT 1.42, Anchor-IRT + gp-IRT 1.22 (Extrap-50; 1.41, 1.92, 1.61, 1.42, 1.15 in Extrap-25), and Spearman falls from $0.73$ to $0.38$--$0.70$. The signed-error plot (\cref{fig:bias}) shows why: p-IRT is nearly unbiased for weak targets but under-predicts strong targets by up to $13$ points, and the bias grows with the accuracy gap between targets and sources (\cref{fig:mech}; Pearson $r=-0.62$ over 39 benchmark-regime cells). The bias is not explained by items that no source model solves (the share of target successes on such items is below 1\% in 36 of 39 cells; exceptions: IFEval and MATH-L5). Deterministic selectors (anchors, D-optimal, max-variance) with a plain mean are biased by design (up to $+16$ points for max-variance, \cref{app:full}).
+By contrast, methods that keep item sampling random hold up: the stratified mean (0.88/0.85 in Extrap-50/25), CF (0.90/0.86) and CF-EB0 (0.88/0.84) beat the random mean in 32--38 of the 39 (benchmark, $k\in\{25,50,100\}$) cells (e.g.\ 36/39 for CF in Extrap-50; per-$k$ Wilcoxon $p\le0.01$). At very small $k$ the shrinkage estimators are best (CF-EB0 0.80/0.78 at $k=10$ vs 0.93/0.89 for CF) since the sample mean is then very noisy.
+
+\textbf{A two-parameter recalibration removes most of the bias but not the variance problem.}
+Letting each target have its own intercept and difficulty slope in the IRT predictor reduces p-IRT's extrapolation bias from $-8.6$ to $-0.5$ points and its relative RMSE from 1.66 to 0.96 [0.86, 1.12] (Extrap-50; 1.61 $\to$ 0.96 in Extrap-25), i.e.\ to parity with the random mean (better on 32--34 of 39 cells but $p=0.15$/$0.03$) with a lower Spearman ($0.701$ vs $0.733$; $0.568$ vs $0.655$ in Extrap-25). This is a strong baseline that our first version of the study lacked; in IID it gives 0.86 (vs 0.83 for plain p-IRT). It has no unbiasedness guarantee and no interval.
+
+\textbf{Family hold-out: model-based estimators work.} When whole organisations are held out but accuracy is not shifted, source-informed estimators are competitive again (ridge 0.60, gp-IRT 0.68, p-IRT 0.69, CF-EB0 0.69, CF 0.82; recalibrated p-IRT 0.87), so the failures above are due to the strength shift, not to model novelty as such (7 benchmarks only).
+
+\textbf{Ranking.} In extrapolation none of the methods improves Spearman over the random mean ($0.733$ in Extrap-50) by more than $0.005$ at $k\ge50$ (at most $0.02$ at $k=25$; anchors $+0.04$ at $k=10$): CF $0.734$, CF-EB0 $0.727$, stratified $0.737$; CF-EB1 \emph{hurts} ranking ($0.655$) although it lowers RMSE, since its linear-trend shrinkage compresses differences between targets. The RMSE gains of the safe methods are thus better calibration of scores, not better rankings.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{../figs/fig_relrmse_vs_k.pdf}
+\caption{RMSE relative to Random+mean versus subset size $k$ (geometric mean over 13 benchmarks; bands: 95\% bootstrap CI). Plain model-based estimators gain under an IID split but lose increasingly under extrapolation; randomised source-informed methods stay at 0.8--0.9.}
+\label{fig:k}
+\end{figure*}
+
+\textbf{Cohort-adaptive shrinkage keeps the IID gains without losing robustness.}
+CF alone is unbiased but gains only 10--17\% in RMSE (0.83 IID, 0.90/0.86 extrapolation) because the Bernoulli noise of the sampled items remains. CF-EB0 gets 0.75 in IID (CF 0.83, cross-fit plug-in alone 0.88) and 0.88/0.84 under extrapolation, close to the best of the two behaviours in each regime. It is, however, biased (mean signed error $\approx-1.7$ points under extrapolation, \cref{app:full}) and requires a cohort of models evaluated on the same subset. Stratifying and then applying the CF family gives small additional gains (0.73 vs 0.75 in IID), since stratification and the IRT predictor exploit the same source-difficulty information. With the recalibrated predictor, CF-EB0 behaves like CF (0.83/0.87/0.84) because recalibrated plug-ins carry little bias to shrink.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{../figs/fig_bias_by_strength.pdf}
+\caption{Mean signed error ($k=100$, random subsets) by percentile of target strength (IID and Extrap-50), averaged over benchmarks. p-IRT regresses towards the source mean; CF is unbiased across strengths; CF-EB0 interpolates; recalibration removes most of the bias.}
+\label{fig:bias}
+\end{figure}
+
+\subsection{Unbiasedness and interval coverage}
+We verified \cref{prop:unb} empirically: for 13 benchmarks $\times$ 2 regimes $\times$ 5 splits we drew 200 independent random subsets per split and compared each estimator with the truth (\cref{tab:cover}). CF shows no bias (mean error $\le0.07$ points; at most 1\% of target models have a bias $z$-score above 3), including under extrapolation, whereas the cross-fit plug-in and p-IRT are significantly biased for 83--96\% of targets. CF has 10--20\% smaller RMSE than the random mean at the same $k$ in this larger check (geometric-mean ratio 0.80--0.90), and its Wald intervals are 10--20\% shorter with empirical coverage of 92--94\% (nominal 95\%) versus 89--94\% for the plain mean with its own Wald interval: item-level uncertainty is reported honestly for CF, but intervals are slightly anti-conservative at $k=25$.
+
+\begin{table}[t]
+\caption{Bias, RMSE (points) and 95\% Wald coverage / mean width (points) over 200 random subsets $\times$ 13 benchmarks $\times$ 5 splits. $|$bias$|$: mean absolute per-target bias; sig.: share of targets with $|z|>3$.}
+\label{tab:cover}
+\centering\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{llllrrrrr}
+\toprule
+reg. & $k$ & estimator & bias & $|$bias$|$ & sig. & RMSE & cov.\% & width\\
+\midrule
+\input{../results/tables/cover}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablations}
+\label{sec:ablate}
+\input{sections/ablation_text}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.75\columnwidth]{../figs/fig_pirt_bias_mechanism.pdf}
+\caption{Bias of p-IRT ($k=100$) versus the accuracy gap between target and source models; each point is one benchmark-regime cell (mean over 30 splits).}
+\label{fig:mech}
+\end{figure}

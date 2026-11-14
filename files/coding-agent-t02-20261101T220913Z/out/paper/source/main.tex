@@ -1,0 +1,243 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2027_conference,times}
+\input{math_commands.tex}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{multirow}
+
+\title{Width Opens a Memorisation Gate and Sets a Weight-Decay Clock:\\ An Empirical Account of Model Scale in Grokking}
+
+\author{Anonymous authors\\ Paper under double-blind review}
+
+\newcommand{\tfit}{t_{\mathrm{fit}}}
+\newcommand{\tgen}{t_{\mathrm{gen}}}
+\newcommand{\vafit}{a^{\mathrm{val}}_{\mathrm{fit}}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Grokking---validation accuracy rising long after the training set is fit---is usually explained through circuit efficiency, lazy-to-rich dynamics or weight norm, but its dependence on \emph{model size} is rarely characterised systematically. We study modular addition with one-layer transformers whose width spans 16$\times$ (1.8k--213k parameters) and test a pre-registered, falsifiable account: (i) a \emph{capacity gate}: only models large enough to store the training labels ``memorise first''; (ii) above the gate, wider models generalise sooner, but the gain saturates; (iii) the floor is set by an \emph{optimiser clock} $\propto1/(\mathrm{lr}\cdot\mathrm{wd})$, not by the model. With 8 seeds per width: memorise-first behaviour appears only above $\approx10^4$ parameters (for 1{,}392 training pairs); just above it the delay is longest and 5/8 runs at $d{=}24$ do not generalise in 30k steps; then the median time to generalise falls as $P^{-0.46}$ (95\% CI $[-0.66,-0.26]$) for $d\ge32$ and is statistically flat for $d\ge64$ ($-0.21$, $[-0.56,0.04]$), while the delay relative to the fitting time does \emph{not} grow. The time to generalise scales as $(\mathrm{lr}\cdot\mathrm{wd})^{-1.2}$, so per-width tuning removes most of the width effect among larger models, and the total parameter norm at generalisation is nearly width-independent (CV 5.6\%). Parts of the account fail: the gate size is not a function of the number of training pairs alone (it scales as $N^{1.04}$ over four low-data configurations but is absent up to 3$\times10^4$ parameters when 60--70\% of pairs are seen), extra depth does not speed up generalisation, and a rescaling intervention supports a causal role of norm only one-sidedly. Compute was 4 CPU cores, so seed counts are small; we flag every conclusion that is within noise.
+\end{abstract}
+
+\section{Introduction}
+Power et al.\ \citep{power2022grokking} observed that small networks trained on algorithmic tables such as modular addition can fit the training set within a few hundred steps and then, after orders of magnitude more training, abruptly generalise. Explanations include a competition between a fast-to-learn but parameter-inefficient memorising circuit and a slower, more efficient generalising one \citep{varma2023explaining,nanda2023progress}, a transition from lazy to rich training dynamics \citep{kumar2024grokking}, and a mismatch between the weight-norm dependence of training and test loss \citep{liu2023omnigrok}. Most of these accounts hold the architecture fixed and vary data fraction, weight decay or initialisation scale. What the \emph{size} of the model does to the delay is less systematically characterised---even though practitioners choose a size before anything else, and size is the control variable on which memorisation capacity \citep{zhang2017rethinking,morris2025memorize} and double descent \citep{nakkiran2020deep,davies2023unifying} depend.
+
+\paragraph{This paper.} We ask: \emph{on modular arithmetic, how does the appearance and the length of the grokking delay depend on model size?} Rather than reporting a trend, we commit in advance (Appendix~\ref{app:prereg}) to a mechanistic account, derive predictions that can fail, and test them on fresh seeds and settings. The account:
+
+\begin{enumerate}
+\item[\textbf{H-CAP}] \textbf{Capacity gate.} Memorising $N$ labels of $\log_2 p$ bits needs roughly $N\log_2 p$ bits of parameters. Below a critical size $P^\ast(N)$ a model cannot memorise first: it either fails to fit or fits while already generalising, so there is no delay to speak of. Above $P^\ast$ it can, and the delay appears. Predicts $P^\ast\propto N$.
+\item[\textbf{H-SPEED}] \textbf{Bigger is faster above the gate, with saturation.} At fixed optimiser settings the time to generalise decreases with width, but the gain is limited by the optimiser's timescale, $t_{\mathrm{gen}}\propto(\mathrm{lr}\cdot\mathrm{wd})^{-1}$.
+\item[\textbf{H-NORM}] \textbf{Norm threshold.} (Formed after inspecting weight norms in the first sweep.) Generalisation sets in when the \emph{total} parameter norm decays to a data-dependent value that does not depend on width.
+\end{enumerate}
+
+\paragraph{Contributions.} (1) A width sweep with 8 seeds per size, reporting censoring-aware medians and bootstrap CIs, shows three regimes: no memorise-first at small sizes, a high-variance transition with large delays, and a faster, saturating regime. (2) The time to generalise is controlled by $(\mathrm{lr}\cdot\mathrm{wd})^{\approx-1.2}$ and width only enters through a prefactor that saturates, so \emph{conclusions about scale depend on whether optimiser settings are held fixed}. (3) Weight norm at generalisation is nearly width-independent, but our intervention experiment gives only one-sided causal support. (4) A scorecard of which pre-registered predictions held, failed or could not be tested (Table~\ref{tab:score}). Everything was produced on 4 CPU cores with small models; the limits this implies are discussed in Section~\ref{sec:disc}.
+
+\section{Related work}
+\paragraph{Grokking.} Grokking was reported on modular and permutation tasks by \citet{power2022grokking}. \citet{nanda2023progress} reverse-engineer a one-layer transformer on modular addition into a discrete-Fourier-transform circuit and define progress measures; we reuse their architecture and optimiser settings. \citet{liu2022understanding} build an effective theory of representation learning and a phase diagram over hyperparameters; \citet{liu2023omnigrok} link grokking to a ``LU'' mismatch between train and test loss as a function of weight norm. \citet{varma2023explaining} explain grokking by circuit efficiency (generalising circuits produce larger logits for a given norm) and test predictions on data size, including ``ungrokking''. \citet{kumar2024grokking} tie it to the lazy-to-rich transition. \citet{merrill2023tale} study sparse versus dense subnetworks on sparse parities, \citet{thilak2022slingshot} the role of adaptive optimisers, and \citet{zhong2023clock} show that small changes to hyper-parameters or initialisation yield different algorithms on modular addition. These works mostly vary data fraction, weight decay or initialisation; we instead vary model size and read the results through their optimiser and norm accounts.
+
+\paragraph{Capacity, memorisation and scale.} Networks can memorise random labels \citep{zhang2017rethinking}; the information a model can store scales with its parameter count \citep{morris2025memorize}; and larger language models memorise training data faster and can memorise more before overfitting \citep{tirumala2022memorization}. \citet{nakkiran2020deep} and \citet{davies2023unifying} relate test error to model size and training time; the latter unify double descent with grokking. We use the capacity viewpoint to derive a size gate for memorise-first behaviour, and test it directly rather than assuming it.
+
+\paragraph{Optimisation.} Weight decay in AdamW \citep{loshchilov2019decoupled} shrinks parameters at a rate $\mathrm{lr}\cdot\mathrm{wd}$ per step; this sets the clock we find to dominate the large-width regime.
+
+\section{Setup}
+\label{sec:setup}
+\paragraph{Task and data.} Inputs are all $p^2$ pairs $(a,b)$ with $a,b\in\{0,\dots,p-1\}$ and label $(a+b)\bmod p$; data are generated in memory, no external data are used. Unless stated, $p{=}59$ and a uniformly random $40\%$ of pairs ($N{=}1{,}392$) forms the training set; the remaining $2{,}089$ are validation. The split is re-drawn for every seed (together with the initialisation).
+
+\paragraph{Models.} Main: a one-layer, decoder-only transformer in the style of \citet{nanda2023progress} \citep{vaswani2017attention}, without LayerNorm, 4 heads of dimension $d/4$, ReLU MLP of width $4d$, learned token and position embeddings, input $[a,b,{=}]$ and readout at the last position. Weights are initialised $\mathcal N(0,1/\text{fan-in})$. We vary $d_{\mathrm{model}}\in\{8,16,24,32,48,64,96,128\}$, i.e.\ $P\in[1.8\text{k},213\text{k}]$ parameters. In Section~\ref{sec:other} we also use a 2-hidden-layer ReLU MLP on concatenated embeddings, deeper transformers, and decouple $d_{\mathrm{mlp}}$ from $d_{\mathrm{model}}$.
+
+\paragraph{Training.} Full-batch AdamW \citep{loshchilov2019decoupled} ($\beta{=}(0.9,0.98)$, lr $10^{-3}$ with 10-step warm-up, weight decay 1.0), cross-entropy, float32, up to 30{,}000 steps; training stops 300 steps after both accuracies are $\ge0.99$. Accuracies, losses, parameter L2 norm and the Fourier concentration of the token embedding (fraction of mean-centred embedding energy in its 5 strongest frequencies) are logged every 50 steps (every 10 before step 400).
+
+\paragraph{Measures.} $\tfit$ ($\tgen$) is the first logged step from which training (validation) accuracy stays $\ge0.99$ for three consecutive logs (with a $3\%$ tolerance on the later two). $\vafit$ is validation accuracy at $\tfit$. A run is \emph{memorise-first} if it fits the training set and $\vafit<0.5$. The delay is $D=\tgen-\tfit$. Runs that do not reach $\tgen$ in the budget are \emph{censored}; medians treat them as $+\infty$ and are reported as ``$>$30k'' when the median itself is censored. Slopes are least-squares fits of $\log t$ against $\log P$ to per-width medians, with 95\% bootstrap intervals obtained by resampling seeds within each width (percentile method, 2{,}000 resamples; resamples with an infinite median are discarded and counted).
+
+\paragraph{Compute and statistics.} All experiments ran on 4 CPU cores (cgroup quota) in single-threaded processes; a full run takes 1--25 minutes. Seeds: 8 per width in the main sweep, 3--4 elsewhere (stated per experiment). With so few seeds, intervals are wide and we avoid claims about differences that they do not resolve.
+
+\section{Results}
+\subsection{Width sweep: three regimes}
+\label{sec:e1}
+Figure~\ref{fig:curves} shows representative trajectories and Figure~\ref{fig:summary} and Table~\ref{tab:e1} summarise 8 seeds per width.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figs/e1_curves.pdf}
+\caption{Train (blue) and validation (red) accuracy for two seeds (solid/dashed) at four widths ($p{=}59$, $N{=}1{,}392$, lr $10^{-3}$, wd 1). Smallest model: partial generalisation during fitting; $d{=}16$: fit and partial generalisation coincide, a plateau at $\approx0.5$ for some seeds; larger models: classic memorise-then-generalise.}
+\label{fig:curves}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figs/e1_summary.pdf}
+\caption{Width sweep, 8 seeds per width. (a) Median $\tfit$ and $\tgen$ with 95\% bootstrap CIs (censored medians drawn at the cap). (b) Per-run delay $\tgen-\tfit$; triangles are runs that never generalised. (c) Fraction of seeds that reach val$\ge$0.99 and that are memorise-first. (d) Validation accuracy at $\tfit$ per run. (e) Parameter norm at initialisation, at $\tfit$ and at $\tgen$. (f) Fraction of token-embedding energy in the 5 strongest Fourier modes.}
+\label{fig:summary}
+\end{figure}
+
+\begin{table}[t]
+\caption{Width sweep (Fig.~\ref{fig:summary}); medians over 8 seeds. ``fit/gen'': runs reaching train$\ge$0.99 / val$\ge$0.99 within 30k steps. $\tgen$ in brackets: 95\% bootstrap CI of the median. ``mem.'': memorise-first runs. $\|\theta\|_{\mathrm{gen}}$: mean parameter norm at $\tgen$ over generalising runs.}
+\label{tab:e1}
+\begin{center}\small
+\input{../tables/e1_tab.tex}
+\end{center}
+\end{table}
+
+\paragraph{No memorise-first below the gate.} At $d{=}8$ ($P{=}1.8$k) no run is memorise-first: half the runs never fit, and the ones that fit have $\vafit\approx0.8$--$0.9$. At $d{=}16$ ($5.1$k) $\vafit\approx0.5$; 3/8 runs are memorise-first, and 4/8 runs are still on a partial-generalisation plateau at 30k steps (val 0.47--0.60). From $d{=}24$ ($10$k) all 8 runs memorise first, and $\vafit$ falls smoothly from $0.23$ ($d{=}24$) to $\approx0.05$ ($d\ge64$). The Fourier concentration of the embedding at $\tfit$ falls from $0.9$ to $0.24$ with width, i.e.\ large models fit with an unstructured embedding while small ones already use Fourier features (Fig.~\ref{fig:summary}f).
+
+\paragraph{The delay is non-monotone in size.} Just above the gate the delay is the longest and the most variable: at $d{=}24$ only 3/8 runs generalise in 30k steps, at $d{=}32$ and $48$ 7/8 do, with median $\tgen$ of 19{,}400 (CI $[10{,}000,24{,}700]$) and 8{,}900 ($[5{,}700,23{,}200]$). From $d{=}64$ all runs generalise, $\tgen\approx6{,}000$ and falls slowly to $5{,}025$ ($[3{,}300,6{,}200]$) at $d{=}128$. For $d\ge32$ the slope of $\log\tgen$ against $\log P$ is $-0.46$ (95\% CI $[-0.66,-0.26]$), while for $d\ge64$ it is $-0.21$ ($[-0.56,0.04]$): the speed-up decelerates and cannot be distinguished from zero. $\tfit$ keeps falling ($-0.52$ and $-0.43$), so the \emph{relative} delay $\tgen/\tfit$ does not systematically grow: its slope is $0.08$ ($[-0.10,0.27]$) for $d\ge32$ and $0.23$ ($[-0.12,0.47]$) for $d\ge64$. Prediction S3 (relative delay increases with width) is therefore \emph{not supported} at this resolution.
+
+\paragraph{Norm at generalisation.} The parameter norm at $\tfit$ grows with width (25$\to$48), as does the norm at initialisation, but the norm at $\tgen$ varies only from 29.5 to 33.5 for $d\ge32$ (coefficient of variation 5.6\% over widths), whereas a critical \emph{per-parameter} RMS would predict a $\sqrt{P}$-scaling---observed $\|\theta\|/\sqrt P$ falls 3$\times$ over the same range. We return to this in Sections~\ref{sec:clock} and~\ref{sec:norm}.
+
+\subsection{The capacity gate across training-set sizes}
+\label{sec:e3}
+We repeat the sweep at five further $(p,\text{frac})$ combinations covering $N=432$--$2{,}823$ training pairs ($d\in\{8,\dots,48\}$, 3 seeds; runs stop 300 steps after $\tfit$, so $\tgen$ is not measured here; the $(59,0.4)$ cell reuses E1). Runs that never fit count as ``not memorise-first'' ($\vafit{=}1$). H-CAP predicts that $\vafit$ falls through 0.5 at a critical size $P^\ast\propto N$, or equivalently that $\vafit$ collapses as a function of the stored-bits-per-parameter ratio $N\log_2p/P$.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figs/e3_capacity.pdf}
+\caption{Memorise-first gate for different $(p,\text{frac})$ (3 seeds; $(59,0.4)$: 8). (a) Median validation accuracy at $\tfit$ vs $P$. (b) The same vs $N\log_2p/P$: no collapse. (c) Size $P^\ast$ at which (a) crosses 0.5 (log-linear interpolation, 95\% bootstrap CI over seeds); open circles with arrows: no crossing in the tested range (lower bounds).}
+\label{fig:cap}
+\end{figure}
+
+Memorise-first behaviour appears above a size threshold in every configuration where one is crossed (Fig.~\ref{fig:cap}a), so the existence of a gate (C1) is robust. For the four configurations with $\le$45\% training data the crossings are $P^\ast=1.5$k, 2.4k, 5.3k, 9.7k for $N=432$, 870, 1{,}392, 2{,}823, a log-log slope of $1.04$ (95\% CI $[0.75,1.29]$; 1000 bootstrap resamples over seeds; $4$ points) and $N\log_2 p/P^\ast\approx1.4$--$2.1$ bits per parameter, within the order of magnitude reported for language models \citep{morris2025memorize} though we do not measure capacity directly. But the capacity picture is \emph{incomplete}: the two configurations with larger training fractions ($p{=}31$, frac $0.7$; $p{=}59$, frac $0.6$) have no crossing up to $P{=}3.1\times10^4$ and $3.4\times10^4$ although $N$ lies between that of crossing configurations, and $\vafit$ does not collapse against $N\log_2p/P$ (Fig.~\ref{fig:cap}b). With more data the memorising solution itself generalises partially ($\vafit\ge0.57$ at $d{=}48$ for frac $0.6$), so size is not the only gate; the fraction of the table that is observed matters too, in line with the data-fraction dependence of grokking \citep{power2022grokking,liu2022understanding}. The slope is also threshold-dependent: $1.16$ (4 configurations) for $0.3$, $1.04$ for $0.5$ and $0.51$ (5 configurations, high-fraction ones now included) for $0.7$ (Appendix, \texttt{tables/e3\_stats.json}). We therefore judge C2 \emph{not supported as a general law}; it holds in the low-data subset only, with four points.
+
+
+\subsection{The optimiser clock}
+\label{sec:clock}
+If generalisation requires a roughly fixed amount of weight-decay-driven cleanup, then once the model is wide enough that nothing else is limiting, $\tgen$ should scale as $(\mathrm{lr}\cdot\mathrm{wd})^{-1}$. We vary lr$\in\{5\!\times\!10^{-4},\dots,4\!\times\!10^{-3}\}$ and wd$\in\{0.5,\dots,4\}$ at $d\in\{32,64,128\}$ (3 seeds each; the baseline cell reuses E1 seeds 0--2; 7 further cells per width; Table~\ref{tab:e2} in the appendix).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figs/e2_clock.pdf}
+\caption{Optimiser clock ($p{=}59$, 3 seeds per cell). (a) $\tgen$ vs lr$\cdot$wd; open triangles: runs that did not generalise within 30k steps (all at $d{=}32$). Dotted: slope $-1$. (b) $\tgen\cdot$lr$\cdot$wd. (c) Parameter norm at $\tgen$.}
+\label{fig:clock}
+\end{figure}
+
+At $d{=}64$ and $128$, all runs generalise and $\log\tgen$ falls linearly in $\log(\mathrm{lr}\cdot\mathrm{wd})$ with slopes $-1.24$ ($[-1.42,-1.03]$) and $-1.15$ ($[-1.32,-0.95]$). Pooling both widths with a width fixed effect, the exponent is $-1.14\pm0.07$ for lr and $-1.25\pm0.07$ for wd (OLS standard errors, $n{=}48$): both near $-1$ but not exactly equal, and $\tgen$ is not strictly a function of the product. At $d{=}32$ nine of 24 runs do not generalise in 30k steps, so no slope is estimated; the smaller model is slower at every setting (Fig.~\ref{fig:clock}a). Across the 8$\times$ range of lr$\cdot$wd the cell-mean norm at $\tgen$ varies with a coefficient of variation of 6--8\% within a width (max--min about 20\%; Fig.~\ref{fig:clock}c; 12\% pooled over widths and cells, $n{=}63$), whereas $\tgen$ changes by 13$\times$ at $d{=}128$.
+
+\paragraph{Consequence for comparing sizes (S2).} Hyper-parameters tuned per width erase most of the width effect among the larger models: the best median $\tgen$ in the grid is 950 steps at $d{=}64$ and 850 at $d{=}128$ (3 seeds; the best cells sit at the edge of the grid, so the true optima may be lower for both). At fixed lr/wd the same two widths differ by 1.2$\times$ ($6{,}250$ vs $5{,}025$ in E1). The prediction that the speed-up survives tuning is thus only weakly supported for $d\ge64$; at $d{=}32$ the best cell reaches 1{,}000 steps but only 2/3 seeds generalise there, so we cannot say whether width 32 is intrinsically slower once tuned.
+
+\subsection{Is norm a cause? A rescaling intervention}
+\label{sec:norm}
+We rescale \emph{all} parameters by $c\in\{0.6,0.8,1.2,1.4\}$ at the first step where training accuracy reaches 0.99 (4 seeds; $c{=}1$ is E1 with the same seeds, so runs are paired up to the intervention).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figs/e5_rescale.pdf}
+\caption{Rescaling intervention at $\tfit$. (a) Delay vs $c$ (dots: runs, line: median; $d{=}24,32$ include censored runs, shown as missing dots, and their medians use generalising runs only). (b) Norm at $\tgen$. (c) Norm immediately after rescaling.}
+\label{fig:rescale}
+\end{figure}
+
+Two results. First, the norm at $\tgen$ is unaffected by $c$ at every width (Fig.~\ref{fig:rescale}b), as H-NORM predicts. Second, the delay responds one-sidedly. Shrinking ($c{=}0.6$) shortens the delay by a factor $e^{0.67}\approx2.0$ at $d{=}64$ (mean log-ratio $-0.67$, 95\% CI $[-0.91,-0.35]$, $n{=}4$) and $e^{0.38}\approx1.5$ at $d{=}128$ ($[-0.70,-0.03]$); $c{=}0.8$ gives $-0.19$ at $d{=}128$ ($[-0.32,-0.05]$) but a CI including 0 at $d{=}64$. Inflating ($c{=}1.2$, $1.4$) changes the delay by $+5\%$/$+11\%$ at $d{=}128$ (CIs $[-0.01,0.11]$ and $[0.04,0.18]$ in log) and not detectably at $d{=}64$. A pure weight-decay-decay account would predict an increase of $\ln c/(\mathrm{lr\cdot wd})=180$ and $336$ steps, i.e.\ $+3.7\%$ and $+6.8\%$, close to what we see at $d{=}128$, whereas shrinking helps far more than $\ln c/(\mathrm{lr\cdot wd})$ would give. \textbf{Caveat:} for $c\le0.8$ the rescaling is not a pure norm change---it knocks training accuracy down to 26--46\% ($c{=}0.6$) and 81--94\% ($c{=}0.8$), i.e.\ it partially destroys the memorising solution, which must be re-learnt. For $c\ge1.2$ the fit is preserved (accuracy $\ge0.91$ after the step), but there the effect is small. So the experiment is consistent with the picture ``norm decays until a width-independent threshold'', but does not isolate norm from damage to the memoriser, and the one-sided response is what a decay-clock model would predict rather than evidence for a norm-triggered switch.
+
+\subsection{Other scale axes and architectures}
+\label{sec:other}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../figs/e4_arch.pdf}
+\caption{Other scale axes (4 seeds per point, $p{=}59$, frac 0.4, lr $10^{-3}$). Dots: runs; triangles at the dotted line: did not generalise in 30k steps; line: median where finite. (a) 2-hidden-layer MLP at wd 1 and 5. (b) Transformer depth (1 layer: $d\in\{16,\dots,128\}$; 2 and 3 layers: $d\in\{32,64\}$). (c) $d_{\mathrm{mlp}}$ varied at fixed $d_{\mathrm{model}}$.}
+\label{fig:arch}
+\end{figure}
+
+\textbf{MLP.} A 2-hidden-layer ReLU MLP on concatenated embeddings has $\vafit\approx0$ at every width $\ge32$ that fits at wd$=1$ (and $\ge128$ at wd$=5$), and at wd$=1$ none of the 12 runs with $d\le64$ generalises within 30k steps, while $\tgen$ falls from 15{,}750 ($d{=}128$) to 8{,}300 (256) and 6{,}300 (512) (Fig.~\ref{fig:arch}a). At wd$=5$ the order is the same (2{,}350, 1{,}650, 1{,}200), the time is 5.0--6.7$\times$ shorter than at wd$=1$ for a 5$\times$ larger wd, and $d{=}64$ now generalises in 2/4 runs. So the gate (small models fail to generalise), the fall of $\tgen$ with size, its deceleration and the weight-decay clock all reappear in a different architecture; the medians give rough log-log slopes of $-0.37$ (wd 1) and $-0.27$ (wd 5) for $d\ge128$ (3 widths, 4 seeds; no CI).
+
+\textbf{Depth.} At fixed width, extra transformer layers do not help: at $d{=}64$ one layer generalises in 4/4 runs (median 7{,}225), two layers in 2/4 and three layers in 4/4 (median 8{,}875); at $d{=}32$, 3/4 (one layer) versus 1/4 (two and three layers) generalise within 30k steps, although $P$ grows by 1.8--2.7$\times$. Total parameter count is therefore not the controlling variable (4 seeds each; the differences are suggestive, not significant).
+
+\textbf{$d_{\mathrm{model}}$ versus $d_{\mathrm{mlp}}$.} At $d_{\mathrm{model}}{=}64$, raising $d_{\mathrm{mlp}}$ from 64 to 256 to 1024 gives $\tgen=11{,}350$ (3/4 generalise), 7{,}225 (4/4), 5{,}050 (4/4), matching the $d_{\mathrm{model}}$ sweep at similar $P$ ($d{=}128$: $P{=}213$k, 5{,}025). In the other direction, at $d_{\mathrm{model}}{=}16$ a 16$\times$ MLP (11k parameters, 2.2$\times$ the baseline) is \emph{not} better (0/4 generalise, $\vafit=0.36$ vs 2/4 and 0.51), so a narrow residual stream limits generalisation even when the parameter count passes the gate value of the $d_{\mathrm{model}}$ sweep.
+
+\textbf{Other operations.} Table~\ref{tab:ops} repeats E1 for $a-b$ and $a^2+b^2$ (mod 59; 4 seeds, $d\in\{16,32,64,128\}$; addition: E1 seeds 0--3). For subtraction every width that fits is memorise-first (including $d{=}16$, where addition has $\vafit=0.51$), the time to generalise is longer than for addition, and generalisation appears only at larger widths ($d{=}128$: 3/4 runs, median of the generalising runs 17{,}750; $d{=}64$: 2/4; $d\le32$: 0/4)---the direction of S1 but a different, task-dependent gate. For $a^2+b^2$, which has an eight-fold symmetry, no run is memorise-first ($\vafit\approx0.7$--$0.8$ at every width, because the symmetry lets a memoriser answer many held-out pairs) and $\tgen$ is long and non-monotone in width (e.g.\ 3/4 at $d{=}16$, 0/4 at $d{=}32$). So the gate is a property of the task and not only of $N$ and $P$.
+
+\begin{table}[t]
+\caption{Other operations ($p{=}59$, frac 0.4, 4 seeds). fit/gen: runs reaching train$\ge$0.99 / val$\ge$0.99 within 30k steps; mem.: memorise-first runs; $t$: median over runs, censored runs counted as $\infty$; final val: median validation accuracy at the end.}
+\label{tab:ops}
+\begin{center}\small
+\input{../tables/e6_tab.tex}
+\end{center}
+\end{table}
+
+
+
+\section{Scorecard}
+\begin{table}[t]
+\caption{Pre-registered predictions and outcomes (Appendix~\ref{app:prereg}). ``post-hoc'' marks hypotheses written after inspecting E1 weight norms.}
+\label{tab:score}
+\begin{center}\small
+\begin{tabular}{p{0.07\linewidth}p{0.42\linewidth}p{0.40\linewidth}}
+\toprule
+ID & Prediction & Outcome\\
+\midrule
+C1 & Memorise-first only above a critical size & Supported (Fig.~\ref{fig:summary}c,d)\\
+C2 & $P^\ast\propto N$ across $(p,\text{frac})$ & Mixed: slope $1.04$ [0.75,1.29] on 4 low-fraction configs, but two high-fraction configs have no crossing; threshold-sensitive\\
+S1 & $\tgen$ falls with $P$ (fixed lr, wd) & Supported for $d\in[32,128]$; flat for $d\ge64$ (CI includes 0)\\
+S2 & Speed-up survives per-width tuning & Weakly supported; ambiguous at grid edge\\
+S3 & $\tgen/\tfit$ increases with width & Not supported (slope CI includes 0)\\
+M1 & Norm at $\tgen$ width-/optimiser-invariant (post-hoc) & Supported (CV 5.6\% / 12\%)\\
+M2 & Rescaling at $\tfit$ shifts delay monotonically (post-hoc) & Partly: shrinking helps, inflating $\approx$no effect; confounded by damage to fit\\
+M3 & $\tgen\propto(\mathrm{lr\cdot wd})^{-1}$ & Supported by the pre-set criterion for $d\ge64$ (slopes $-1.24$, $-1.15$ within $[-1.3,-0.7]$; the $d{=}64$ CI reaches $-1.42$)\\
+GEN & Picture holds for MLP, other $p$/frac, depth & Partly: MLP yes (gate, saturation, clock); subtraction yes for speed but gate shifts; $a^2+b^2$ no memorise-first; depth no; gate not $\propto N$ across fractions\\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\section{Discussion and limitations}
+\label{sec:disc}
+\textbf{What we can say.} On modular addition with one-layer transformers trained by full-batch AdamW, ``larger models grok'' is true in two different senses. Below $\approx10^4$ parameters (for $N{=}1{,}392$) there is little to grok: models cannot store the training labels, fit and generalisation coincide, and generalisation is often partial. Just above that size the delay is longest and runs often fail within our budget. Beyond it larger models generalise sooner, but the benefit saturates and, in our grid, nearly disappears once lr and wd are tuned: width acts through a prefactor on a clock set by $\mathrm{lr\cdot wd}$, and the norm at which generalisation occurs is almost the same for all widths. Whether ``scale makes grokking shorter'' therefore depends on whether optimiser settings are held fixed, and a study that fixes them at one value can over-state the effect of width.
+
+\textbf{Limitations.} (i) \emph{Small compute, few seeds.} All results come from 4 CPU cores; 8 seeds in the main sweep and 3--4 elsewhere give wide intervals; several conclusions (S1 above $d{=}64$, S2, the sign of the rescaling effect at $c>1$) are within noise. (ii) \emph{Censoring.} A 30k-step budget censors runs near the gate; medians treat them as infinite, so the delay peak at $d\approx24$--$32$ is a lower bound. (iii) \emph{Single task and optimiser family.} Only modular addition is studied; training is full-batch AdamW with fixed $\beta$; other optimisers, mini-batch noise, parametrisations that preserve feature-learning rates across width ($\mu$P), and larger $p$ are not studied. (iv) \emph{Width is changed with fixed head count and $d_{\mathrm{mlp}}=4d$}; Section~\ref{sec:other} varies the other axes only coarsely. (v) The capacity argument is a heuristic and we do not measure bits per parameter; ``capacity'' enters only through $P^\ast$. (vi) H-NORM was formed after looking at weight norms in E1; its out-of-sample tests are E2 and E5, and the rescaling test is confounded for $c<1$. (vii) The Fourier statistic is a proxy, not a full mechanistic analysis.
+
+\textbf{Reproducibility statement.} All code, configurations, raw per-run curves and analysis scripts are included in the supplementary material; Appendix~\ref{app:repro} lists dependencies, seeds, commands, run-times and the script generating each figure and table. Data are synthetic and produced by the code.
+
+\textbf{AI use statement.} This research---idea formation, experimental design, code, execution of experiments, analysis and writing---was carried out end to end by an autonomous AI agent (Claude Sonnet 5.5, Anthropic) running unattended; no human edited the content. The agent wrote and ran all code and read all numbers in the paper from the raw run logs and the analysis outputs shipped with the code. References were checked with a literature-search tool (titles and abstract snippets only); bibliographic details beyond that were written from the agent's recollection and may contain errors. Generative AI was not used to produce any data. The submitting party is responsible for the final content.
+
+\textbf{Ethics statement.} The work uses only synthetic data and small models and raises no ethical concerns that we are aware of.
+
+\bibliography{refs}
+\bibliographystyle{iclr2027_conference}
+
+\appendix
+\section{Pre-registration and deviations}
+\label{app:prereg}
+The hypotheses in the Introduction were written to \texttt{PREREG.md} while the main width sweep (E1) was running, before any E1 result was inspected, and are reproduced in the supplementary material. They were formulated \emph{after} a one-seed-per-width pilot ($p{=}59$, same settings, \texttt{results/pilot2}) which suggested that larger widths fit early and generalise sooner and that the smallest widths fit and generalise jointly; the direction of S1 is therefore not a blind prediction, but it is tested on 8 fresh seeds and on other settings. An addendum to \texttt{PREREG.md}, written after E1 was nearly complete and its weight norms had been inspected, adds M1--M3 (E2 and E5 were then designed to test them out-of-sample). Deviations and failures: (1) the planned $d{=}12$ and $d{=}192$ points of E1 were dropped when we discovered the container is limited to 4 CPUs (not the 40 reported by \texttt{nproc}); (2) the first launch of E3 crashed because $d{=}6$ is not divisible by 4 heads, we removed $d{=}6$ and re-ran E3 (completed runs were reused); (3) the one-seed pilot also included an MLP sweep at wd$=1$ in which widths $\le64$ had not generalised after 20k steps---this is why the MLP experiment in Section~\ref{sec:other} also uses wd$=5$.
+
+\section{Additional tables}
+\begin{table}[h]
+\caption{Optimiser clock (E2), medians over 3 seeds per cell. ``--'': no run generalised. clock $=\tgen\cdot$lr$\cdot$wd; $\|\theta\|_{\mathrm{gen}}$: mean norm at $\tgen$ over generalising runs.}
+\label{tab:e2}
+\begin{center}\small
+\input{../tables/e2_tab.tex}
+\end{center}
+\end{table}
+
+\begin{table}[h]
+\caption{Rescaling intervention (E5), 4 seeds per cell, $c{=}1$ from E1 (same seeds). Delay $=\tgen-\tfit$ (median over generalising runs).}
+\label{tab:e5}
+\begin{center}\small
+\input{../tables/e5_tab.tex}
+\end{center}
+\end{table}
+
+\section{Reproduction details}
+\label{app:repro}
+The supplementary material contains the full repository (\texttt{README.md}): environment (Python 3.11.2, PyTorch 2.15.0 CPU, numpy 2.4.6, scipy 1.17.1, matplotlib 3.11.2, pandas 3.1.0), the exact commands, seeds, estimated cost and a figure/table-to-script map. Data are generated in memory (no download, no version). Runs take 1--40 minutes on one CPU thread; the whole study used about 47 CPU-hours (Table~\ref{tab:cost}). Raw per-run learning curves for every experiment are included (\texttt{results/*/*.json}), so all analysis can be re-run without retraining. Seeds: model initialisation \texttt{torch.manual\_seed(seed)}, split \texttt{Generator(10000+seed)}. The one-seed exploratory pilot (\texttt{results/pilot2}) used an earlier version of the logging code and is not used for any reported number except in the narrative of Appendix~\ref{app:prereg}.
+
+\begin{table}[h]
+\caption{Compute per experiment (sum of per-run wall time on a 4-core quota container, which includes CPU contention).}
+\label{tab:cost}
+\begin{center}\small
+\begin{tabular}{llrr}
+\toprule
+exp. & content & runs & core-hours\\
+\midrule
+E1 & width sweep, $p{=}59$ & 64 & 8.3\\
+E2 & lr/wd clock grid & 63 (+9 copied from E1) & 6.2\\
+E3 & gate vs $N$ & 90 & 2.8\\
+E4 & MLP, depth, $d_{\mathrm{mlp}}$ & 76 & 10.7\\
+E5 & rescaling & 64 & 6.9\\
+E6 & other operations & 32 & 10.5\\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\end{document}

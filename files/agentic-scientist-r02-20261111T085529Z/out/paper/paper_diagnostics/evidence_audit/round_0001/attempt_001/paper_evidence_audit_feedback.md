@@ -1,0 +1,30 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T10:19:36.813840+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `4`
+- audit_json_path: `work/results/r02/claude/20261111_085834/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/r02/claude/20261111_085834/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/r02/claude/20261111_085834/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+The headline numbers match paper_data.json, derived_stats.json and the evaluator source, but four visible claims go beyond the evidence: the final-plane control count and durations, a selection-bias statement that contradicts the Results text, a citation-backed trade-off claim, and the handling of vacuous controls.
+
+## Findings
+- `final-control-count-unsupported` (Results (Table 1), Abstract, Appendix Table of per-seed scores): The sealed final evidence retains only controls_passed_fraction=1.0 and n_failed_episodes=0. The number of final-plane controls, their placement, and whether the five final episode durations include control episodes are not retained. The controls are the C1/C2/C3 CONTROL_PLAN in the search-plane evaluator source, which that file labels as the part that differs between planes. The paper itself says the final evaluator source and case manifest are not retained.
+  - claim: Table 1 reports "Negative controls passed: 3 of 3 (fraction 1.0)". The Results text says "all three negative controls passed". The per-seed table caption says final durations include "control episodes".
+  - evidence: paper_data.json final_evaluation.metrics.controls_passed_fraction=1.0 (no control count). final_evaluation.evaluation_evidence.episodes has 5 per-seed entries (seeds 9001-9005) with no control annotation. source_evidence/evaluator/evaluate.py lines 40-43 set PLANE="search" and CONTROL_PLAN. claims_grounding.json claim[5] cites only controls_passed_fraction and n_failed_episodes. paper.tex Appendix Evaluation protocol details: "The final evaluator source file is not separately retained".
+  - requested_fix: Replace "3 of 3" and "all three negative controls" with "all negative controls passed (fraction 1.0)". State that the number of final-plane controls is not retained. Remove "includes control episodes" from the per-seed table caption, or say that what the durations cover is not recorded.
+- `selection-bias-contradiction` (Discussion (Threats to validity) vs Results (Development-to-final difference)): The manuscript asserts selection bias as a fact in one place and disclaims any statement about selection effects in another. The evidence does not isolate the cause of the 0.9192 to 0.8416 drop. The grounded claim reads "cause not isolated". V2 and V3 tied exactly, and no selection-effect measurement exists.
+  - claim: Threats to validity: "The development score was used to select the configuration, so development numbers are optimistic selection-biased proxies". Results: "the retained artifacts do not isolate the cause, so we make no statement about selection effects or over-fitting."
+  - evidence: claims_grounding.json claim[16] ("cause not isolated"). paper.tex Results subsection "Development-to-final difference". paper.tex Discussion "Threats to validity". paper.tex Appendix inventory table lists the cause of the development-to-final drop as not retained.
+  - requested_fix: Reword the Threats sentence to say that development numbers may be optimistic because the configuration was chosen on them. Say that this was not measured and that the cause of the development-to-final drop is not isolated, consistent with the Results section.
+- `intro-tradeoff-citation-overreach` (Introduction and Related Work (Conditional validity)): The retained reference metadata give only titles, venues and years, and claims_grounding.json limits these citations to "titles and venues only". A general coverage/set-size/shift trade-off finding is not supported by the three cited titles. The phrases "label-dependent" and "few calibration examples" go beyond the titles ("Bias reduction through conditional conformal prediction", "Conformal Prediction for Long-Tailed Classification").
+  - claim: Intro: "Variants that address one of these questions typically do so at the cost of another \citep{Gibbs2023ConformalPW,Ding2023ClassConditionalCP,Kiyani2024LengthOI}". Related work: "Conditional conformal prediction has long been studied as a way to reduce bias in label-dependent coverage" (Löfström2015BiasRT). Related work also says class-wise work addresses classes that "have few calibration examples" (Ding2025ConformalPF).
+  - evidence: references_provenance.json titles for these keys. claims_grounding.json related-work claims, each marked "(descriptions limited to titles and venues)". paper.tex Appendix: "Bibliographic descriptions in Section Related rely on titles and venues in the retrieval metadata only."
+  - requested_fix: Remove the citations from the trade-off sentence, or rephrase it as the authors' own motivation without attributing the finding to those papers. Limit the Löfström and Ding2025 descriptions to what their titles state (conditional conformal prediction for bias reduction, and long-tailed classification).
+- `vacuous-control-misdescribed` (Appendix (Evaluation protocol details)): In the evaluator a vacuous control is not discarded. control_verdicts records it as a failed control (False, "vacuous_control"), and a failed control makes the run not correct. The paper's wording therefore misdescribes the validity rule.
+  - claim: Appendix: "A control episode is discarded as vacuous if fewer than half of the permuted labels changed."
+  - evidence: source_evidence/evaluator/evaluate.py: the vacuous flag is set at lines 819 and 823 when change_frac < 0.5. In control_verdicts (around line 854), if o["vacuous"] the verdict is (False, "vacuous_control"). aggregate sets controls_ok to all verdicts passing, and correct requires controls_ok.
+  - requested_fix: Change the sentence to say that a control episode whose permutation changes fewer than half of the labels is counted as a failed control (vacuous_control), which invalidates the run.

@@ -1,0 +1,32 @@
+# Agentic evidence audit
+
+- verdict: `fail`
+- finding_count: `4`
+
+## Summary
+The headline numbers match the evaluator metrics and derived files, but the manuscript overstates the regime gap as statistically unambiguous and states implementation, protocol and qualification details that no inspectable artifact supports.
+
+## Findings
+### 1. regime-gap-statistical-overclaim — Introduction (Answer paragraph)
+- claim: The dominant, statistically unambiguous finding is a large gap between regimes: MAE is 0.0409 for stronger-than-source targets versus 0.0179 for random targets
+- issue: Nothing in the evidence trail gives an interval or test for the regime gap, so the wording overclaims. The only bootstrap intervals are for the gain over the best baseline. The Results text also says part of the gap may be statistical structure that was not tested, and that baselines were not measured per regime.
+- evidence: paper_data.json final_evaluation.metrics holds only point values for mae_random_targets, mae_strong_targets and the two Spearman values. The only ci_* keys cover delta_mae and delta_score vs best baseline and vs random mean. paper.tex Results subsection on extrapolation says the difference may partly reflect narrower strong-target score ranges and that this was not tested. claims_grounding.json claim[9] grounds point estimates only.
+- requested_fix: Replace "statistically unambiguous" with "the largest measured difference, reported as point estimates without an interval". Keep the confound caveat next to it, and align the abstract and conclusion wording with this.
+
+### 2. estimator-details-no-source-evidence — Method (Selected estimator, Source-validated stacking) and Supplementary Information (Estimator details of the selected configuration)
+- claim: Appendix hyperparameters (maximum rank 12, eight Newton sweeps, L2 penalties 0.5/0.05/1.0, rank order 2,3,1,5 under a 45-second budget, residual-variance floor, fallback blend 0.7/0.3), the Method folds (five random folds; strongest 20% and 10% held out; fifteen configurations kept), and the extension details (bagged ranks 2/3/4, Laplace posterior mean, tail correction above the source median). The text says these values are read from the source of the evaluated configuration.
+- issue: The paper claims source-level provenance, but no source_evidence directory or program source is readable in the audit workspace. claims_grounding.json has no claim for any of these implementation details. paper_data.json holds only scores, episode timings and sha256 hashes, which show provenance rather than support for the details.
+- evidence: ls ./source_evidence fails (directory absent). claims_grounding.json claims 1-18 cover only metrics, counts and citations. scientific-evidence/verification-report.json anchors only metric and figure-input references. paper_data.json top_programs entries have only combined_score, episode scores and durations, and sha256 values.
+- requested_fix: Remove the numeric hyperparameter lists, the time budget and the fold and fallback specifics, or recast them as unverified design intent. Delete the sentence "These values are read from the source of the evaluated configuration" unless source evidence is supplied.
+
+### 3. protocol-baseline-control-specifics-ungrounded — Experimental Protocol, Negative controls, Compared approaches, Supplementary Information (Reproducibility and Evaluation protocol)
+- claim: Controls "were evaluated on a single benchmark and seed"; the IRT-style baseline is "three-dimensional... Adam (200 iterations)"; baselines "ignore" the regime label; the evaluator uses "bit-packed rows" in at most two chunks; numpy 2.5.4 / scipy 1.18.1 / scikit-learn 1.9.1 / joblib 1.6.0, eight BLAS threads, MIT license; Zhang et al. compare "eleven" methods
+- issue: None of these specifics appears in claims_grounding.json, the paper_data.json grounding sources, or the derived metrics files, and no evaluator or candidate source is available to inspect. The control claim is particularly unsupported because the control metrics are aggregate deltas with no benchmark or seed breakdown. references_provenance.json records only titles, venues and years for the cited papers.
+- evidence: paper_data.json final_evaluation.metrics has control_permuted_* and control_constant_* as single aggregate numbers. The evaluator-protocol descriptions in paper_strategy.json are internal planning notes, not inspectable evaluator source. references_provenance.json entry for Zhang2025HowBP has no abstract. The appendix cites no evidence refs for the software, license or thread statements.
+- requested_fix: Delete or qualify as unverified the single-benchmark-and-seed statement, the IRT-style and baseline implementation specifics, the regime-label asymmetry statement, the transfer and chunking detail, the software versions and thread count, the license, and the "eleven methods" count, unless a readable source supports them.
+
+### 4. qualification-gate-enumeration-contradiction — Experimental Protocol (Controls and qualification) and Supplementary Information (Final evaluation details)
+- claim: by the task contract this denotes protocol validity (all episodes and both controls completed, required baselines completed, the permutation control non-vacuous)... no gate-level diagnostics are available
+- issue: The paper lists specific qualification criteria, including a non-vacuous permutation control and completed required baselines, and says they are what "qualified" denotes. It then says no gate-level diagnostics exist. The evidence supports only the outcome, status and correct fields plus episode counts. Naming particular gate criteria as the basis for "qualified" is not evidence-backed and conflicts with the paper's own disclosure.
+- evidence: paper_data.json final_evaluation has outcome=qualified, status=completed, correct=true, evaluation_evidence.candidate_diagnostics_trust=unverified, and no gate or criterion fields. claims_grounding.json claim[0] states only that outcome is qualified, status completed, correct true, "protocol validity only". The per-criterion list has no grounding source.
+- requested_fix: State only that the evaluator labeled the final evaluation qualified with completed status, that 32 of 32 episodes completed, and that candidate diagnostics are marked unverified. Remove the parenthetical list of gate criteria, or label it as the task's stated intent and not as verified gate results.
