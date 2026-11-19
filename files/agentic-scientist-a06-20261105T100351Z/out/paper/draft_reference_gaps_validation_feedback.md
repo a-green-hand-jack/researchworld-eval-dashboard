@@ -1,0 +1,5 @@
+# Draft Reference Gaps Validation Feedback
+
+- generated_at: `2026-11-06T05:48:39.607510+00:00`
+- paper_dir: `work/results/a06/codex/20261105_100448/paper`
+- ok: `True`

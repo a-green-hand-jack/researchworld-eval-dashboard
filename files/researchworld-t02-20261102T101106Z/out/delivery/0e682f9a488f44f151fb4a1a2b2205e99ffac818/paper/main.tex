@@ -1,0 +1,251 @@
+\documentclass{article}
+\usepackage{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts,amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\graphicspath{{../figures/}}
+
+\newcommand{\tfit}{t_{\mathrm{fit}}}
+\newcommand{\tgen}{t_{\mathrm{gen}}}
+
+\title{Width and the Delay of Generalization on Modular Arithmetic: A Censoring-Aware, Falsifiable Test}
+\author{Anonymous Author(s)}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+In grokking, a network fits its training set long before it generalizes.
+We ask how this delay depends on model width on modular addition ($p=53$), and test a falsifiable account whose predictions (A1--A3) and decision rules were written down before the main analysis; the plan was amended once after partial results, and the negligibility bands used to label verdicts were fixed after seeing the results.
+All 156 distinct runs (single-layer transformers, plus an MLP and multiplication as robustness checks) are kept, including the ones that never generalize within the step budget, which we treat as right-censored.
+Under fixed learning rate, weight decay and initialization, wider transformers generalize sooner: the censoring-aware slope of $\log t_{\text{gen}}$ per doubling of width is $-0.25$ (95\% CI $[-0.38,-0.10]$, widths $16$--$256$, 5 seeds per width), but the interval's upper end sits at the edge of a negligible effect ($-0.10$) and restricted to widths $\ge32$ with a longer budget it includes zero ($-0.31$, $[-0.62,0.12]$); in 100{,}000-step checks with 3 seeds, 1 of 3 runs at width 16 and 2 of 3 at width 32 generalize, late (35{,}000--58{,}000 steps), so the 30{,}000-step cells at narrow widths are lower bounds; the width-8 net reaches 0.56--0.97 validation accuracy in most runs without reaching $99\%$ training accuracy, a separate regime that is not grokking.
+The inverse dependence of the delay on weight decay is in the predicted direction at both widths tested, with an exponent of $-1.01$ ($[-1.38,-0.66]$) at width 128 and a shallower, imprecise one at width 64.
+The proposed weight-norm mechanism is not supported: whether width acts only through the norm at fit depends on how the norm is measured (refuted with the total $L_2$ norm, which is collinear with width by construction, inconclusive with the per-parameter RMS norm), and a larger initial scale, which raises the norm at fit at width 128, shortens rather than lengthens the delay (direction-only, marginal); the intended norm-matched comparison could not be built, so mediation by the norm remains untested.
+With the learning rate scaled as $1/\sqrt d$ the width advantage is weaker (at widths 128 versus 32, 3/5 versus 2/5 runs generalize, against 5/5 versus 1/5 at fixed rate), but most scaled-rate runs are censored, so whether it depends on the learning rate stays open; and a critical-training-fraction shift with width is inconclusive.
+Results hold for one task family, one prime, a narrow width range and few seeds; we state where they are inconclusive.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+Grokking \citep{power2022grokking} is the delayed rise of validation accuracy long after the training set is fitted, first reported on small algorithmic tasks such as modular arithmetic.
+Existing explanations stress weight-norm dynamics \citep{liu2023omnigrok}, the relative efficiency of memorizing and generalizing circuits \citep{varma2023circuit}, and a lazy-to-rich transition \citep{kumar2024grokking}.
+Whether and how the delay depends on \emph{model scale} is less clear, yet the answer constrains these accounts and informs the choice of experimental settings: if the delay changed with width, then ``the'' grokking time of a task would be a property of the model as much as of the task.
+
+We study the width of a one-layer transformer (and of a small MLP) on modular addition, with depth, data and optimizer fixed.
+Instead of mapping the grid and describing it afterwards, we state a \emph{time-scale account} with three predictions and the results that would refute each (Section~\ref{sec:method}), and we report which survive.
+\textbf{Contributions.}
+(i) A pre-specified, censoring-aware analysis of grokking time versus width, with all censored runs kept, an explicit definition of the width below which a run does not fit the training data, and sensitivity to budget, threshold and learning-rate scaling.
+(ii) An interventional test of a weight-norm mechanism for the width effect (weight decay, initialization scale), which does \emph{not} support it.
+(iii) A scope map (training fraction, weight decay zero, MLP, multiplication) and an explicit list of what is inconclusive.
+We do not claim a general law: one prime, 3--5 seeds per cell, widths $8$--$256$.
+
+\section{Related work}
+\label{sec:related}
+Grokking was reported on small algorithmic datasets, including modular arithmetic, by \citet{power2022grokking}, with a training-set fraction dependence.
+\citet{nanda2023progress} reverse-engineer a one-layer transformer trained on modular addition and define progress measures that split training into memorization, circuit formation and clean-up; their setup (full-batch AdamW, weight decay $1$, one-layer ReLU transformer without LayerNorm) is our reference configuration.
+Several accounts of the delay exist.
+\citet{liu2023omnigrok} relate it to weight norm and the loss landscape and induce or remove it by changing initialization scale;
+\citet{varma2023circuit} explain it by the relative efficiency of memorizing and generalizing circuits;
+\citet{kumar2024grokking} tie it to a transition from lazy to rich training dynamics in a two-layer regression setting;
+\citet{davies2023unifying} put grokking and double descent in one framework \citep[see also][]{nakkiran2020deep}.
+Related studies of memorization during training are \citet{tirumala2022memorization} and \citet{morris2025memorize}, and fitting data without generalizing was examined by \citet{zhang2017rethinking}.
+Our setting differs from these works in what is varied: width is the controlled variable, with fixed depth, data fraction and optimizer, and the analysis is built around right-censored generalization times instead of discarding runs that do not generalize.
+We use AdamW \citep{loshchilov2017decoupled}.
+
+
+\section{Method}
+\label{sec:method}
+\paragraph{Task and data.}
+For a prime $p$ we enumerate all $p^2$ pairs $(a,b)$ with label $(a\circ b)\bmod p$ (addition in the main experiments; subtraction/multiplication where stated).
+A fraction $f$ of the pairs, chosen by a random permutation seeded per run, is the training set; all remaining pairs are the validation set and are evaluated in full.
+The main setting is $p=53$ and $f=0.4$. No external data are used.
+
+\paragraph{Models and the scale axis.}
+The main model is a one-layer decoder-only transformer on the tokens $[a,b,=]$, read out at the last position, with ReLU MLP, no LayerNorm and untied embeddings, as in \citet{nanda2023progress}.
+\emph{Scale is the model width $d$} ($d_{\text{model}}$); the number of heads (4, or 1 for $d<16$) and the MLP hidden size $4d$ follow $d$, depth is fixed at one layer, and the parameter count is reported per width.
+Embeddings are initialized $\mathcal N(0,1/d)$.
+A secondary architecture is an MLP on the concatenated embeddings of $a$ and $b$ with two hidden ReLU layers of size $4d$.
+
+\paragraph{Training.}
+Full-batch AdamW \citep{loshchilov2017decoupled} (learning rate $10^{-3}$, $\beta=(0.9,0.98)$, weight decay $1$ unless varied, 10-step linear warm-up), cross-entropy loss, at most 30{,}000 steps.
+In the primary (``fixed'') regime all hyperparameters are the same at every width.
+Train/validation accuracy, loss and the global $\ell_2$ weight norm are logged every 250 steps.
+
+\paragraph{Operational definitions (fixed before the main analysis).}
+$\tfit$ is the first logged step with training accuracy $\ge 0.99$, and $\tgen$ the first with validation accuracy $\ge 0.99$; the delay is $D=\tgen-\tfit$ (resolution 250 steps).
+A run without $\tgen$ in the budget is \emph{right-censored} at its last step; it is kept and handled by survival methods, never dropped or set to zero.
+
+
+\paragraph{The account and its pre-stated predictions.}
+We split $\tgen=\tfit+D$. The account says that weight decay must shrink the weight norm from the value at fit time to that of a generalizing solution, so $D\propto(\mathrm{lr}\cdot\mathrm{wd})^{-1}\log(\lVert\theta_{\text{fit}}\rVert/\lVert\theta^\ast\rVert)$, and width acts on $D$ only through $\tfit$ and $\lVert\theta_{\text{fit}}\rVert$.
+\textbf{A1} (direction): above a minimal width $w_{\min}$ (smallest width at which $\ge80\%$ of seeds reach training accuracy $0.99$), $\tgen$ is non-increasing in width; the estimand is the slope of $\log\tgen$ on $\log_2 d$.
+\textbf{A2} (mechanism): (i) $\log D$ has slope $-1$ in $\log\mathrm{wd}$; (ii) in a regression of $\log D$ on $\log\tfit$ and $\log\lVert\theta_{\text{fit}}\rVert$ the coefficient of $\log d$ is zero; (iii) at fixed width, a larger initialization scale (larger norm at fit) lengthens $D$.
+\textbf{A3} (scope): the training fraction needed for generalization decreases with width, the delay vanishes at large fraction, and nothing generalizes at $\mathrm{wd}=0$ within the budget.
+Competing readings are an independent width effect through circuit capacity (C1), a pure initialization-scale/lazy-rich effect (C2), and no width effect beyond noise (C3).
+A prediction is \emph{supported} if its 95\% CI lies wholly on the predicted side, \emph{refuted} if wholly on the other side, and \emph{inconclusive} otherwise; a CI containing a null value is never read as support for it, and unrun cells are never read as null results.
+No numerical ``negligible band'' was fixed in advance; we therefore state effect sizes with their CIs.
+
+\paragraph{Amendments made after seeing partial data (post hoc).}
+After the first partial main-sweep logs, the plan replaced ``nothing generalizes below $w_{\min}$'' by a per-run outcome classification: \emph{grok} (fits, then generalizes), \emph{direct} (generalizes without a separate fitting phase), \emph{memorize} (fits, does not generalize in the budget), \emph{neither}. The step budget was extended for narrow widths after a 100{,}000-step check, and wd and init-scale cells were added after a feasibility review. Sweeps for a fixed-split control and a second prime were planned and dropped for budget. These changes were made after seeing partial results and are therefore exploratory in nature. The negligibility bands used in Table~\ref{tab:verdict} (A1 slope $|s|<0.10$; A2(i) tolerance $|b+1|\le0.3$; init-scale slope $|s|<0.10$) were set after the full results were seen, as round values not tuned to the intervals.
+
+\paragraph{Statistics.}
+Medians of censored times are Kaplan--Meier medians with percentile bootstrap CIs over seeds (2000 resamples); a median can be undefined (``$>x$'') when more than half of the runs are censored.
+Trends use a Jonckheere--Terpstra-type permutation test with pairs ordered only where censoring permits, and a lognormal accelerated-failure-time (AFT) model with right censoring (bootstrap over runs within width, 500 resamples) for slopes.
+Grokking fractions carry Wilson 95\% intervals. A seed fixes both the initialization and the train/validation split, so seeds are independent draws of both.
+
+\section{Experiments}
+\label{sec:exp}
+All numbers below come from \texttt{results/*.csv|json}; Table~\ref{tab:main} and the figures are produced by the scripts listed in \texttt{paper/REPRODUCE.md}. Each cell has 5 seeds unless noted. The default step ceiling is 30{,}000.
+
+\subsection{A1: wider transformers generalize sooner under fixed hyperparameters}
+\label{sec:a1}
+Figure~\ref{fig:width} and Table~\ref{tab:main} show the main sweep.
+Training accuracy is reached within 250 steps (the logging resolution) for $d\ge64$, so there the delay is essentially $\tgen$; narrower nets fit more slowly ($\tfit$ median 500 at $d=32$, 1750 at $d=16$) and the width-8 net fits in only 1 of 5 runs.
+Generalization within 30{,}000 steps occurs in 0/5, 0/5, 1/5, 4/5, 5/5, 4/5 runs at $d=8,16,32,64,128,256$; the KM median of $\tgen$ is 18{,}000, 11{,}000 and 8{,}250 steps at $d=64,128,256$ (CIs in Table~\ref{tab:main}) and undefined below.
+Over all runs with censoring, $\tgen$ decreases with width (JT permutation $p=0.0002$), and the A1 slope over $d\ge w_{\min}=16$ is $-0.25$ per doubling (95\% CI $[-0.38,-0.10]$; 25 runs, 11 censored).
+On the pre-stated decision rule A1 is therefore \textbf{supported} (CI wholly below zero; at the 30{,}000-step budget its upper end $-0.10$ is at the edge of the post-hoc negligibility band $|{\rm slope}|<0.10$, so only marginally, and clearly at the 100{,}000-step budget), conditional on fixed learning rate, weight decay and initialization and on widths $16$--$256$; the 30{,}000-step cells at $d\le32$ are lower bounds on $\tgen$, and C3 (no width dependence) is refuted in this regime.
+At $d=8$ the picture differs: 4 of 5 runs never reach 99\% training accuracy, yet their final validation accuracy is 0.56--0.97, so these runs show substantial validation accuracy without a clean fit-then-generalize pattern (classified ``neither'' in Table~\ref{tab:main}); this width is not a grokking case and is excluded from the slope.
+Three qualifications matter.
+(a) \emph{The 30{,}000-step ceiling censors the narrow widths.} In a 100{,}000-step check with 3 seeds at $d=16$ and $32$ (which reproduce the 30{,}000-step runs exactly), 1/3 and 2/3 runs generalize, the three that generalize doing so between 35{,}000 and 58{,}000 steps (KM median at $d=32$: 38{,}500). So with a longer budget some narrow runs generalize late, which shows that the 30{,}000-step cells are censored; with 3 seeds we cannot say what fraction of narrow runs ever generalize (Figure~\ref{fig:budget}). With these runs the slope is $-0.41$ $[-0.57,-0.25]$, but restricted to $d\ge32$ it is $-0.31$ $[-0.62,0.12]$, which includes zero: \emph{inconclusive} on that subrange.
+(b) \emph{Threshold.} The slope is stable for the $0.9$, $0.95$ and $1.0$ validation thresholds ($-0.38$, $-0.36$, $-0.24$; the $1.0$ analysis is censored at 22/25 runs because runs stop 500 steps after the $0.99$ crossing, so it is a bound on timing and weak: its interval $[-0.37,-0.10]$ reaches the band edge and is \emph{inconclusive}; the $0.9$ and $0.95$ analyses are exact and supported). We therefore re-ran the 13 grokked runs at $d\ge64$ (bit-identical to the originals up to $\tgen$) for 5{,}000 steps past the $0.99$ crossing: 9 of 13 reach validation accuracy $1.0$ (median lag 2{,}250 steps), and the exact $1.0$ slope over $d\ge64$ is $-0.28$ $[-0.55,0.02]$, against $-0.26$ $[-0.59,0.09]$ for the $0.99$ threshold on the same runs: the same estimate, inconclusive for both because only three widths are in the window.
+(c) \emph{It is not monotone in the grok fraction}: 4/5 at $d=64$, 5/5 at $128$, 4/5 at $256$; with five seeds this is within noise.
+The same direction appears for the MLP (JT $p=0.0002$, AFT slope $-0.38$ [$-0.40,-0.36$]); this CI is narrow because width 16 is fully censored at the ceiling and the AFT likelihood leans on the lognormal assumption, so we read it as direction only.
+Figure~\ref{fig:curves} shows the fit-then-generalize shape; survival curves and regime counts are in Appendix~\ref{app:figs}.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{width_trends_main.pdf}
+\caption{Timing versus width (one-layer transformer, addition mod 53, training fraction 0.4, AdamW, learning rate $10^{-3}$, weight decay 1; 5 seeds). (a) $\tgen$ over all runs; censored runs are open triangles at the ceiling and are kept. (b) $\tfit$ and (c) the delay exist only for runs that fit. Black: Kaplan--Meier median with 95\% bootstrap CI; arrow: median undefined. Shaded: widths below $w_{\min}$, excluded from the AFT slope printed below (a). Diamonds in (a): seeds 0--2 at $d=16,32$ re-run to a 100{,}000-step ceiling; the 30{,}000-step value there is a lower bound.}
+\label{fig:width}
+\end{figure}
+
+\input{../figures/tables/t1_main.tex}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{curves_main.pdf}
+\caption{Training (a) and validation (b) accuracy during training for the main sweep (thin: single seeds, thick: median per width; logarithmic step axis).}
+\label{fig:curves}
+\end{figure}
+
+
+\subsection{A2: the weight-norm mechanism is not supported; only the weight-decay scaling survives}
+\label{sec:a2}
+\textbf{(i) Weight decay.} Varying weight decay over $\{0.5,1,2\}$ at fixed learning rate, the slope of $\log D$ on $\log\mathrm{wd}$ is $-1.01$ $[-1.38,-0.66]$ at $d=128$ (consistent with $-1$) and $-0.61$ $[-1.05,-0.12]$ at $d=64$ (also consistent with $-1$, but wide and not close to it in its point estimate; Figure~\ref{fig:wd}a). At $d=64$ the dependence is not monotone: the median delay is 17{,}750 at wd=1 and 23{,}500 at wd=2, so the fitted slope rests on the wd=0.5 cell, which has a 60{,}000-step ceiling. Against the tolerance $|b+1|\le0.3$ neither interval lies wholly inside $[-1.3,-0.7]$, so we call the exponent of A2(i) \emph{inconclusive}; the direction (slope $<0$) is supported at both widths and not refuted.
+\textbf{(ii) Mediation by norm.} We regress $\log D\sim\log\tfit+\log\lVert\theta_{\text{fit}}\rVert+\log d$ over all 66 transformer runs with $f=0.4$ (24 censored) and read ``width acts only through the norm'' as refuted if the width coefficient's interval excludes zero. The answer depends on the norm measure. With the \emph{total} $L_2$ norm the width coefficient is $-0.57$ $[-1.17,-0.13]$ (``refuted''), but the total norm grows with $\sqrt{\#\text{parameters}}$, hence about linearly in width, so it is collinear with width by construction (it rises from 23.5 at $d=8$ to 49.3 at $d=256$ while the delay shrinks). With the \emph{per-parameter RMS} norm ($L_2/\sqrt{\#\text{parameters}}$) the width coefficient is $+0.59$ $[-0.83,2.26]$: \emph{inconclusive}; the norm coefficient without width is $0.52$ $[0.13,0.89]$ (positive as predicted, but not beyond the negligibility band, inconclusive), against $-0.95$ $[-2.18,0.56]$ for the total norm. On the 26 main-sweep runs (five widths) the width coefficients have opposite signs under the two measures ($-1.70$ $[-4.26,-0.85]$ and $+3.68$ $[0.34,12.6]$), which shows that the regression cannot separate width from norm there. We therefore call A2(ii) \emph{inconclusive (refuted only under the total $L_2$ norm)}. The norm at $\tgen$ is contaminated by the outcome and is not used.
+\textbf{(iii) Initialization scale.} Multiplying all initial parameters by $\alpha\in\{0.5,1,2\}$ raises the norm at fit (at $d=128$: 39.1, 42.8, 48.3), yet shortens generalization: the slope of $\log\tgen$ on $\log\alpha$ is $-0.57$ $[-0.95,-0.08]$ at $d=128$ and $-0.18$ $[-0.44,-0.01]$ at $d=32$ (borderline; Figure~\ref{fig:wd}b). This is a \emph{total} effect of initialization scale. At $d=128$ the norm at fit rises with $\alpha$ while $\tgen$ falls, a direction opposite to ``larger norm $\Rightarrow$ longer delay'' (direction-only: the interval is wholly below zero); under the strict band reading the verdict is \emph{inconclusive}, since the interval's upper end, $-0.08$, lies above the band edge $-0.10$. At $d=32$ the norm at fit is not monotone in $\alpha$ (34.0, 32.6, 34.8), so it is \emph{not tested} there. A norm-matched comparison was not achievable (the lowest norm at $d=128$, 39.1, still exceeds that of $d=32$ at $\alpha=1$, 32.6; $\alpha<0.5$ was not run), so mediation through the norm at fit remains untested by intervention.
+Overall the account's norm-mediation mechanism is \emph{not supported}: no test supports it and two point against it, neither decisively (ii, iii); only the weight-decay scaling (i) survives, as a time scale not shown to run through the norm. The data do not separate an independent capacity effect (C1) from an initialization-scale-only effect (C2); and since the lr-rescaling check (3--5 seeds, mostly censored) cannot exclude that part of the width advantage depends on the fixed-learning-rate regime, C1 is at most one compatible reading.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{wd_alpha.pdf}
+\caption{(a) Delay versus weight decay at widths 64 and 128 (dashed: AFT fit; slope $-1$ is the prediction); the wd=0 control (width 64) did not generalize in 0/3 runs. (b) $\tgen$ versus initialization-scale multiplier at widths 32 and 128. Markers as in Figure~\ref{fig:width}.}
+\label{fig:wd}
+\end{figure}
+
+\subsection{A3 and scope: training fraction, parametrization, other tasks}
+\label{sec:a3}
+\textbf{Training fraction} (Figure~\ref{fig:frac}). At $f=0.25$ none of 5+5 runs at $d=32$ or $128$ generalize (mean final validation accuracy 0.02 and 0.10); at $f=0.4$, $1/5$ runs generalize at $d=32$ (Wilson $[0.04,0.62]$) versus $5/5$ at $d=128$ ($[0.57,1.0]$), the pre-stated pattern ``5/5 versus $\le1/5$'' holds, but with five seeds the Wilson intervals overlap, so this contrast alone is inconclusive; at $f=0.5$ all runs generalize at both widths, and the wider net is faster (KM median $\tgen$ 2{,}750 vs 9{,}000). The width contrast in the fraction that generalizes is thus seen at $f=0.4$ only, not at $0.25$ or $0.5$, so a critical-fraction shift with width is \emph{inconclusive}; by the Wilson rule, the supported contrasts are $f=0.5$ versus $0.25$ ($5/5$ versus $0/5$ at both widths) and $f=0.4$ versus $0.25$ at $d=128$, and at $f=0.5$ width still shortens $\tgen$. A finer fraction grid was not run. The delay does not vanish at $f=0.5$ (2{,}500 steps at $d=128$), so ``delay vanishes at large $f$'' is untested within our range.
+\textbf{Weight decay zero} (width 64, 3 seeds): 0/3 generalize in 30{,}000 steps (Wilson upper bound $0.56$); this is consistent with A3 but has low power with three seeds, and is not a strong test.
+\textbf{Parametrization} (learning rate multiplied by $\sqrt{64/d}$; 5 seeds at $d\in\{32,128\}$, 3 seeds at $d\in\{16,64,256\}$). At $d=32$ and $128$, $2/5$ and $3/5$ runs generalize (fixed rate: $1/5$ and $5/5$); the width contrast has Fisher $p=1.0$ in the scaled arm and $0.048$ at fixed rate. Over $d=16,\dots,256$ (3 seeds each) $0,0,3,1,1$ of 3 generalize against $0,0,3,3,2$ at fixed rate. The scaled-rate AFT slope is degenerate (10 of 15 runs censored, its bootstrap interval collapses to $[-0.05,0.00]$) and inconclusive, whereas the fixed-rate slope on the same 15 runs is $-0.20$ $[-0.32,-0.07]$. The width advantage at $d\ge128$ is thus weaker when the learning rate is scaled with width, but 30{,}000 steps censor most scaled-rate runs, so we can neither exclude nor confirm a dependence on the learning rate; all conclusions are stated \emph{under fixed learning rate, weight decay and initialization}.
+\textbf{Other settings.} Two-hidden-layer MLPs show the same direction with faster generalization (KM median $\tgen$ 13{,}000, 8{,}000, 6{,}750, 6{,}000 at $d=32,64,128,256$; Table~\ref{tab:scope}, Figure~\ref{fig:scope}). Modular multiplication (2 widths $\times$ 3 seeds, $d=64,128$): all 6 runs generalize, KM median 22{,}500 versus 19{,}000 steps, CIs overlapping.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{frac.pdf}
+\caption{(a) Fraction of seeds generalizing within 30{,}000 steps versus training fraction, with Wilson 95\% intervals ($n=5$ per point, 2 at $f=0.3$, $d=16$). (b) KM median $\tgen$ versus fraction (arrow: undefined).}
+\label{fig:frac}
+\end{figure}
+
+\subsection{Summary of verdicts}
+\begin{table}[h!]
+\centering\small
+\caption{Pre-stated predictions and outcomes under the decision rule of Section~\ref{sec:method}. Evidence: \texttt{results/main\_stats.json}, \texttt{sens\_stats.json}, \texttt{mech\_stats.json}, \texttt{*\_cells.csv}.}
+\label{tab:verdict}
+\begin{tabular}{p{0.27\linewidth}p{0.18\linewidth}p{0.45\linewidth}}
+\toprule
+Prediction & Outcome & Basis \\
+\midrule
+A1 wider $\Rightarrow$ earlier $\tgen$ ($d\ge16$, fixed lr/wd/init) & supported & slope $-0.25$ $[-0.38,-0.10]$ (30k); $-0.41$ $[-0.57,-0.25]$ (100k, narrow widths); MLP $-0.38$; inconclusive on $d\ge32$ alone ($-0.31$ $[-0.62,0.12]$) \\
+A2(i) $D\propto 1/\mathrm{wd}$ & direction supported; exponent inconclusive & $-1.01$ $[-1.38,-0.66]$ ($d=128$); $-0.61$ $[-1.05,-0.12]$ ($d=64$); neither inside $[-1.3,-0.7]$ \\
+A2(ii) width acts only via $\tfit$ and norm at fit & inconclusive (refuted only under total $L_2$) & width coefficient $-0.57$ $[-1.17,-0.13]$ (total $L_2$); $+0.59$ $[-0.83,2.26]$ (per-parameter RMS); the two norms are collinear with width differently \\
+A2(iii) init scale / norm matching & direction-only against ($d=128$); verdict inconclusive; not tested at $d=32$ & $\log\tgen$ slope in $\log\alpha$ $-0.57$ $[-0.95,-0.08]$ ($d=128$), norm rises with $\alpha$; norm matching not achievable \\
+A2 mechanism overall & not supported & no test supports it; two point against, neither decisive \\
+A3 critical fraction shifts with width & inconclusive & 1/5 vs 5/5 at $f=0.4$; 0/5 vs 0/5 at $0.25$, 5/5 vs 5/5 at $0.5$ \\
+A3 no grokking at wd=0 & consistent, low power & 0/3 (Wilson upper bound 0.56) \\
+A3 delay vanishes at large $f$ & untested & max $f=0.5$ \\
+Parametrization (lr $\propto 1/\sqrt d$) & open (flag) & $d=128$ vs $32$: 3/5 vs 2/5 (scaled), 5/5 vs 1/5 (fixed), Fisher $p=1.0$ vs $0.048$; scaled AFT slope inconclusive (10/15 censored) \\
+C3 no width effect & refuted (fixed regime) & A1 slope, JT test \\
+C1 vs C2 & not separable; C1 one compatible reading & A2(ii), A2(iii), lr-rescaling \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion and limitations}
+\label{sec:disc}
+Under fixed learning rate, weight decay and initialization, a wider transformer generalizes sooner on this task, and the delay's inverse dependence on weight decay is consistent with a weight-decay-driven cleanup time scale. The weight-norm mechanism we proposed for the width effect is not supported: whether width keeps a coefficient after conditioning on the norm at fit depends on the norm measure (yes for the total $L_2$ norm, which is collinear with width; inconclusive for the per-parameter RMS norm), and at $d=128$ the intervention that raises the norm at fit (larger initial scale) shortens the delay; a norm-matched test was not feasible. The initial-scale result is a total effect, compatible with larger initial scale favoring richer feature learning \citep{kumar2024grokking,liu2023omnigrok}, but we did not test this, and we cannot separate an independent capacity effect from an initialization-scale effect.
+
+\paragraph{Limitations and failure cases.}
+(1) One task family and prime ($p=53$), mostly addition; multiplication with 3 seeds and 2 widths.
+(2) Width range $8$--$256$ at one layer; depth and the number of heads were not varied (heads change from 1 to 4 between $d=8$ and $d\ge16$).
+(3) Five seeds per cell (3 for several controls); intervals are wide, and several verdicts are ``inconclusive'' or ``narrow''. The $d=16$ and $d=32$ medians are undefined at the 30{,}000-step ceiling.
+(4) Hyperparameters are fixed across width; the learning-rate-scaled check weakens the width advantage at $d\ge128$ but is mostly censored at 30{,}000 steps (3--5 seeds), so it neither excludes nor confirms a dependence, and we did not tune each width.
+(5) A1 uses a lognormal AFT model; its CIs are bootstrap intervals conditional on that model. The logging interval of 250 steps bounds the resolution of $\tfit$ (which is at the resolution for $d\ge64$).
+(6) Not run: the split-seed versus init-seed separation, a second prime, the Nanda-configuration anchor ($p=113$), $\alpha<0.5$, a finer training-fraction grid, depth, optimizer and batch-size variation, and a norm-matched comparison; the exact $1.0$-threshold check covers only $d\ge64$ (inconclusive), and $0.9$/$0.95$ thresholds are exact. The 30{,}000-step cells at narrow widths are lower bounds on $\tgen$.
+(7) The plan was amended after partial data were seen (Section~\ref{sec:method}); the A2 regression is collinear in width and norm, the negligibility bands were fixed after the results were seen, and the post-hoc outcome classification is exploratory.
+(8) We did not use mechanistic diagnostics (Fourier or restricted-loss analyses), so claims about circuits are interpretations, not findings.
+
+\textbf{Reproducibility.} Code, run logs and the artifact map are in the delivered repository (\texttt{paper/REPRODUCE.md}); data are generated in memory.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\appendix
+\section{Additional figures and tables}
+\label{app:figs}
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{grok_survival_main.pdf}
+\caption{Probability of generalizing and survival of $\tgen$ by width.}
+\end{figure}
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{regimes_main.pdf}
+\caption{Outcome regimes per width.}
+\end{figure}
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{mechanism.pdf}
+\caption{Weight norm at the time the training set is fitted versus (a) $\tfit$ and (b) the delay, one point per run (colour: width). Circles: default initialization; squares: initialization scaled by 0.5 or 2. Open markers in (b): runs not generalized within the ceiling. Only runs that fitted the training set appear. Norm is the total $L_2$ norm.}
+\end{figure}
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{budget.pdf}
+\caption{Sensitivity of the width effect to step budget, threshold and architecture. (a) Seeds 0--2 at widths 16 and 32 under the 30{,}000-step ceiling (main) and a 100{,}000-step ceiling (long; identical through step 30{,}000); open triangles: not generalized at that ceiling. (b) Censoring-aware lognormal AFT slope of $\log\tgen$ on $\log_2 d$ over $d\ge w_{\min}$ with 95\% bootstrap CIs over runs (negative: wider generalizes sooner); right: censored/total runs. The first threshold-1.0 row is a censored bound only; the exact row re-ran widths $\ge64$ to validation accuracy 1.0. The learning-rate-scaled row is the AFT slope over widths 16--256 (seeds 0--2) with 10 of 15 runs censored, so its interval collapses toward 0 and is not evidence of no effect; the row beneath is the fixed-rate slope on the same runs.}
+\label{fig:budget}
+\end{figure}
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{scope.pdf}
+\caption{Secondary conditions. (a, b) Delay versus width for the MLP and for multiplication, shared $y$-axis. Filled: generalized; open triangle: right-censored at the ceiling. Black: Kaplan--Meier median with 95\% bootstrap CI; dashed grey: main-sweep medians. (c) Learning rate scaled as $\mathrm{lr}\sqrt{64/d}$ (blue) against fixed-rate main-sweep runs on the same seeds (grey), $\tgen$ on the $y$-axis because most scaled-rate runs do not generalize. Points: seeds 0--4 at $d=32,128$ and seeds 0--2 at $d=16,64,256$; lines: KM median over seeds 0--2.}
+\label{fig:scope}
+\end{figure}
+\input{../figures/tables/t2_scope.tex}
+\input{../figures/tables/t3_trend.tex}
+\input{../figures/tables/t4_mechanism.tex}
+\input{../figures/tables/t5_wd_alpha.tex}
+
+\section{Use of LLM agents}
+\label{app:llm}
+The study (plan, code, runs, analysis and manuscript) was carried out by LLM-based agents working as separate roles (planning, experiments, figures, venue, writing, review) under a human-specified task. They are not part of the studied method. All numbers in this paper come from the shipped run logs and analysis scripts; the agents' roles and hand-offs are recorded in the delivery repository's issue and pull-request history.
+
+\newpage
+\input{checklist.tex}
+\end{document}

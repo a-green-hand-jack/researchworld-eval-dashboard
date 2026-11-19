@@ -1,0 +1,1400 @@
+5 September 2023
+Explaining grokking through circuit efficiency
+Vikrant Varma*, 1, Rohin Shah*, 1, Zachary Kenton1, János Kramár1 and Ramana Kumar1
+*Equal contributions,1Google DeepMind
+One of the most surprising puzzles in neural network generalisation isgrokking: a network with perfect
+training accuracy but poor generalisation will, upon further training, transition to perfect generalisation.
+Weproposethatgrokkingoccurswhenthetaskadmitsageneralisingsolutionandamemorisingsolution,
+where the generalising solution is slower to learn but moreefficient, producing larger logits with the
+same parameter norm. We hypothesise that memorising circuits become more inefficient with larger
+training datasets while generalising circuits do not, suggesting there is a critical dataset size at which
+memorisation and generalisation are equally efficient. We make and confirm four novel predictions about
+grokking, providing significant evidence in favour of our explanation. Most strikingly, we demonstrate
+two novel and surprising behaviours:ungrokking, in which a network regresses from perfect to low test
+accuracy, andsemi-grokking, in which a network shows delayed generalisation to partial rather than
+perfect test accuracy.
+1. Introduction
+When training a neural network, we expect that once training loss converges to a low value, the
+network will no longer change much. Power et al. (2021) discovered a phenomenon dubbedgrokking
+that drastically violates this expectation. The network first “memorises” the data, achieving low
+and stable training loss with poor generalisation, but with further training transitions to perfect
+generalisation. We are left with the question: why does the network’s test performance improve
+dramatically upon continued training, having already achieved nearly perfect training performance?
+Recent answers to this question vary widely, including the difficulty of representation learning (Liu
+et al., 2022), the scale of parameters at initialisation (Liu et al., 2023), spikes in loss ("slingshots") (Thi-
+lak et al., 2022), random walks among optimal solutions (Millidge, 2022), and the simplicity of
+the generalising solution (Nanda et al., 2023, Appendix E). In this paper, we argue that the last
+explanation is correct, by stating a specific theory in this genre, deriving novel predictions from the
+theory, and confirming the predictions empirically.
+We analyse the interplay between the internal mechanisms that the neural network uses to
+calculate the outputs, which we loosely call “circuits” (Olah et al., 2020). We hypothesise that there
+are two families of circuits that both achieve good training performance: one which generalises well
+(𝐶gen) and one which memorises the training dataset (𝐶mem). The key insight is thatwhen there
+are multiple circuits that achieve strong training performance, weight decay prefers circuits with high
+“efficiency”, that is, circuits that require less parameter norm to produce a given logit value.
+Efficiency answers our question above: if𝐶genis more efficient than𝐶mem, gradient descent can
+reduce nearly perfect training loss even further by strengthening𝐶genwhile weakening𝐶mem, which
+then leads to a transition in test performance. With this understanding, we demonstrate in Section 3
+that three key properties are sufficient for grokking: (1)𝐶gengeneralises well while𝐶memdoes not,
+(2)𝐶genis more efficient than𝐶mem, and (3)𝐶genis learned more slowly than𝐶mem.
+Since 𝐶gengeneralises well, it automatically works for any new data points that are added to
+the training dataset, and so its efficiency should be independent of the size of the training dataset.
+In contrast,𝐶memmust memorise any additional data points added to the training dataset, and so
+Corresponding author(s): vikrantvarma@deepmind.com, rohinmshah@deepmind.com
+arXiv:2309.02390v1  [cs.LG]  5 Sep 2023
+Explaining grokking through circuit efficiency
+Train loss T est lossT est accuracy
+0 5 10
+Epochs 1e3
+101
+10 2
+10 5
+Loss
+0
+1
+(a) Grokking. The original be-
+haviour from Power et al. (2021).
+We train on a dataset with𝐷≫
+𝐷crit. As a result,𝐶genis strongly
+preferred to𝐶memat convergence,
+and we observe a transition to very
+low test loss (100% test accuracy).
+101 103 105
+Epochs
+101
+10 2
+10 5
+0
+1
+(b) Ungrokking. If we take a net-
+work that has already grokked and
+train it on a new dataset with𝐷 <
+𝐷crit, the network reverts to signif-
+icant memorisation, leading to a
+transition back to poor test loss.
+(Note the log scale for the x-axis.)
+0 2
+Epochs 1e7
+101
+10 2
+10 5
+0
+1
+Accuracy
+(c) Semi-grokking. When 𝐷 ∼
+𝐷crit, the memorising algorithm
+and generalising algorithm com-
+pete with each other at conver-
+gence, so we observe a transition
+to improved but not perfect test
+loss (test accuracy of 83%).
+Figure 1| Novel grokking phenomena.When grokking occurs, we expect there are two algorithms
+thatperformwellattraining: “memorisation”( 𝐶mem, withpoortestperformance)and“generalisation”
+(𝐶gen, with strong test performance). Weight decay strengthens𝐶genover𝐶memas the training dataset
+size increases. By analysing the point at which𝐶genand𝐶memare equally strong (the critical dataset
+size 𝐷crit), we predict and confirm two novel behaviours:ungrokking and semi-grokking.
+its efficiency should decrease as training dataset size increases. We validate these predictions by
+quantifying efficiencies for various dataset sizes for both𝐶memand𝐶gen.
+This suggests that there exists a crossover point at which𝐶genbecomes more efficient than𝐶mem,
+which we call the critical dataset size𝐷crit. By analysing dynamics at𝐷crit, we predict and demonstrate
+two new behaviours (Figure 1). Inungrokking, a model that has successfully grokked returns to poor
+test accuracy when further trained on a dataset much smaller than𝐷crit. Insemi-grokking, we choose
+a dataset size where𝐶genand𝐶memare similarly efficient, leading to a phase transition but only to
+middling test accuracy.
+We make the following contributions:
+1. We demonstrate the sufficiency of three ingredients for grokking through a constructed simula-
+tion (Section 3).
+2. By analysing dynamics at the “critical dataset size” implied by our theory, wepredict two novel
+behaviours: semi-grokking and ungrokking (Section 4).
+3. Weconfirmourpredictionsthroughcarefulexperiments, includingdemonstratingsemi-grokking
+and ungrokking in practice (Section 5).
+2. Notation
+We consider classification using deep neural networks under the cross-entropy loss. In particular, we
+are given a set of inputs𝑋, a set of labels𝑌, and a training dataset,D ={(𝑥1,𝑦∗1),... (𝑥𝐷,𝑦∗𝐷)}.
+For an arbitrary classifierℎ : 𝑋×𝑌→ ℝ, the softmax cross entropy loss is given by:
+Lx-ent(ℎ) =− 1𝐷 ∑︁(𝑥,𝑦∗)∈D log exp(ℎ(𝑥,𝑦∗))˝𝑦′∈𝑌 exp(ℎ(𝑥,𝑦′)). (1)
+The output of a classifier for a specific class is the classlogit, denoted by𝑜𝑦ℎ(𝑥) B ℎ(𝑥,𝑦). When the
+2
+Explaining grokking through circuit efficiency
+input 𝑥 is clear from context, we will denote the logit as𝑜𝑦ℎ. We denote the vector of the logits for all
+classes for a given input asﬁ𝑜ℎ(𝑥) orﬁ𝑜ℎ when 𝑥 is clear from context.
+Parametric classifiers (such as neural networks) are parameterised with a vector𝜃 that induces
+a classifierℎ𝜃. The parameter norm of the classifier is𝑃ℎ𝜃 B∥𝜃∥. It is common to addweight decay
+regularisation, which is an additional loss termLwd(ℎ𝜃) = 12(𝑃ℎ𝜃)2. The overall loss is given by
+L(ℎ𝜃) =Lx-ent(ℎ)+ 𝛼Lwd(ℎ𝜃), (2)
+where𝛼 is a constant that trades off between softmax cross entropy and weight decay.
+Circuits. Inspired by Olah et al. (2020), we use the termcircuit to refer to an internal mechanism by
+which a neural network works. We only consider circuits that map inputs to logits, so that a circuit𝐶
+induces a classifierℎ𝐶 for the overall task. We elide this distinction and simply write𝐶 to refer toℎ𝐶,
+so that the logits are𝑜𝑦𝐶, the loss isL(𝐶), and the parameter norm is𝑃𝐶.
+For any given algorithm, there exist multiple circuits that implement that algorithm. Abusing
+notation, we use𝐶gen(𝐶mem) to refer either to thefamily of circuits that implements the generalising
+(memorising) algorithm, or a single circuit from the appropriate family.
+3. Three ingredients for grokking
+Given a circuit with perfect training accuracy (as with a pure memorisation approach like𝐶memor a
+perfectly generalising solution like𝐶gen), the cross entropy lossLx-ent incentivises gradient descent
+to scale up the classifier’s logits, as that makes its answers more confident, leading to lower loss (see
+Theorem D.1). For typical neural networks, this would be achieved by making the parameters larger.
+Meanwhile, weight decayLwd pushes in the opposite direction, directly decreasing the parameters.
+These two forces must be balanced at any local minimum of the overall loss.
+When we havemultiple circuits that achieve strong training accuracy, this constraint applies to
+each individually. But how will they relate to each other? Intuitively, the answer depends on the
+efficiencyof each circuit, that is, the extent to which the circuit can convert relatively small parameters
+into relatively large logits. For more efficient circuits, theLx-ent force towards larger parameters is
+stronger, and theLwd force towards smaller parameters is weaker. So, we expect that more efficient
+circuits will be stronger at any local minimum.
+Given this notion of efficiency, we can explain grokking as follows. In the first phase,𝐶memis
+learned quickly, leading to strong train performance and poor test performance. In the second phase,
+𝐶genis now learned, and parameter norm is “reallocated” from𝐶memto𝐶gen, eventually leading to a
+mixture of strong𝐶genand weak𝐶mem, causing an increase in test performance.
+This overall explanation relies on the presence of three ingredients:
+1. Generalising circuit:There are two families of circuits that achieve good training performance:
+a memorising family𝐶memwith poor test performance, and a generalising family𝐶genwith good
+test performance.
+2. Efficiency:𝐶genis more “efficient” than𝐶mem, that is, it can produce equivalent cross-entropy
+loss on the training set with a lower parameter norm.
+3. Slow vs fast learning:𝐶genis learned more slowly than𝐶mem, such that during early phases of
+training𝐶memis stronger than𝐶gen.
+To illustrate the sufficiency of these ingredients, we construct a minimal example containing all
+three ingredients, and demonstrate that it leads to grokking. We emphasise that this example is to be
+3
+Explaining grokking through circuit efficiency
+treated as a validation of the three ingredients, rather than as a quantitative prediction of the dynamics
+of existing examples of grokking. Many of the assumptions and design choices were made on the
+basis of simplicity and analytical tractability, rather than a desire to reflect examples of grokking
+in practice. The clearest difference is that𝐶genand 𝐶memare modelled as hardcoded input-output
+lookup tables whose outputs can be strengthened through learned scalar weights, whereas in existing
+examples of grokking𝐶genand𝐶memare learned internal mechanisms in a neural network that can be
+strengthened by scaling up the parameters implementing those mechanisms.
+Generalisation. To model generalisation, we introduce a training datasetD and a test datasetDtest.
+𝐶genis a lookup table that produces logits that achieve perfect train and test accuracy.𝐶memis a lookup
+table that achieves perfect train accuracy, but makes confident incorrect predictions on the test dataset.
+We denote byDmem the predictions made by𝐶memon the test inputs, with the property that there is
+no overlap betweenDtest andDmem. Then we have:
+𝑜𝑦𝐺(𝑥) = 𝟙[(𝑥,𝑦)∈D or(𝑥,𝑦)∈D test]
+𝑜𝑦𝑀(𝑥) = 𝟙[(𝑥,𝑦)∈D or(𝑥,𝑦)∈D mem]
+Slow vs fast learning.To model learning, we introduceweights for each of the circuits, and use
+gradient descent to update the weights. Thus, the overall logits are given by:
+𝑜𝑦(𝑥) =𝑤𝐺𝑜𝑦𝐺(𝑥)+ 𝑤𝑀𝑜𝑦𝑀(𝑥)
+Unfortunately, if we learn𝑤𝐺 and 𝑤𝑀 directly with gradient descent, we have no control over the
+speedat which the weights are learned. Inspired by Jermyn and Shlegeris (2022), we instead compute
+weights as multiples of two “subweights”, and then learn the subweights with gradient descent.
+More precisely, we let𝑤𝐺 = 𝑤𝐺1𝑤𝐺2 and 𝑤𝑀 = 𝑤𝑀1𝑤𝑀2, and update each subweight according to
+𝑤𝑖←𝑤𝑖−𝜆·𝜕L/𝜕𝑤𝑖. The speed at which the weights are strengthened by gradient descent can then
+be controlled by the initial values of the weights. Intuitively, the gradient towards the first subweight
+𝜕L/𝜕𝑤1 depends on the strength of the second subweight𝑤2 and vice-versa, and so low initial values
+lead to slow learning. At initialisation, we set𝑤𝐺1 = 𝑤𝑀1 = 0 to ensure the logits are initially zero,
+and then set𝑤𝐺2 << 𝑤𝑀2 to ensure𝐶genis learned more slowly than𝐶mem.
+Efficiency.Above, we operationalised circuit efficiency as the extent to which the circuit can convert
+relatively small parameters into relatively large logits. When the weights are all one, each circuit
+produces a one-hot vector as its logits, so their logit scales are the same, and efficiency is determined
+solely by parameter norm. We define𝑃𝐺 and 𝑃𝑀 to be the parameter norms when weights are all one.
+Since we want𝐶gento be more efficient than𝐶mem, we set𝑃𝐺 < 𝑃𝑀.
+This still leaves the question of how to model parameter norm when the weights are not all one.
+Intuitively, increasing the weights corresponds to increasing the parameters in a neural network to
+scale up the resulting outputs. In a𝜅-layer MLP with Relu activations and without biases, scaling
+all parameters by a constant𝑐 scales the outputs by𝑐𝜅. Inspired by this observation, we model the
+parameter norm of𝑤𝐺𝐶𝐺 as𝑤1/𝜅𝐺 𝑃𝑖 for some𝜅 >0, and similarly for𝑤𝑀𝐶𝑀.
+Theoretical analysis.We first analyse the optimal solutions to the setup above. We can ignore the
+subweights, as they only affect the speed of learning:Lx-ent andLwd depend only on the weights, not
+subweights. Intuitively, to get minimal loss, we must assign higher weights to more efficient circuits –
+but it is unclear whether we should assignno weight to less efficient circuits, or merely smaller but
+still non-zero weights. Theorem D.4 shows that in our example, both of these cases can arise: which
+one we get depends on the value of𝜅.
+4
+Explaining grokking through circuit efficiency
+Train loss T est loss Gen logit Mem logit Parameter norm
+0 5 10
+Steps 1e3
+101
+100
+10 1
+10 2
+Loss
+0
+5
+10
+(a) All three ingredients.
+When 𝐶genis more efficient than
+𝐶membut learned slower, we
+observe grokking.𝐶genonly starts
+to grow significantly by step 2500,
+and then substitutes for 𝐶mem.
+Total parameter norm falls due to
+𝐶gen’s higher efficiency.
+0 5 10
+Steps 1e3
+101
+100
+10 1
+10 2
+Loss
+0
+5
+10
+(b) 𝐶genless efficient than𝐶mem.
+We set𝑃𝐺 > 𝑃𝑀. Since𝐶genis now
+less efficient and learned slower,
+it never grows, and test loss stays
+high due to𝐶memthroughout train-
+ing.
+0 5 10
+Steps 1e3
+101
+100
+10 1
+10 2
+Loss
+0
+5
+10
+(c) 𝐶genand 𝐶memlearned at
+equal speeds.We set𝑤𝐺1 = 𝑤𝑀1
+so they are learned equally quickly.
+𝐶genis prioritised at least as much
+as𝐶memthroughout training, due
+to its higher efficiency. Thus,
+test loss is very similar to train
+loss throughout training, and no
+grokking is observed.
+Figure 2| 𝐶genmust be learned slowly for grokking to arise.We learn weights𝑤𝑀 and𝑤𝐺 through
+gradient descent on the loss in Equation D.1. To model the fact that𝐶genis more efficient than𝐶mem,
+we set𝑃𝑀 > 𝑃𝐺. We see that we only get grokking when𝐶genis learned more slowly than𝐶mem.
+Experimental analysis.We run our example for various hyperparameters, and plot training and
+test loss in Figure 2. We see that when all three ingredients are present (Figure 2a), we observe
+the standard grokking curves, with a delayed decrease in test loss. By contrast, when we make the
+generalising circuit less efficient (Figure 2b), the test loss never falls, and when we remove the slow
+vs fast learning ingredient (Figure 2c), we see that test loss decreases immediately. See Appendix C
+for details.
+4. Why generalising circuits are more efficient
+Section 3 demonstrated that grokking can arise when𝐶genis more efficient than𝐶mem, but left open
+the question ofwhy 𝐶genis more efficient. In this section, we develop a theory based on training
+dataset size𝐷, and use it to predict two new behaviours:ungrokking and semi-grokking.
+4.1. Relationship of efficiency with dataset size
+Consider a classifierℎD obtained by training on a datasetD of size𝐷 with weight decay, and a
+classifierℎD′ obtained by training on the same dataset with one additional point:D′ =D∪{( 𝑥,𝑦∗)}.
+Intuitively,ℎD′ cannot bemore efficient thanℎD: if it was, thenℎD′ would outperformℎD even on
+justD, since it would get similarLx-ent while doing better by weight decay. So we should expect that,
+on average, classifier efficiency is monotonically non-increasing in dataset size.
+How does generalisation affect this picture? Let us suppose thatℎD successfully generalises to
+predict 𝑦∗ for the new input𝑥. Then, as we move fromD toD′,Lx-ent(ℎD) likely does not worsen
+with this new data point. Thus, we could expect to see the same classifier arise, with the same average
+logit value, parameter norm, and efficiency.
+Now supposeℎD instead fails to predict the new data point(𝑥,𝑦∗). Then the classifier learned for
+5
+Explaining grokking through circuit efficiency
+D′ will likely beless efficient:Lx-ent(ℎD) would be much higher due to this new data point, and so
+the new classifier must incur some additional regularisation loss to reduceLx-ent on the new point.
+Applying this analysis to our circuits, we should expect𝐶gen’s efficiency to remain unchanged
+as 𝐷 increases arbitrarily high, since𝐶gendoes need not to change to accommodate new training
+examples. In contrast,𝐶memmust change with nearly every new data point, and so we should expect
+its efficiency to decrease as𝐷 increases. Thus, when𝐷 is sufficiently large, we expect𝐶gento be more
+efficient than𝐶mem. (Note however that when the set of possible inputs is small, even the maximal𝐷
+may not be “sufficiently large”.)
+Critical threshold for dataset size.Intuitively, we expect that for extremely small datasets (say,
+𝐷 < 5), it is extremely easy to memorise the training dataset. So, we hypothesise that for these
+very small datasets,𝐶memis more efficient than𝐶gen. However, as argued above,𝐶memwill get less
+efficient as𝐷 increases, and so there will be a critical dataset size𝐷crit at which𝐶memand𝐶genare
+approximately equally efficient. When𝐷≫ 𝐷crit,𝐶genis more efficient and we expect grokking, and
+when 𝐷≪ 𝐷crit,𝐶memis more efficient and so grokking should not happen.
+Effect of weight decay on𝐷crit. Since 𝐷crit is determined only by the relative efficiencies of𝐶genand
+𝐶mem, and none of these depends on the exact value of weight decay (just on weight decay being
+present at all), our theory predicts that𝐷crit should not change as a function of weight decay. Of
+course, the strength of weight decay may still affect other properties such as the number of epochs till
+grokking.
+4.2. Implications of crossover: ungrokking and semi-grokking.
+By thinking through the behaviour around the critical threshold for dataset size, we predict the
+existence of two phenomena that, to the best of our knowledge, have not previously been reported.
+Ungrokking. Suppose we take a network that has been trained on a dataset with𝐷 > 𝐷crit and has
+already exhibited grokking, and continue to train it on a smaller dataset with size𝐷′ < 𝐷crit. In this
+new training setting,𝐶memis now more efficient than𝐶gen, and so we predict that with enough further
+training gradient descent will reallocate weight from𝐶gento𝐶mem, leading to a transition from high
+test performance to low test performance. Since this is exactly the opposite observation as in regular
+grokking, we term this behaviour “ungrokking”.
+Ungrokking can be seen as a special case of catastrophic forgetting (McCloskey and Cohen, 1989;
+Ratcliff, 1990), where we can make much more precise predictions. First, since ungrokking should
+only be expected once𝐷′ < 𝐷crit, if we vary𝐷′ we predict that there will be a sharp transition from
+very strong to near-random test accuracy (around𝐷crit). Second, we predict that ungrokking would
+arise even if we only remove examples from the training dataset, whereas catastrophic forgetting
+typically involves training on new examples as well. Third, since𝐷crit does not depend on weight
+decay, we predict the amount of “forgetting” (i.e. the test accuracy at convergence) also does not
+depend on weight decay.
+Semi-grokking. Suppose we train a network on a dataset with𝐷≈ 𝐷crit. 𝐶genand𝐶memwould be
+similarly efficient, and there are two possible cases for what we expect to observe (illustrated in
+Theorem D.4).
+In the first case, gradient descent would select either𝐶memor𝐶gen, and then make it the maximal
+circuit. This could happen in a consistent manner (for example, perhaps since𝐶memis learned faster
+it always becomes the maximal circuit), or in a manner dependent on the random initialisation. In
+either case we would simply observe the presence or absence of grokking.
+6
+Explaining grokking through circuit efficiency
+In the second case, gradient descent would produce a mixture of both𝐶memand 𝐶gen. Since
+neither𝐶memnor𝐶genwould dominate the prediction on the test set, we would expect middling test
+performance.
+𝐶memwould still be learned faster, and so this would look similar to grokking: an initial phase with
+good train performance and bad test performance, followed by a transition to significantly improved
+test performance. Since we only get to middling generalisation unlike in typical grokking, we call this
+behavioursemi-grokking.
+Our theory does not say which of the two cases will arise in practice, but in Section 5.3 we find
+that semi-grokking does happen in our setting.
+5. Experimental evidence
+Our explanation of grokking has some support from from prior work:
+1. Generalising circuit:Nanda et al. (2023, Figure 1) identify and characterise the generalising
+circuit learned at the end of grokking in the case of modular addition.
+2. Slow vs fast learning:Nanda et al. (2023, Figure 7) demonstrate “progress measures” showing
+that the generalising circuit develops and strengthens long after the network achieves perfect
+training accuracy in modular addition.
+To further validate our explanation, we empirically test our predictions from Section 4:
+(P1) Efficiency: We confirm our prediction that𝐶genefficiency is independent of dataset size, while
+𝐶memefficiency decreases as training dataset size increases.
+(P2) Ungrokking (phase transition):We confirm our prediction that ungrokking shows a phase
+transition around𝐷crit.
+(P3) Ungrokking (weight decay):We confirm our prediction that the final test accuracy after
+ungrokking is independent of the strength of weight decay.
+(P4) Semi-grokking: We demonstrate that semi-grokking occurs in practice.
+Training details.We train 1-layer Transformer models with the AdamW optimiser (Loshchilov and
+Hutter, 2019) on cross-entropy loss (see Appendix A for more details). All results in this section are
+on the modular addition task (𝑎+𝑏 mod 𝑃 for𝑎,𝑏∈( 0,...,𝑃 − 1) and 𝑃 = 113) unless otherwise
+stated; results on 9 additional tasks can be found in Appendix A.
+5.1. Relationship of efficiency with dataset size
+We first test our prediction about memorisation and generalisation efficiency:
+(P1) Efficiency.We predict (Section 4.1) that memorisation efficiency decreases with increasing train
+dataset size, while generalisation efficiency stays constant.
+To test (P1), we look at training runs where only one circuit is present, and see how the logits𝑜𝑦𝑖
+vary with the parameter norm𝑃𝑖 (by varying the weight decay) and the dataset size𝐷.
+Experiment setup.We produce𝐶mem-only networks by using completely random labels for the
+training data (Zhang et al., 2021), and assume that the entire parameter norm at convergence is
+allocated to memorisation. We produce𝐶gen-only networks by training on large dataset sizes and
+checking that> 95% of the logit norm comes from just the trigonometric subspace (see Appendix B
+for details).
+7
+Explaining grokking through circuit efficiency
+25 30 40 60 90
+Parameter norm
+30
+60
+90Correct logit
+fixed logit values
+0.5 1.0 2.0 4.0 8.0
+Dataset size 1e3
+25
+30
+40
+60
+90Parameter norm0.5
+1.0
+2.0
+4.0
+8.0
+Dataset size
+1e3
+50
+60
+70
+Correct logit
+(a) 𝐶memscatter plot. At a fixed logit value (dot-
+ted horizontal lines), parameter norm increases with
+dataset size.
+25 30 40 60 90
+Parameter norm
+30
+60
+90Correct logit
+fixed logit values
+0.5 1.0 2.0 4.0 8.0
+Dataset size 1e3
+25
+30
+40
+60
+90Parameter norm0.5
+1.0
+2.0
+4.0
+8.0
+Dataset size
+1e3
+50
+60
+70
+Correct logit
+(b) 𝐶memisologit curves. Curves go up and right,
+showing that parameter norm increases with dataset
+size when holding logits fixed.
+27 30 33
+Parameter norm
+30
+60
+90
+120Correct logit
+fixed logit values
+4 6 8
+Dataset size 1e3
+27
+30
+33Parameter norm
+4
+6
+8
+Dataset size
+1e3
+50
+70
+90
+Correct logit
+(c)𝐶genscatter plot. There is no obvious structure
+to the colours, suggesting that the logit to parameter
+norm relationship is independent of dataset size.
+(d)𝐶genisologit curves.The curves are flat, showing
+that for fixed logit values the parameter norm does
+not depend on dataset size.
+Figure 3| Efficiency of the𝐶memand𝐶genalgorithms. We collect and visualise a dataset of triples 
+𝑜𝑦,𝑃 𝑚,𝐷  (correct logit, parameter norm, and dataset size), each corresponding to a training run
+with varying random seed, weight decay, and dataset size, for both𝐶memand𝐶gen. Besides a standard
+scatter plot, we geometrically bucket logit values into six buckets, and plot “isologit curves” showing
+the dependence of parameter norm on dataset size for each bucket. The results validate our theory
+that (1)𝐶memrequires larger parameter norm to produce the same logits as dataset size increases,
+and (2)𝐶genuses the same parameter norm to produce fixed logits, irrespective of dataset size. In
+addition,𝐶memhas a much wider range of parameter norms than𝐶gen, and at the extremes can be
+more efficient than𝐶gen.
+Results. Figures 3a and 3b confirm our theoretical prediction for memorisation efficiency. Specifically,
+to produce a fixed logit value, a higher parameter norm is required when dataset size is increased,
+implying decreased efficiency. In addition, for a fixed dataset size, scaling up logits requires scaling up
+parameter norm, as expected. Figures 3c and 3d confirm our theoretical prediction for generalisation
+efficiency. To produce a fixed logit value, the same parameter norm is required irrespective of the
+dataset size.
+Note that the figures show significant variance across random seeds. We speculate that there are
+many different circuits implementing the same overall algorithm, but they have different efficiencies,
+and the random initialisation determines which one gradient descent finds. For example, in the case
+of modular addition, the generalising algorithm depends on a set of “key frequencies” (Nanda et al.,
+2023); different choices of key frequencies could lead to different efficiencies.
+It may appear from Figure 3c that increasing parameter norm does not increase logit value,
+contradicting our theory. However, this is a statistical artefact caused by the variance from the random
+seed. Wedo see “stripes” of particular colours going up and right: these correspond to runs with the
+same seed and dataset size, but different weight decay, and they show that when the noise from the
+random seed is removed, increased parameter norm clearly leads to increased logits.
+8
+Explaining grokking through circuit efficiency
+103 104
+Reduced dataset size
+0.0
+0.5
+1.0T est accuracy
+x + y mod P
+0.1
+0.5
+1.0
+1.5
+2.0
+Weight decay
+Average accuracy Per seed accuracy
+Figure 4| Ungrokking. We train on the full
+dataset (achieving 100% test accuracy), and
+then continue training on a smaller subset of
+the full dataset. We plot test accuracy against
+reduced dataset size for a range of weight de-
+cays. We see a sharp transition from strong test
+accuracy to near-zero test accuracy, that is in-
+dependent of weight decay (different coloured
+lines almost perfectly overlap). See Figure 8 for
+more tasks.
+0 1 2 3
+Epochs 1e7
+0.0
+0.5
+1.0T est accuracy
+0.25
+0.50
+0.75
+1.00
+Final accuracy
+Figure 5| Semi-grokking. We plot test accu-
+racy against training epochs for a large sweep of
+training runs with varying dataset sizes. Lines
+are coloured by the final test accuracy at the
+end of training. Out of 200 runs, at least 6 show
+clearsemi-grokkingattheendoftraining. Many
+other runs show transient semi-grokking, hover-
+ing around middling test accuracy for millions
+of epochs, or having multiple plateaus, before
+fully generalising.
+5.2. Ungrokking: overfitting after generalisation
+We now turn to testing our predictions about ungrokking. Figure 1b demonstrates that ungrokking
+happens in practice. In this section we focus on testing that it has the properties we expect.
+(P2) Phase transition.We predict (Section 4.2) that if we plot test accuracy at convergence against
+the size of the reduced training dataset𝐷′, there will be a phase transition around𝐷crit.
+(P3) Weight decay.We predict (Section 4.2) that test accuracy at convergence is independent of the
+strength of weight decay.
+Experiment setup.We train a network to convergence on the full dataset to enable perfect gener-
+alisation, then continue training the model on a small subset of the full dataset, and measure the
+test accuracy at convergence. We vary both the size of the small subset, as well as the strength of the
+weight decay.
+Results. Figure 4 shows the results, and clearly confirms both (P2) and (P3). Appendix A has
+additional results, and in particular Figure 8 replicates the results for many additional tasks.
+5.3. Semi-grokking: evenly matched circuits
+Unlike the previous predictions, semi-grokking is not strictly implied by our theory. However, as we
+will see, it turns out that it does occur in practice.
+(P4) Semi-grokking.When training at around𝐷≈ 𝐷crit, where𝐶memand𝐶genhave roughly equal
+efficiencies, the final network at convergence should either be entirely composed of the most efficient
+circuit, or of roughly equal proportions of𝐶memand𝐶gen. If the latter, we should observe a transition
+to middling test accuracy well after near-perfect train accuracy.
+There are a number of difficulties in demonstrating an example of semi-grokking in practice.
+First, the time to grok increases super-exponentially as the dataset size𝐷 decreases (Power et al.,
+2021, Figure 1), and𝐷crit is significantly smaller than the smallest dataset size at which grokking
+9
+Explaining grokking through circuit efficiency
+has been demonstrated. Second, the random seed causes significant variance in the efficiency of
+𝐶genand𝐶mem, which in turn affects𝐷crit for that run. Third, accuracy changes sharply with the𝐶gento
+𝐶memratio (Appendix A). To observe a transition to middling accuracy, we need to have balanced
+𝐶genand 𝐶memoutputs, but this is difficult to arrange due to the variance with random seed. To
+address these challenges, we run many different training runs, on dataset sizes slightlyaboveour
+best estimate of the typical𝐷crit, such that some of the runs will (through random noise) have an
+unusually inefficient𝐶genor an unusually efficient𝐶mem, such that the efficiencies match and there is
+a chance to semi-grok.
+Experiment setup. We train 10 seeds for each of 20 dataset sizes evenly spaced in the range
+[1500, 2050] (somewhat above our estimate of𝐷crit).
+Results. Figure 1c shows an example of a single run that demonstrates semi-grokking, and Figure 5
+shows test accuracies over time for every run. These validate our initial hypothesis that semi-grokking
+may be possible, but also raise new questions.
+In Figure 1c, we see two phenomena peculiar to semi-grokking: (1) test accuracy “spikes” several
+times throughout training before finally converging, and (2) training loss fluctuates in a set range.
+We leave investigation of these phenomena to future work.
+In Figure 5, we observe that there is oftentransient semi-grokking, where a run hovers around
+middling test accuracy for millions of epochs, or has multiple plateaus, before generalising perfectly.
+We speculate that each transition corresponds to gradient descent strengthening a new generalising
+circuit that is more efficient than any previously strengthened circuit, but took longer to learn. We
+would guess that if we had trained for longer, many of the semi-grokking runs would exhibit full
+grokking, and many of the runs that didn’t generalise at all would generalise at least partially to show
+semi-grokking.
+Given the difficulty of demonstrating semi-grokking, we only run this experiment on modular
+addition. However, our experience with modular addition shows that if we only care about values
+at convergence, we can find them much faster by ungrokking from a grokked network (instead of
+semi-grokking from a randomly initialised network). Thus the ungrokking results on other tasks
+(Figure 8) provide some support that we would see semi-grokking on those tasks as well.
+6. Related work
+Grokking. Since Power et al. (2021) discovered grokking, many works have attempted to understand
+why it happens. Thilak et al. (2022) suggest that “slingshots” could be responsible for grokking,
+particularly in the absence of weight decay, and Notsawo Jr et al. (2023) discuss a similar phenomenon
+of “oscillations”. In contrast, our explanation applies even where there are no slingshots or oscillations
+(as in most of our experiments). Liu et al. (2022) show that for a specific (non-modular) addition
+task with an inexpressive architecture, perfect generalisation occurs when there is enough data
+to determine the appropriate structured representation. However, such a theory does not explain
+semi-grokking. We argue that for more typical tasks on which grokking occurs, the critical factor is
+instead the relative efficiencies of𝐶memand𝐶gen. Liu et al. (2023) show that grokking occurs even
+in non-algorithmic tasks when parameters are initialised to be very large, because memorisation
+happens quickly but it takes longer for regularisation to reduce parameter norm to the “Goldilocks
+zone” where generalisation occurs. This observation is consistent with our theory: in non-algorithmic
+tasks, we expect there exist efficient, generalising circuits, and the increased parameter norm creates
+the final ingredient (slow learning), leading to grokking. However, we expect that in algorithmic tasks
+such as the ones we study, the slow learning is caused by some factor other than large parameter
+10
+Explaining grokking through circuit efficiency
+norm at initialisation.
+Davies et al. (2023) is the most related work. The authors identify three ingredients for grokking
+that mirror ours: ageneralising circuit that isslowly learnedbut isfavoured by inductive biases, a
+perspective also mirrored in Nanda et al. (2023, Appendix E). We operationalise the “inductive bias”
+ingredient asefficiencyat producing large logits with small parameter norm, and to provide significant
+empirical support by predicting and verifying the existence of the critical threshold𝐷crit and the novel
+behaviours of semi-grokking and ungrokking.
+Nanda et al. (2023) identify the trigonometric algorithm by which the networks solve modular
+addition after grokking, and show that it grows smoothly over training, and Chughtai et al. (2023)
+extend this result to arbitrary group compositions. We use these results to define metrics for the
+strength of the different circuits (Appendix B) which we used in preliminary investigations and for
+some results in Appendix A (Figures 9 and 10). Merrill et al. (2023) show similar results on sparse
+parity: in particular, they show that a sparse subnetwork is responsible for the well-generalising logits,
+and that it grows as grokking happens.
+Weight decay.While it is widely known that weight decay can improve generalisation (Krogh and
+Hertz, 1991), the mechanisms for this effect are multifaceted and poorly understood (Zhang et al.,
+2018). We propose a mechanism that is, to the best of our knowledge, novel: generalising circuits tend
+to be more efficient than memorising circuits at large dataset sizes, and so weight decay preferentially
+strengthens the generalising circuits.
+Understanding deep learning through circuit-based analysis.One goal ofinterpretability is to
+understand the internal mechanisms by which neural networks exhibit specific behaviours, often
+through the identification and characterisation of specific parts of the network, especially compu-
+tational subgraphs (“circuits”) that implement human-interpretable algorithms (Cammarata et al.,
+2021; Elhage et al., 2021; Erhan et al., 2009; Geva et al., 2020; Li et al., 2022; Meng et al., 2022;
+Olah et al., 2020; Wang et al., 2022). Such work can also be used to understand deep learning.
+Olsson et al. (2022) explain a phase change in the training of language models by reference to
+induction heads, a family of circuits that produce in-context learning. In concurrent work, Singh et al.
+show that the in-context learning from induction heads is later replaced by in-weights learning in the
+absence of weight decay, but remains strong when weight decay is present. We hypothesise that this
+effect is also explained through circuit efficiency: the in-context learning from induction heads is a
+generalising algorithm and so is favoured by weight decay given a large enough dataset size.
+Michaud et al. (2023) propose an explanation for power-law scaling (Barak et al., 2022; Hestness
+etal.,2017;Kaplanetal.,2020)basedonamodelinwhichtherearemanydiscretequanta(algorithms)
+and larger models learn more of them. Our explanation involves a similar structure: we posit the
+existence of two algorithms (quanta), and analyse the resulting training dynamics.
+7. Discussion
+Rethinking generalisation.Zhang et al. (2021) pose the question of why deep neural networks
+achieve good generalisation even when they are easily capable of memorising a random labelling of
+the training data. Our results gesture at a resolution: in the presence of weight decay, circuits that
+generalise well are likely to be more efficient given a large enough dataset, and thus are preferred over
+memorisation circuits, even when both achieve perfect training loss (Section 4.1). Similar arguments
+may hold for other types of regularisation as well.
+11
+Explaining grokking through circuit efficiency
+Necessity of weight decay.The biggest limitation of our explanation is that it relies crucially on
+weight decay, but grokking has been observed even when weight decay is not present (Power et al.,
+2021; Thilak et al., 2022) (though it is slower and often much harder to elicit (Nanda et al., 2023,
+Appendix D.1)). This demonstrates that our explanation is incomplete.
+Does it also imply that our explanation isincorrect? We do not think so. We speculate there is
+at least one other effect that has a similar regularising effect favouring𝐶genover𝐶mem, such as the
+implicit regularisation of gradient descent (Lyu and Li, 2019; Smith and Le, 2017; Soudry et al., 2018;
+Wang et al., 2021), and that the speed of the transition from𝐶memto𝐶genis based on thesum of these
+effects and the effect from weight decay. This would neatly explain why grokking takes longer as
+weight decay decreases (Power et al., 2021), and does not completely vanish in the absence of weight
+decay. Given that there is a potential extension of our theory that explains grokking without weight
+decay, and the significant confirming evidence that we have found for our theory in settings with
+weight decay, we are overall confident that our explanation is at least one part of the true explanation
+when weight decay is present.
+Broader applicability: beyond parameter norm.Another limitation is that we only consider one
+kind of constraint that gradient descent must navigate: parameter norm. Typically, there are many
+other constraints: fitting the training data, capacity in “bottleneck activations” (Elhage et al., 2021),
+interference between circuits (Elhage et al., 2022), and more. This may limit the broader applicability
+of our theory, despite its success in explaining grokking.
+Broader applicability: realistic settings.A natural question is what implications our theory has
+for more realistic settings. We expect that the general concepts of circuits, efficiency, and speed of
+learning continue to apply. However, in realistic settings, good training performance is typically
+achieved when the model has many different circuit families that contribute different aspects (e.g.
+language modelling requires spelling, grammar, arithmetic, etc). We expect that these will have a
+wide variety of learning speeds and efficiencies (although note that “efficiency” is not as well defined
+in this setting, because the circuits don’t get perfect training accuracy).
+In contrast, the key property for grokking in “algorithmic” tasks like modular arithmetic is that
+there are two clusters of circuit families – one slowly learned, efficient, generalising cluster, and one
+quickly learned, inefficient, memorising cluster. In particular, our explanation relies on there being
+no circuits in between the two clusters. Therefore we observe a sharp transition in test performance
+when shifting from the memorising to the generalising cluster.
+Future work.Within grokking, several interesting puzzles are still left unexplained. Why does
+the time taken to grok rise super-exponentially as dataset size decreases? How does the random
+initialisation interact with efficiency to determine which circuits are found by gradient descent? What
+causes generalising circuits to develop slower? Investigating these puzzles is a promising avenue for
+further work.
+While the direct application of our work is to understand the puzzle of grokking, we are excited
+about the potential for understanding deep learning more broadly through the lens of circuit efficiency.
+We would be excited to see work looking at the role of circuit efficiency in more realistic settings, and
+work that extends circuit efficiency to consider other constraints that gradient descent must navigate.
+8. Conclusion
+The central question of our paper is: in grokking, why does the network’s test performance improve
+dramatically upon continued training, having already achieved nearly perfect training performance?
+Ourexplanationis: thegeneralisingsolutionismore“efficient”butslowertolearnthanthememorising
+12
+Explaining grokking through circuit efficiency
+solution. After quickly learning the memorising circuit, gradient descent can still decrease loss
+even further by simultaneously strengthening the efficient, generalising circuit and weakening the
+inefficient, memorising circuit.
+Based on our theory we predict and demonstrate two novel behaviours:ungrokking, in which a
+model that has perfect generalisation returns to memorisation when it is further trained on a dataset
+with size smaller than the critical threshold, andsemi-grokking, where we train a randomly initialised
+network on the critical dataset size which results in a grokking-like transition to middling test accuracy.
+Our explanation is the only one we are aware of that has made (and confirmed) such surprising
+advance predictions, and we have significant confidence in the explanation as a result.
+Acknowledgements
+Thanks to Paul Christiano, Xander Davies, Seb Farquhar, Geoffrey Irving, Tom Lieberum, Eric Michaud,
+Vlad Mikulik, Neel Nanda, Jonathan Uesato, and anonymous reviewers for valuable discussions and
+feedback.
+References
+B. Barak, B. Edelman, S. Goel, S. Kakade, E. Malach, and C. Zhang. Hidden progress in deep learning:
+SGD learns parities near the computational limit.Advances in Neural Information Processing Systems,
+35:21750–21764, 2022.
+N. Cammarata, G. Goh, S. Carter, C. Voss, L. Schubert, and C. Olah. Curve circuits.Distill, 2021. doi:
+10.23915/distill.00024.006. https://distill.pub/2020/circuits/curve-circuits.
+B. Chughtai, L. Chan, and N. Nanda. A toy model of universality: Reverse engineering how networks
+learn group operations.arXiv preprint arXiv:2302.03025, 2023.
+X. Davies, L. Langosco, and D. Krueger. Unifying grokking and double descent.arXiv preprint
+arXiv:2303.06173, 2023.
+N. Elhage, N. Nanda, C. Olsson, T. Henighan, N. Joseph, B. Mann, A. Askell, Y. Bai, A. Chen, T. Conerly,
+N. DasSarma, D. Drain, D. Ganguli, Z. Hatfield-Dodds, D. Hernandez, A. Jones, J. Kernion, L. Lovitt,
+K. Ndousse, D. Amodei, T. Brown, J. Clark, J. Kaplan, S. McCandlish, and C. Olah. A mathematical
+framework for Transformer circuits. Transformer Circuits Thread, 2021. https://transformer-
+circuits.pub/2021/framework/index.html.
+N. Elhage, T. Hume, C. Olsson, N. Schiefer, T. Henighan, S. Kravec, Z. Hatfield-Dodds, R. Lasenby,
+D. Drain, C. Chen, R. Grosse, S. McCandlish, J. Kaplan, D. Amodei, M. Wattenberg, and
+C. Olah. Toy models of superposition.Transformer Circuits Thread, 2022. https://transformer-
+circuits.pub/2022/toy_model/index.html.
+D. Erhan, Y. Bengio, A. Courville, and P. Vincent. Visualizing higher-layer features of a deep network.
+University of Montreal, 1341(3):1, 2009.
+M. Geva, R. Schuster, J. Berant, and O. Levy. Transformer feed-forward layers are key-value memories.
+arXiv preprint arXiv:2012.14913, 2020.
+J. Hestness, S. Narang, N. Ardalani, G. Diamos, H. Jun, H. Kianinejad, M. Patwary, M. Ali, Y. Yang, and
+Y. Zhou. Deep learning scaling is predictable, empirically.arXiv preprint arXiv:1712.00409, 2017.
+13
+Explaining grokking through circuit efficiency
+A. Jermyn and B. Shlegeris. Multi-component learning and s-curves, 2022.
+URL https://www.alignmentforum.org/posts/RKDQCB6smLWgs2Mhr/
+multi-component-learning-and-s-curves.
+J. Kaplan, S. McCandlish, T. Henighan, T. B. Brown, B. Chess, R. Child, S. Gray, A. Radford, J. Wu,
+and D. Amodei. Scaling laws for neural language models.arXiv preprint arXiv:2001.08361, 2020.
+A. Krogh and J. Hertz. A simple weight decay can improve generalization.Advances in neural
+information processing systems, 4, 1991.
+K. Li, A. K. Hopkins, D. Bau, F. Viégas, H. Pfister, and M. Wattenberg. Emergent world representations:
+Exploring a sequence model trained on a synthetic task.arXiv preprint arXiv:2210.13382, 2022.
+Z. Liu, O. Kitouni, N. Nolte, E. J. Michaud, M. Tegmark, and M. Williams. Towards understanding
+grokking: An effective theory of representation learning.arXiv preprint arXiv:2205.10343, 2022.
+Z. Liu, E. J. Michaud, and M. Tegmark. Omnigrok: Grokking beyond algorithmic data, 2023.
+I. Loshchilov and F. Hutter. Decoupled weight decay regularization.arXiv preprint arXiv:1711.05101,
+2019.
+K. Lyu and J. Li. Gradient descent maximizes the margin of homogeneous neural networks.arXiv
+preprint arXiv:1906.05890, 2019.
+M. McCloskey and N. Cohen. Catastrophic interference in connectionist networks: The sequential
+learning problem.Psychology of Learning and Motivation, 24:109–165, 1989.
+K. Meng, D. Bau, A. Andonian, and Y. Belinkov. Locating and editing factual knowledge in GPT.arXiv
+preprint arXiv:2202.05262, 2022.
+W. Merrill, N. Tsilivis, and A. Shukla. A tale of two circuits: Grokking as competition of sparse and
+dense subnetworks.arXiv preprint arXiv:2303.11873, 2023.
+E. J. Michaud, Z. Liu, U. Girit, and M. Tegmark. The quantization model of neural scaling.arXiv
+preprint arXiv:2303.13506, 2023.
+B. Millidge. Grokking ’grokking’, 2022. URL https://www.beren.io/
+2022-01-11-Grokking-Grokking/.
+N. Nanda, L. Chan, T. Liberum, J. Smith, and J. Steinhardt. Progress measures for grokking via
+mechanistic interpretability.arXiv preprint arXiv:2301.05217, 2023.
+P. Notsawo Jr, H. Zhou, M. Pezeshki, I. Rish, G. Dumas, et al. Predicting grokking long before it
+happens: A look into the loss landscape of models which grok.arXiv preprint arXiv:2306.13253,
+2023.
+C. Olah, N. Cammarata, L. Schubert, G. Goh, M. Petrov, and S. Carter. Zoom in: An introduction to
+circuits. Distill, 2020. doi: 10.23915/distill.00024.001. https://distill.pub/2020/circuits/zoom-in.
+C. Olsson, N. Elhage, N. Nanda, N. Joseph, N. DasSarma, T. Henighan, B. Mann, A. Askell, Y. Bai,
+A. Chen, T. Conerly, D. Drain, D. Ganguli, Z. Hatfield-Dodds, D. Hernandez, S. Johnston, A. Jones,
+J.Kernion, L.Lovitt, K.Ndousse, D.Amodei, T.Brown, J.Clark, J.Kaplan, S.McCandlish, andC.Olah.
+In-context learning and induction heads.Transformer Circuits Thread, 2022. https://transformer-
+circuits.pub/2022/in-context-learning-and-induction-heads/index.html.
+14
+Explaining grokking through circuit efficiency
+A. Power, Y. Burda, H. Edwards, I. Babuschkin, and V. Misra. Grokking: Generalization beyond
+overfitting on small algorithmic datasets. InMathematical Reasoning in General Artificial Intelligence
+Workshop, ICLR, 2021. URL https://mathai-iclr.github.io/papers/papers/MATHAI_
+29_paper.pdf.
+R. Ratcliff. Connectionist models of recognition memory: constraints imposed by learning and
+forgetting functions.Psychology Review, 97(2):285–308, 1990.
+A. Singh, S. Chan, T. Moskovitz, E. Grant, A. Saxe, and F. Hill. The transient nature of emergent
+in-context learning in transformers.Forthcoming.
+S. L. Smith and Q. V. Le. A bayesian perspective on generalization and stochastic gradient descent.
+arXiv preprint arXiv:1710.06451, 2017.
+D. Soudry, E. Hoffer, M. S. Nacson, S. Gunasekar, and N. Srebro. The implicit bias of gradient descent
+on separable data.The Journal of Machine Learning Research, 19(1):2822–2878, 2018.
+V. Thilak, E. Littwin, S. Zhai, O. Saremi, R. Paiss, and J. Susskind. The slingshot mechanism: An empir-
+ical study of adaptive optimizers and the grokking phenomenon.arXiv preprint arXiv:2206.04817,
+2022.
+A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, L. u. Kaiser, and I. Polo-
+sukhin. Attention is all you need. In Advances in Neural Information Processing Systems,
+volume 30, 2017. URL https://proceedings.neurips.cc/paper_files/paper/2017/
+file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf.
+B. Wang, Q. Meng, W. Chen, and T.-Y. Liu. The implicit bias for adaptive optimization algorithms
+on homogeneous neural networks. InInternational Conference on Machine Learning, pages 10849–
+10858. PMLR, 2021.
+K. Wang, A. Variengien, A. Conmy, B. Shlegeris, and J. Steinhardt. Interpretability in the wild: a
+circuit for indirect object identification in gpt-2 small.arXiv preprint arXiv:2211.00593, 2022.
+C. Zhang, S. Bengio, M. Hardt, B. Recht, and O. Vinyals. Understanding deep learning (still) requires
+rethinking generalization.Communications of the ACM, 64(3):107–115, 2021.
+G. Zhang, C. Wang, B. Xu, and R. Grosse. Three mechanisms of weight decay regularization.arXiv
+preprint arXiv:1810.12281, 2018.
+15
+Explaining grokking through circuit efficiency
+0.0
+0.5
+1.0
+Accuracy
+train test
+101
+10 2
+10 5
+Loss
+0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5 4.0
+Epochs 1e7
+30
+40
+50
+Parameter norm
+Figure 6| Examining a single semi-grokking run in detail.We plot accuracy, loss, and parameter
+norm over training for a single cherry-picked modular addition run at a dataset size of 1532 (12% of
+the full dataset). This run shows transient semi-grokking. At epoch0.8× 107, test accuracy rises to
+around 0.55, and then stays there for107 epochs, because𝐶genand𝐶memefficiencies are balanced.
+At epoch 1.8× 107, we speculate that gradient descent finds an even more efficient𝐶gencircuit,
+as parameter norm drops suddenly and test accuracy rises to 1. At epoch3.2× 107 we see test
+loss rise, we do not know why. There seem to be multiple phases, perhaps corresponding to the
+network transitioning between mixtures of multiple circuits with increasing efficiencies, but further
+investigation is needed.
+A. Experimental details and more evidence
+For all our experiments, we use 1-layer decoder-only transformer networks (Vaswani et al., 2017)
+with learned positional embeddings, untied embeddings/unembeddings, The hyperparameters are
+as follows:𝑑model = 128 is the residual stream width,𝑑head = 32 is the size of the query, key, and
+value vectors for each attention head,𝑑mlp = 512 is the number of neurons in the hidden layer of
+the MLP, and we have𝑑model/𝑑head = 4 heads per self-attention layer. We optimise the network with
+full batch training (that is, using the entire training dataset for each update) using the AdamW
+optimiser (Loshchilov and Hutter, 2019) with𝛽1 = 0.9, 𝛽2 = 0.98, learning rate of10−3, and weight
+decay of1.0. In some of our experiments we vary the weight decay in order to produce networks
+with varying parameter norm.
+Following Power et al. (2021), for a binary operation𝑥◦ 𝑦, we construct a dataset of the form
+⟨𝑥⟩⟨◦⟩⟨𝑦⟩⟨=⟩⟨𝑥◦ 𝑦⟩, where⟨𝑎⟩ stands for the token corresponding to the element𝑎. We choose a
+fraction of this dataset at random as the train dataset, and the remainder as the test dataset. The
+first 4 tokens⟨𝑥⟩⟨◦⟩⟨𝑦⟩⟨=⟩ are the input to the network, and we train with cross-entropy loss over the
+final token⟨𝑥◦ 𝑦⟩. For all modular arithmetic tasks we use the modulus𝑝 = 113, so for example the
+size of the full dataset for modular addition is𝑝2 = 12769, and𝑑vocab = 115, including the⟨+⟩ and
+⟨=⟩ tokens.
+16
+Explaining grokking through circuit efficiency
+0.0 0.2 0.4 0.6 0.8 1.0
+Epochs 1e6
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0T est accuracy
+400
+600
+800
+1000
+1200
+1400
+Reduced dataset size
+Figure 7| Many ungrokking runs.We show test accuracy over epochs for a range of ungrokking
+runs for modular addition. Each line represents a single run, and we sweep over 7 geometrically
+spaced dataset sizes in[390, 1494] with 10 seeds each. Each run is initialised with parameters from
+a network trained on the full dataset (the initialisation runs are not shown), so test accuracy starts
+at 1 for all runs. When the dataset size is small enough, the network ungroks to poor test accuracy,
+while train accuracy remains at 1 (not shown). For an intermediate dataset size, we see ungrokking
+to middling test accuracy as𝐶genand𝐶memefficiencies are balanced.
+A.1. Semi-grokking
+In Section 5.3 we looked at all semi-grokking training runs in Figure 5. Here, we investigate a single
+example of transient semi-grokking in more detail (see Figure 6). We speculate that there are multiple
+circuits with increasing efficiencies for𝐶gen, and in these cases the more efficient circuits are slower to
+learn. This would explain transient semi-grokking: gradient descent first finds a less efficient𝐶genand
+we see middling generalisation, but since we are using the upper range of𝐷crit, eventually gradient
+descent finds a more efficient𝐶genleading to full generalisation.
+A.2. Ungrokking
+InFigure7, weshowmanyungrokkingrunsformodularaddition, andinFigure8weshowungrokking
+across many other tasks.
+We have already seen that𝐷crit is affected by the random initialisation. It is interesting to compare
+𝐷crit when starting with a given random initialisation, and when ungrokking from a network that was
+trained to full generalisation with the same random initialisation. Figure 5 shows a semi-grokking run
+that achieves a test accuracy of∼0.7 with a dataset size of∼2000, while Figure 7 shows ungrokking
+runs that achieve a test accuracy of∼0.7 with a dataset size of around 800–1000, less than half of
+what the semi-grokking run required.
+In Figure 10b, the final test accuracy afterungrokking shows a smooth relationship with dataset
+size, which we might expect if𝐶genis getting stronger on a smoothly increasing number of inputs
+compared to𝐶mem. However due to the difficulties discussed previously, we don’t see a smooth
+relationship between test accuracy and dataset size insemi-grokking.
+These results suggest that𝐷crit is an oversimplified concept, because in reality the initialisation
+and training dynamics affect which circuits are found, and therefore the dataset size at which we see
+middling generalisation.
+17
+Explaining grokking through circuit efficiency
+103 104
+0.0
+0.5
+1.0T est accuracy
+x/y mod P
+103 104
+x y mod P
+103 104
+xy mod P
+103 104
+0.0
+0.5
+1.0T est accuracy
+x/y mod P or x y mod P
+103 104
+x2 + y2 mod P
+103 104
+x2 + xy + y2 mod P
+103 104
+Reduced dataset size
+0.0
+0.5
+1.0T est accuracy
+xyx 1 for x, y S5
+103 104
+Reduced dataset size
+xy for x, y S5
+103 104
+Reduced dataset size
+xyx for x, y S5
+ 0.1
+0.5
+1.0
+1.5
+2.0
+Weight decay
+Average accuracy Per seed accuracy
+Figure 8| Ungrokking on many other tasks.We plot test accuracy against reduced dataset size for
+many other modular arithmetic and symmetric group tasks (Power et al., 2021). For each run, we
+train on the full dataset (achieving 100% accuracy), and then further train on a reduced subset of the
+dataset for 100k steps. The results show clear ungrokking, since in many cases test accuracy falls
+below 100%, often to nearly 0%. For most datasets the transition point is independent of weight
+decay (different coloured lines almost perfectly overlap).
+18
+Explaining grokking through circuit efficiency
+0 2000 4000 6000 8000 10000
+Epochs
+10 9
+10 7
+10 5
+10 3
+10 1
+101
+Loss
+Train loss T est loss
+0
+15
+30
+45
+60
+Ctrig logit Cmem logit Parameter norm
+Figure 9| Grokking occurs because𝐶genis more efficient than𝐶mem. We show loss, parameter
+norm, and the value of the correct logit for𝐶genand𝐶memfor a randomly-picked training run. By step
+200, the train accuracy is already perfect (not shown), train loss is low while test loss has risen, and
+parameter norm is at its maximum value, indicating strong𝐶mem. Train loss continues to fall rapidly
+until step 1500, as parameter norm falls and the𝐶genlogit becomes higher than the𝐶memlogit. At
+step 3500, test loss starts to fall as the high𝐶genlogit starts to dominate, and by step 6000 we get
+good generalisation.
+A.3. 𝐶genand𝐶memdevelopment during grokking
+In Figure 9 we show𝐶genand𝐶memdevelopment via the proxy measures defined in Appendix B for
+a randomly-picked grokking run. Looking at these measures was very useful to form a working
+theory for why grokking happens. However as we note in Appendix B, these proxy measures tend to
+overestimate𝐶genand underestimate𝐶mem.
+We note some interesting phenomena in Figure 9:
+1. Between epochs 200 to 1500,both the𝐶genand𝐶memlogits are rising while parameter norm is
+falling, indicating that gradient descent is improving efficiency (possibly by removing irrelevant
+parameters).
+2. After epoch 4000, the𝐶genlogit falls while the𝐶memlogit is already∼0. Since test loss continues
+to fall, we expect that incorrect logits from𝐶memon the test dataset are getting cleaned up, as
+described in Nanda et al. (2023).
+A.4. Tradeoffs between𝐶genand𝐶mem
+In Section 4.1 we looked at the efficiency of𝐶gen-only and𝐶mem-only circuits. In this section we train
+on varying dataset sizes so that the network develops a mixture of𝐶genand𝐶memcircuits, and study
+their relative strength using the correct logit as a proxy measure (described in Appendix B).
+As we demonstrated previously,𝐶mem’s efficiency drops with increasing dataset size, while𝐶gen’s
+staysconstant. TheoremD.4(case2)suggeststhatparameternormallocatedtoacircuitisproportional
+to efficiency, and since logit values also increase with parameter norm, this implies that the ratio of
+the𝐶gento𝐶memlogit𝑜𝑦𝑡/𝑜𝑦𝑚 should increase monotonically with dataset size.
+InFigure10aweseeexactlythis: thelogitratiochangesmonotonically(over6ordersofmagnitude)
+with increasing dataset size.
+Due to the difficulties in training to convergence at small dataset sizes, we initialised all parameters
+19
+Explaining grokking through circuit efficiency
+103 104
+Dataset size
+10 2
+100
+102
+104
+oyt / oym
+(a) Logit ratio (𝑜𝑦𝑡/𝑜𝑦𝑚) vs dataset size (𝐷).
+Colours correspond to different bucketed val-
+ues of parameter norm (𝑃). Each line shows
+that as dataset size increases, a fixed param-
+eter norm (fixed colour) is being reallocated
+smoothly towards increasing the trigonometric
+logit compared to the memorisation logit.
+103 104
+Dataset size
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0T est accuracy
+(b) Test accuracy vs dataset size (𝐷). We
+see a smooth dependence on dataset size.
+Each line shows that as dataset size in-
+creases, the reallocation of a fixed parame-
+ter norm (fixed colour) towards𝐶genfrom
+𝐶memresults in increasing accuracy.
+2 × 101
+3 × 101
+4 × 101
+Parameter norm
+Figure 10| Relative strength at convergence.We report logit ratios and test accuracy at convergence
+across a range of training runs, generated by sweeping over the weight decay and random seed to
+obtain different parameter norms at the same dataset size. We use the ungrokking runs from Figure 7,
+so every run is initialised with parameters obtained by training on the full dataset.
+from a𝐶gen-only network trained on the full dataset. We confirmed that in all the runs, at convergence,
+the training loss from the𝐶gen-initialised network was lower than the training loss from a randomly
+initialised network, indicating that this initialisation allows our optimiser to find a better minimum
+than from random initialisation.
+B. 𝐶genand𝐶memin modular addition
+In modular addition, given two integers𝑎,𝑏 and a modulus𝑝 as input, where0≤ 𝑎,𝑏 < 𝑝, the task
+is to predict𝑎+𝑏 mod 𝑝. Nanda et al. (2023) identified the generalising algorithm implemented
+by a 1-layer transformer after grokking (visualised in Figure 11), which we call the “trigonometric”
+algorithm. In this section we summarise the algorithm, and explain how we produce our proxy metrics
+for the strength of𝐶genand𝐶mem.
+Trigonometric logits.We explain the structure of the logits produced by the trigonometric algorithm.
+For each possible label𝑐∈{ 0, 1,...𝑝 − 1}, the trigonometric logit𝑜𝑐 will be given by˝𝜔𝑘 cos(𝜔𝑘(𝑎+
+𝑏−𝑐)), for a few key frequencies𝜔𝑘 = 2𝜋𝑘𝑝 with integer𝑘. For the true label𝑐∗ = 𝑎+𝑏 mod 𝑝, the
+term𝜔𝑘(𝑎+𝑏−𝑐∗) is an integer multiple of2𝜋, and socos(𝜔𝑘(𝑎+𝑏−𝑐∗)) = 1. For any incorrect label
+𝑐 ≠ 𝑎+𝑏 mod 𝑝, it is very likely that at leastsome of the key frequencies satisfycos(𝜔𝑘(𝑎+𝑏−𝑐))≪ 1,
+creating a large difference between𝑜𝑐 and 𝑜𝑐∗.
+Trigonometric algorithm.There is a set of key frequencies𝜔𝑘. (These frequencies are typically
+whichever frequencies were highest at the time of random initialisation.) For an arbitrary label𝑐, the
+logit𝑜𝑐 is computed as follows:
+1. Embed the one-hot encoded number𝑎 to sin(𝜔𝑘𝑎) and cos(𝜔𝑘𝑎) for the various frequencies𝜔𝑘.
+20
+Explaining grokking through circuit efficiency
+Figure 11| The trigonometric algorithm for modular arithmetic(reproduced from Nanda et al.
+(2023)). Given two numbers𝑎 and𝑏, the model projects each point onto a corresponding rotation
+using its embedding matrix. Using its attention and MLP layers, it then composes the rotations to
+get a representation of𝑎+𝑏 mod 𝑝. Finally, it “reads off” the logits for each𝑐∈{ 0, 1,...,𝑝 − 1},
+by rotating by−𝑐 to get𝑐𝑜𝑠(𝜔(𝑎+𝑏−𝑐)), which is maximised when𝑎+𝑏≡ 𝑐 mod 𝑃 (since𝜔 is a
+multiple of2𝜋).
+Do the same for𝑏.
+2. Compute cos(𝜔𝑘(𝑎+𝑏)) and sin(𝜔𝑘(𝑎+𝑏)) using the intermediate attention and MLP layers via
+the trigonometric identities:
+cos(𝜔𝑘(𝑎+𝑏)) = cos(𝜔𝑘𝑎) cos(𝜔𝑘𝑎)− sin(𝜔𝑘𝑎) sin(𝜔𝑘𝑏)
+sin(𝜔𝑘(𝑎+𝑏)) = sin(𝜔𝑘𝑎) cos(𝜔𝑘𝑏)+ cos(𝜔𝑘𝑎) sin(𝜔𝑘𝑏)
+3. Use the output and unembedding matrices to implement the trigonometric identity:
+𝑜𝑐 = ∑︁
+𝜔𝑘
+cos(𝜔𝑘(𝑎+𝑏−𝑐)) =
+∑︁
+𝜔𝑘
+cos(𝜔𝑘(𝑎+𝑏)) cos(𝜔𝑘𝑐)+ sin(𝜔𝑘(𝑎+𝑏)) sin(𝜔𝑘𝑐).
+Isolating trigonometric logits.Given a classifierℎ, we can aggregate its logits on every possible
+input, resulting in a vectorﬁ𝑍ℎ of length𝑝3 whereﬁ𝑍𝑎,𝑏,𝑐ℎ = 𝑜𝑐ℎ(“𝑎 + 𝑏 =”) is the logit for label𝑐 on the
+input(𝑎,𝑏). We are interested in identifying the contribution of the trigonometric algorithm toﬁ𝑍ℎ.
+We use the same method as Chughtai et al. (2023) and restrictﬁ𝑍ℎ to a much smaller trigonometric
+subspace.
+For a frequency𝜔𝑘, let us define the𝑝3-dimensional vectorﬁ𝑍𝜔𝑘 asﬁ𝑍𝑎,𝑏,𝑐𝜔𝑘 = cos(𝜔𝑘(𝑎+𝑏−𝑐)). Since
+ﬁ𝑍𝜔𝑘 =ﬁ𝑍𝜔𝑝−𝑘, we set1≤ 𝑘≤ 𝐾, where𝐾 =⌈(𝑝− 1)/2⌉, to obtain𝐾 distinct vectors, ignoring the
+constant bias vector. These vectors are orthogonal, as they are part of a Fourier basis.
+Noticethatanycircuitthatwasexactlyfollowingthelearnedalgorithmdescribedabovewouldonly
+produce logits in the directionsﬁ𝑍𝜔𝑘 for the key frequencies𝜔𝑘. So, we can define the trigonometric
+contribution toﬁ𝑍ℎ as the projection ofﬁ𝑍ℎ onto the directionsﬁ𝑍𝜔𝑘. We may not know the key frequencies
+in advance, but we can sum over all𝐾 of them, giving the following definition for trigonometric logits:
+ﬁ𝑍ℎ,𝑇 =
+𝐾∑︁
+𝑘=1
+(ﬁ𝑍ℎ· ˆ𝑍𝜔𝑘) ˆ𝑍𝜔𝑘
+21
+Explaining grokking through circuit efficiency
+where ˆ𝑍𝜔𝑘 is the normalised version ofﬁ𝑍𝜔𝑘. This corresponds to projecting onto a𝐾-dimensional
+subspace of the𝑝3-dimensional space in whichﬁ𝑍ℎ lives.
+Memorisation logits.Early in training, neural networks memorise the training dataset without
+generalising, suggesting that there exists a memorisation algorithm, implemented by the circuit
+𝐶mem 1. Unfortunately, we do not understand the algorithm underlying memorisation, and so cannot
+design a similar procedure to isolate𝐶mem’s contribution to the logits. However, we hypothesise that
+for modular addition,𝐶genand𝐶memare the only two circuit families of importance for the loss. This
+allows us to define the𝐶memcontribution to the logits as the residual:
+ﬁ𝑍ℎ,𝑀 =ﬁ𝑍ℎ−ﬁ𝑍ℎ,𝑇
+𝐶trigand𝐶memcircuits. We say that a circuit is a𝐶trigcircuit if it implements the𝐶trigalgorithm, and
+similarly for𝐶memcircuits. Importantly, this is a many-to-one mapping: there are many possible
+circuits that implement a given algorithm.
+We isolate𝐶trig(ﬁ𝑜𝑡) and 𝐶mem(ﬁ𝑜𝑚) logits by projecting the output logits (ﬁ𝑜) as described in
+Appendix B. We cannot directly measure the circuit weights𝑤𝑡 and𝑤𝑚, but instead use an indirect
+measure: the value of the logit for the correct class given by each circuit, i.e.𝑜𝑦𝑡 and 𝑜𝑦𝑚.
+Flaws These metrics should be viewed as an imperfect proxy measure for the true strength of the
+trigonometric and memorisation circuits, as they have a number of flaws:
+1. When both𝐶trigand𝐶memare present in the network, they are both expected to produce high
+values for the correct logits, and low values for incorrect logits, on the train dataset. Since the
+𝐶trigand𝐶memlogits are correlated, it becomes more likely thatﬁ𝑍ℎ,𝑇 captures𝐶memlogits too.
+2. In this case we would expect our proxy measure to overestimate the strength of𝐶trigand
+underestimate the strength of𝐶mem. In fact, in our experiments we do see large negative correct
+logit values for𝐶memon training for semi-grokking, which probably arises because of this effect.
+3. Logits are not inherently meaningful; what matters for loss is the extent to which the correct
+logit is larger than the incorrect logits. This is not captured by our proxy metric, which only
+looks at the size of the correct logit. In a binary classification setting, we could instead use the
+difference between the correct and incorrect logit, but it is not clear what a better metric would
+be in the multiclass setting.
+C. Details for the minimal example
+In Figure 2 we show that two ingredients: multiple circuits with different efficiencies, and slow and
+fast circuit development, are sufficient to reproduce learning curves that qualitatively demonstrate
+grokking. In Table 1 we provide details about the simulation used to produce this figure.
+As explained in Section 3, the logits produced by𝐶genand𝐶memare given by:
+𝑜𝑦𝐺(𝑥) = 𝟙[(𝑥,𝑦)∈D or(𝑥,𝑦)∈D test] (3)
+𝑜𝑦𝑀(𝑥) = 𝟙[(𝑥,𝑦)∈D or(𝑥,𝑦)∈D mem] (4)
+1In reality, there are at least two different memorisation algorithms: commutative memorisation (which predicts the
+same answer for(𝑎,𝑏) and(𝑏,𝑎)) and non-commutative memorisation (which does not). However, this difference does not
+matter for our analyses, and we will call both of these “memorisation” in this paper.
+22
+Explaining grokking through circuit efficiency
+Table 1| Hyperparameters used for our simulations.
+(a)𝐶genlearned slower but more
+efficient than𝐶mem.
+Parameter Value
+𝑃𝑔 1
+𝑃𝑚 2
+𝜅 1.2
+𝛼 0.005
+𝑤𝑔1(0) 0
+𝑤𝑔2(0) 0.005
+𝑤𝑚1(0) 0
+𝑤𝑚2(0) 1
+𝑞 113
+𝜆 0.01
+(b) 𝐶genless efficient than𝐶mem.
+Parameter Value
+𝑃𝑔 4
+𝑃𝑚 2
+𝜅 1.2
+𝛼 0.005
+𝑤𝑔1(0) 0
+𝑤𝑔2(0) 0.005
+𝑤𝑚1(0) 0
+𝑤𝑚2(0) 1
+𝑞 113
+𝜆 0.01
+(c)𝐶genand𝐶memlearnedatequal
+speeds.
+Parameter Value
+𝑃𝑔 1
+𝑃𝑚 2
+𝜅 1.2
+𝛼 0.005
+𝑤𝑔1(0) 0
+𝑤𝑔2(0) 1
+𝑤𝑚1(0) 0
+𝑤𝑚2(0) 1
+𝑞 113
+𝜆 0.01
+These are scaled by two independent weights for each circuit, giving the overall logits as:
+𝑜𝑦(𝑥) =𝑤𝐺1𝑤𝐺2𝑜𝑦𝐺(𝑥)+ 𝑤𝑀1𝑤𝑀2𝑜𝑦𝑀(𝑥) (5)
+We model the parameter norms according to the scaling efficiency in Section D.1, inspired by a
+𝜅-layer MLP with Relu activations and without biases:
+𝑃′𝑐 =(𝑤𝑐1𝑤𝑐2)1/𝜅𝑃𝑐 for𝑐∈( 𝑔,𝑚).
+From Equations (3) to (5) we get the following equations for train and test loss respectively:
+Ltrain =− log exp(𝑤𝑔1𝑤𝑔2+𝑤𝑚1𝑤𝑚2)(𝑞− 1)+ exp(𝑤𝑔1𝑤𝑔2+𝑤𝑚1𝑤𝑚2)+L wd,
+Ltest =− log exp(𝑤𝑔1𝑤𝑔2)(𝑞− 2)+ exp(𝑤𝑔1𝑤𝑔2)+ exp(𝑤𝑚1𝑤𝑚2)+L wd,
+where𝑞 is the number of labels, and the weight decay loss is:
+Lwd = 𝑃′2𝑔 +𝑃′2𝑚.
+The weights𝑤𝑐𝑖 are updated based on gradient descent:
+𝑤𝑐𝑖(𝜏)← 𝑤𝑐𝑖(𝜏− 1)− 𝜆𝜕Ltrain𝜕𝑤𝑐𝑖
+where 𝜆 is a learning rate. The initial values of the parameters are𝑤𝑐𝑖(0). In Table 1 we list the values
+of the simulation hyperparameters.
+D. Proofs of theorems
+Weassumewehaveasetofinputs 𝑋,asetoflabels 𝑌,andatrainingdataset, D ={(𝑥1,𝑦 1),... (𝑥𝐷,𝑦 𝐷)}.
+Let ℎ be a classifier that assigns a real-valued logit for each possible label given an input. We denote
+23
+Explaining grokking through circuit efficiency
+an individual logit as𝑜𝑦ℎ(𝑥) B ℎ(𝑥,𝑦). When the input𝑥 is clear from context, we will denote the logit
+as𝑜𝑦ℎ. Excluding weight decay, theloss for the classifier is given by the softmax cross-entropy loss:
+Lx-ent(ℎ) =− 1𝐷 ∑︁(𝑥,𝑦)∈D log exp(𝑜𝑦ℎ)˝
+𝑦′∈𝑌
+exp(𝑜𝑦′ℎ).
+Forany 𝑐∈ ℝ, let𝑐·ℎbetheclassifierwhoselogitsaremultipledby 𝑐, thatis,(𝑐·ℎ)(𝑥,𝑦) = 𝑐×ℎ(𝑥,𝑦).
+Intuitively, once a classifier achieves perfect accuracy, then the true class logit𝑜𝑦∗ will be larger than
+any incorrect class logit𝑜𝑦′, and so loss can be further reduced by scaling upall of the logits further
+(increasing the gap between𝑜𝑦∗ and 𝑜𝑦′).
+Theorem D.1.Suppose that the classifierℎ has perfect accuracy, that is, for any(𝑥,𝑦∗)∈D and any
+𝑦′ ≠ 𝑦∗ we have𝑜𝑦∗ℎ > 𝑜𝑦′ℎ . Then, for any𝑐 >1, we haveLx-ent(𝑐·ℎ) <Lx-ent(ℎ).
+Proof. First, note that we can rewrite the loss function as:
+Lx-ent(ℎ) =− 1𝐷 ∑︁(𝑥,𝑦∗) log exp(𝑜𝑦∗ℎ)˝
+𝑦′
+exp(𝑜𝑦′ℎ) = 1𝐷 ∑︁(𝑥,𝑦∗) log'›››«
+˝
+𝑦′
+exp(𝑜𝑦′ℎ)
+exp(𝑜𝑦∗ℎ)
+“ﬁﬁﬁ
+‹
+= 1𝐷 ∑︁(𝑥,𝑦∗) log'›«1+ ∑︁𝑦′≠𝑦∗ exp(𝑜𝑦′ℎ −𝑜𝑦∗ℎ)“ﬁ‹
+Since we are given that𝑜𝑦∗ℎ > 𝑜𝑦′ℎ , for any𝑐 > 1 we have𝑐(𝑜𝑦′ℎ −𝑜𝑦∗ℎ)) < 𝑜𝑦′ℎ −𝑜𝑦∗ℎ . Since exp, log,
+and sums are all monotonic, this gives us our desired result:
+Lx-ent(𝑐·ℎ) = 1𝐷 ∑︁(𝑥,𝑦∗) log'›«1+ ∑︁𝑦′≠𝑦∗ exp(𝑐(𝑜𝑦′ℎ −𝑜𝑦∗ℎ))“ﬁ‹ < 1𝐷 ∑︁(𝑥,𝑦∗) log'›«1+ ∑︁𝑦′≠𝑦∗ exp(𝑜𝑦′ℎ −𝑜𝑦∗ℎ)“ﬁ‹ =Lx-ent(ℎ).
+□
+We now move on to Theorem D.4. First we establish some basic lemmas that will be used in the
+proof:
+Lemma D.2. Let 𝑎,𝑏,𝑟 ∈ ℝ with 𝑎,𝑏≥ 0 and 0 < 𝑟≤ 1. Then(𝑎+𝑏)𝑟≤ 𝑎𝑟+𝑏𝑟.
+Proof. The case with𝑎 = 0 or 𝑏 = 0 is clear, so let us consider𝑎,𝑏 > 0. Let𝑥 = 𝑎𝑎+𝑏 and 𝑦 = 𝑏𝑎+𝑏. Since
+0≤ 𝑥≤ 1, we have𝑥(1−𝑟)≤ 1, which implies𝑥≤ 𝑥𝑟. Similarly 𝑦≤ 𝑦𝑟. Thus 𝑥𝑟+ 𝑦𝑟≥ 𝑥+ 𝑦 = 1.
+Substituting in the values of𝑥 and 𝑦 we get 𝑎𝑟+𝑏𝑟(𝑎+𝑏)𝑟≥ 1, which when rearranged gives us the desired
+result. □
+Lemma D.3. For any𝑥,𝑐,𝑟 ∈ ℝ with 𝑟≥ 1, there exists some𝛿 > 0 such that for any𝜖 < 𝛿we have
+𝑥𝑟−( 𝑥−𝜖)𝑟 > 𝛿(𝑟𝑥𝑟−1−𝑐).
+Proof. The function 𝑓(𝑥) = 𝑥𝑟 is everywhere-differentiable and has derivative𝑟𝑥𝑟−1. Thus we can
+choose𝛿 such that for any𝜖 < 𝛿we have−𝑐 <𝑥𝑟−(𝑥−𝜖)𝑟𝛿 −𝑟𝑥𝑟−1 < 𝑐. Rearranging, we get𝑥𝑟−( 𝑥−𝜖)𝑟 >
+𝛿(𝑟𝑥𝑟−1−𝑐) as desired. □
+24
+Explaining grokking through circuit efficiency
+D.1. Weight decay favours efficient circuits
+To flesh out the argument in Section 3, we construct a minimal example of multiple circuits{𝐶1,...𝐶 𝐼}
+of varying efficiencies that can be scaled up or down through a set of non-negativeweights𝑤𝑖. Our
+classifier is given byℎ = ˝𝐼𝑖=1𝑤𝑖𝐶𝑖, that is, the outputℎ(𝑥,𝑦) is given by˝𝐼𝑖=1𝑤𝑖𝐶𝑖(𝑥,𝑦).
+We take circuits𝐶𝑖 that arenormalised, that is, they produce the same average logit value.𝑃𝑖
+denotes the parameter norm of the normalised circuit𝐶𝑖. We decide to call a circuit with lower𝑃𝑖
+more efficient. However, it is hard to define efficiency precisely. Consider instead the parameter
+norm 𝑃′𝑖 of the scaled circuit𝑤𝑖𝐶𝑖. If we define efficiency as either the ratio∥ﬁ𝑜𝐶𝑖∥/𝑃′𝑖 or the derivative
+𝑑∥ﬁ𝑜𝐶𝑖∥/𝑑𝑃′𝑖, then it would vary with𝑤𝑖 sinceﬁ𝑜𝐶𝑖 and 𝑃′𝑖 can in general have different relationships
+with𝑤𝑖. We prefer𝑃𝑖 as a measure of relative efficiency as it is intrinsic to𝐶𝑖 rather than depending
+on its scaling𝑤𝑖.
+Gradient descent operates over the weights𝑤𝑖 (but not𝐶𝑖 or 𝑃𝑖) to minimiseL =Lx-ent+𝛼Lwd.
+Lx-ent can easily be rewritten in terms of𝑤𝑖, but forLwd we need to model the parameter norm of the
+scaled circuits𝑤𝑖𝐶𝑖. Notice that, in a𝜅-layer MLP with Relu activations and without biases, scaling
+all parameters by a constant𝑐 scales the outputs by𝑐𝜅. Inspired by this observation, we model the
+parameter norm of𝑤𝑖𝐶𝑖 as𝑤1/𝜅𝑖 𝑃𝑖 for some𝜅 >0. This gives the following effective loss:
+L(ﬁ𝑤) =Lx-ent
+ 𝐼∑︁
+𝑖=1
+𝑤𝑖𝐶𝑖
+!
++ 𝛼2
+𝐼∑︁
+𝑖=1
+(𝑤
+1
+𝜅
+𝑖 𝑃𝑖)2
+We will generalise this to any𝐿𝑞-norm (where𝑞 > 0). Standard weight decay corresponds to
+𝑞 = 2. We will also generalise to arbitrary differentiable, bounded training loss functions, instead of
+cross-entropy loss specifically. In particular, we assume that there is some differentiableLtrain(ℎ) such
+that there exists a finite bound𝐵∈ ℝ such that∀ℎ :Ltrain(ℎ)≥ 𝐵. (In the case of cross-entropy loss,
+𝐵 = 0.)
+With these generalisations, the overall loss is now given by:
+L(ﬁ𝑤) =Ltrain
+ 𝐼∑︁
+𝑖=1
+𝑤𝑖𝐶𝑖
+!
++ 𝛼𝑞
+𝐼∑︁
+𝑖=1
+(𝑤
+1
+𝜅
+𝑖 𝑃𝑖)𝑞 (6)
+The following theorem establishes that the optimal weight vector allocates more weight to more
+efficient circuits, under the assumption that the circuits produce identical logits on the training
+dataset.
+Theorem D.4. Given 𝐼 circuits 𝐶𝑖 and associated𝐿𝑞 parameter norms𝑃𝑖, assume that every circuit
+produces the same logits on the training dataset, i.e.∀𝑖, 𝑗,∀(𝑥, _)∈D ,∀𝑦′∈𝑌 we have𝑜𝑦′𝐶𝑖(𝑥) = 𝑜𝑦′𝐶𝑗(𝑥).
+Then, any weight vectorﬁ𝑤∗∈ ℝ𝐼 that minimizes the loss in Equation 6 subject to𝑤𝑖≥ 0 satisfies:
+1. If 𝜅≥ 𝑞, then𝑤∗𝑖 = 0 for all𝑖 such that𝑃𝑖 > min𝑗𝑃𝑗.
+2. If 0 < 𝜅 < 𝑞, then𝑤∗𝑖∝ 𝑃− 𝑞𝜅𝑞−𝜅𝑖 .
+Intuition . Since every circuit produces identical logits, their weights are interchangeable with each
+other from the perspective ofLx-ent, and so we must analyse how interchanging weights affectsLwd.
+Lwd grows as𝑂(𝑤2/𝜅𝑖 ). When𝜅 > 2,Lwd grows sublinearly, and so it is cheaper to add additional
+weight to thelargest weight, creating a “rich get richer” effect that results in a single maximally
+efficient circuit getting all of the weight. When𝜅 <2,Lwd grows superlinearly, and so it is cheaper
+to add additional weight to thesmallest weight. As a result, every circuit is allocated at least some
+weight, though more efficient circuits are still allocated higher weight than less efficient circuits.
+25
+Explaining grokking through circuit efficiency
+Sketch . The assumption that every circuit produces the same logits on the training dataset implies
+thatLtrain is purely a function of˝𝐼𝑖=1𝑤𝑖. So, forLtrain, a small increase𝛿𝑤 to𝑤𝑖 can be balanced by
+a corresponding decrease𝛿𝑤 to some other weight𝑤𝑗.
+ForLwd, an increase𝛿𝑤 to𝑤𝑖 produces a change of approximately𝛿Lwd𝛿𝑤𝑖 ·𝛿𝑤 = 𝛼𝜅(𝑃𝑖(𝑤𝑖)𝑟)𝑞·𝛿𝑤,
+where𝑟 = 1𝜅− 1𝑞 = 𝑞−𝜅𝑞𝜅 . So, an increase of𝛿𝑤 to𝑤𝑖 can be balanced by a decrease of𝑃𝑖(𝑤𝑖)𝑟𝑃𝑗(𝑤𝑗)𝑟 𝑞𝛿𝑤 to
+some other weight𝑤𝑗. The two cases correspond to𝑟≤ 0 and𝑟 >0 respectively.
+Case 1:𝑟≤ 0. Consider𝑖, 𝑗with 𝑃𝑗 > 𝑃𝑖. The optimal weights must satisfy𝑤∗𝑖≥ 𝑤∗𝑗 (else you could
+swap𝑤∗𝑖 and𝑤∗𝑗 to decrease loss). But then𝑤∗𝑗 must be zero: if not, we could increase𝑤∗𝑖 by𝛿𝑤 and
+decrease𝑤∗𝑗 by𝛿𝑤, which keepsLx-ent constant and decreasesLwd (since 𝑃𝑖(𝑤∗𝑖)𝑟 < 𝑃𝑗(𝑤∗𝑗)𝑟).
+Case 2:𝑟 > 0. Consider 𝑖, 𝑗with 𝑃𝑗 > 𝑃𝑖. As before we must have𝑤∗𝑖 ≥ 𝑤∗𝑗. But now𝑤∗𝑗 must not
+be zero: otherwise we could increase𝑤∗𝑗 by𝛿𝑤 and decrease𝑤∗𝑖 by𝛿𝑤 to keepLx-ent constant and
+decreaseLwd, since𝑃𝑗(𝑤∗𝑗)𝑟 = 0 < 𝑃𝑖(𝑤∗𝑖)𝑟. The balance occurs when𝑃𝑗(𝑤∗𝑗)𝑟 = 𝑃𝑖(𝑤∗𝑖)𝑟, which means
+𝑤∗𝑖∝ 𝑃−1/𝑟𝑖 .
+Proof. First, notice that our conclusions trivially hold forﬁ𝑤∗ =ﬁ0 (which can be a minimum if e.g.
+the circuits are worse than random). Thus for the rest of the proof we will assume that at least one
+weight is non-zero.
+In addition,L→∞ whenever any𝑤𝑖→∞ (becauseLtrain≥ 𝐵andLwd→∞ as any one𝑤𝑖→∞ ).
+Thus, any global minimum must have finiteﬁ𝑤.
+Notice that, since the circuit logits are independent of𝑖, we haveℎ =(˝𝑖𝑤𝑖) 𝑓, and soLtrain(ﬁ𝑤) is
+purely a function of the sum of weights˝𝐼𝑖=1𝑤𝑖, and the overall loss can be written as:
+L(ﬁ𝑤) =Ltrain
+ 𝐼∑︁
+𝑖=1
+𝑤𝑖
+!
++ 𝛼𝑞
+𝐼∑︁
+𝑖=1
+((𝑤𝑖)
+1
+𝜅𝑃𝑖)𝑞
+We will now consider each case in order.
+Case 1:𝜅≥ 𝑞. Assume towards contradiction that there is a global minimumﬁ𝑤∗ where𝑤∗𝑗 > 0 for
+some circuit𝐶𝑗 with non-minimal𝑃𝑗. Let𝐶𝑖 be a circuit with minimal𝑃𝑖 (so that𝑃𝑖 < 𝑃𝑗), and let its
+weight be𝑤∗𝑖.
+Consider an alternate weight assignmentﬁ𝑤′ that is identical toﬁ𝑤∗ except that 𝑤′𝑗 = 0 and
+𝑤′𝑖 =𝑤∗𝑖+𝑤∗𝑗. Clearly˝𝑖𝑤∗𝑖 = ˝𝑖𝑤′𝑖, and soLtrain(ﬁ𝑤∗) =Ltrain(ﬁ𝑤′). Thus, we have:
+L(ﬁ𝑤∗)−L( ﬁ𝑤′)
+=
+ 
+𝛼
+𝑞
+𝐼∑︁
+𝑚=1
+((𝑤∗𝑚) 1𝜅𝑃𝑚)𝑞
+!
+−
+ 
+𝛼
+𝑞
+𝐼∑︁
+𝑚=1
+((𝑤′𝑚) 1𝜅𝑃𝑚)𝑞
+!
+= 𝛼𝑞 (𝑤∗𝑖) 𝑞𝜅𝑃𝑞𝑖+( 𝑤∗𝑗) 𝑞𝜅𝑃𝑞𝑗−( 𝑤′𝑖) 𝑞𝜅𝑃𝑞𝑖 
+> 𝛼𝑞𝑃𝑞𝑖 (𝑤∗𝑖) 𝑞𝜅+( 𝑤∗𝑗) 𝑞𝜅−( 𝑤′𝑖) 𝑞𝜅 since 𝑃𝑗 > 𝑃𝑖
+= 𝛼𝑞𝑃𝑞𝑖 (𝑤∗𝑖) 𝑞𝜅+( 𝑤∗𝑗) 𝑞𝜅−( 𝑤∗𝑖+𝑤∗𝑗) 𝑞𝜅 definition of𝑤′𝑖
+≥ 𝛼𝑞𝑃𝑞𝑖 (𝑤∗𝑖) 𝑞𝜅+( 𝑤∗𝑗) 𝑞𝜅− (𝑤∗𝑖) 𝑞𝜅+( 𝑤∗𝑗) 𝑞𝜅 using Lemma D.2 since0 < 𝑞𝜅≤ 1
+= 0
+26
+Explaining grokking through circuit efficiency
+Thus we haveL(ﬁ𝑤∗) >L(ﬁ𝑤′), contradicting our assumption thatﬁ𝑤∗ is a global minimum ofL.
+This completes the proof for the case that𝜅≥ 𝑞.
+Case 2:𝜅 < 𝑞. First, we will show that all weights are non-zero at a global minimum (excluding the
+case whereﬁ𝑤∗ =ﬁ0, discussed at the beginning of the proof). Assume towards contradiction that there
+is a global minimumﬁ𝑤∗ with𝑤∗𝑗 = 0 for some𝑗. Choose some arbitrary circuit𝐶𝑖 with nonzero weight
+𝑤∗𝑖.
+Choose some𝜖1 > 0 satisfying 𝜖1 < 𝑞2𝜅(𝑤∗𝑖) 𝑞𝜅−1. By applying Lemma D.3 with𝑥 =𝑤∗𝑖,𝑐 =𝜖1,𝑟 = 𝑞𝜅,
+we can get some𝛿 >0 such that for any𝜖 < 𝛿we have(𝑤∗𝑖) 𝑞𝜅−( 𝑤∗𝑖−𝜖) 𝑞𝜅 > 𝛿(𝑞𝜅(𝑤∗𝑖) 𝑞𝜅−1−𝜖1).
+Choose some𝜖2 > 0 satisfying 𝜖2 < min(𝑤∗𝑖,𝛿,
+
+𝑞
+2𝜅(𝑤∗𝑖) 𝑞𝜅−1𝑃𝑞𝑖𝑃𝑞𝑗
+ 1𝑞
+𝜅−1
+). Consider an alternate weight
+assignment definedﬁ𝑤′ that is identical toﬁ𝑤∗ except that𝑤′𝑗 =𝜖2 and𝑤′𝑖 =𝑤∗𝑖−𝜖2. As in the previous
+case,Ltrain(ﬁ𝑤∗) =Ltrain(ﬁ𝑤′). Thus, we have:
+L(ﬁ𝑤∗)−L( ﬁ𝑤′)
+= 𝛼𝑞 (𝑤∗𝑖) 𝑞𝜅𝑃𝑞𝑖−( 𝑤∗𝑖−𝜖2) 𝑞𝜅𝑃𝑞𝑖−𝜖𝑞𝜅2𝑃𝑞𝑗
+= 𝛼𝑞 𝑃𝑞𝑖((𝑤∗𝑖) 𝑞𝜅−( 𝑤∗𝑖−𝜖2) 𝑞𝜅)− 𝜖𝑞𝜅2𝑃𝑞𝑗
+> 𝛼𝑞 𝑃𝑞𝑖𝛿(𝑞𝜅(𝑤∗𝑖) 𝑞𝜅−1−𝜖1)− 𝜖𝑞𝜅2𝑃𝑞𝑗 application of Lemma D.3 discussed above
+> 𝛼𝑞 𝑃𝑞𝑖𝛿(𝑞𝜅(𝑤∗𝑖) 𝑞𝜅−1− 𝑞2𝜅(𝑤∗𝑖) 𝑞𝜅−1)− 𝜖𝑞𝜅2𝑃𝑞𝑗 we chose𝜖1 < 𝑞2𝜅(𝑤∗𝑖) 𝑞𝜅−1
+> 𝛼𝑞 𝑃𝑞𝑖𝜖2 𝑞2𝜅(𝑤∗𝑖) 𝑞𝜅−1−𝜖𝑞𝜅2𝑃𝑞𝑗 we chose𝜖2 < 𝛿
+= 𝛼𝜖2
+𝑞
+ 𝑞
+2𝜅(𝑤∗𝑖) 𝑞𝜅−1𝑃𝑞𝑖−𝜖𝑞𝜅−12 𝑃𝑞𝑗
+> 𝛼𝜖2
+𝑞
+ 
+𝑞
+2𝜅(𝑤∗𝑖) 𝑞𝜅−1𝑃𝑞𝑖− 𝑞2𝜅(𝑤∗𝑖) 𝑞𝜅−1𝑃𝑞𝑖𝑃𝑞𝑗 𝑃𝑞𝑗! we chose𝜖2 < " 𝑞2𝜅(𝑤∗𝑖) 𝑞𝜅−1𝑃𝑞𝑖𝑃𝑞𝑗 # 1𝑞𝜅−1)
+= 0
+Note that in the last step, we rely on the fact that𝜅 < 𝑞: this lets us use an upper bound on𝜖2 to
+get an upper bound on𝜖
+𝑞
+𝜅−1
+2 , and so a lower bound on the overall expression.
+Thus we haveL(ﬁ𝑤∗) >L(ﬁ𝑤′), contradicting our assumption thatﬁ𝑤∗ is a global minimum ofL.
+So, for all𝑖 we have𝑤𝑖 > 0.
+In addition, as𝑤𝑖→∞ we haveL(ﬁ𝑤)→∞ , soﬁ𝑤∗ cannot be at the boundaries, and instead lies in
+the interior. Since𝑞 > 𝜅,L(ﬁ𝑤) is differentiable everywhere. Thus, we can conclude that its gradient
+27
+Explaining grokking through circuit efficiency
+atﬁ𝑤∗ is zero:
+𝛿L
+𝛿𝑤𝑖
+= 0
+𝛿Ltrain
+𝛿𝑤𝑖
++
+𝛼𝑃𝑞𝑖
+𝜅 (𝑤∗𝑖) 𝑞𝜅−1 = 0
+𝑃𝑞𝑖(𝑤∗𝑖)𝑞−𝜅𝜅 =−𝜅𝛼𝛿Ltrain𝛿𝑤𝑖
+𝑤∗𝑖𝑃
+𝑞𝜅
+𝑞−𝜅
+𝑖 =
+
+−𝜅𝛼𝛿Ltrain𝛿𝑤𝑖
+ 𝜅
+𝑞−𝜅
+SinceLtrain(ﬁ𝑤) is a function of
+𝐼˝
+𝑗=1
+𝑤𝑗, we can conclude that𝛿Ltrain𝛿𝑤𝑖 = 𝛿Ltrain𝛿˝𝑗𝑤𝑗· 𝛿˝𝑗𝑤𝑗𝛿𝑤𝑖 = 𝛿Ltrain𝛿˝𝑗𝑤𝑗, which
+is independent of𝑖. So the right hand side of the equation is independent of𝑖, allowing us to conclude
+that𝑤∗𝑖∝ 𝑃− 𝑞𝜅𝑞−𝜅𝑖 .
+□
+28

@@ -1,0 +1,231 @@
+\documentclass{article}
+\usepackage[preprint]{neurips_2025}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts,amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{multirow}
+\newcommand{\ttr}{t_{\mathrm{train}}}
+\newcommand{\tva}{t_{\mathrm{val}}}
+
+\title{Width Speeds Up Memorisation Faster Than Generalisation:\\
+An Empirical Study of Delayed Generalisation on Modular Addition}
+
+\author{Anonymous (autonomous-agent research run)}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Delayed generalisation (``grokking'') on modular arithmetic is mostly studied at one model size, so how it depends on scale is
+poorly characterised. We state a falsifiable ``two-clock'' account---a memorisation clock that speeds up with width and a generalisation
+clock governed by the weight-decay time scale---and register seven predictions before running the main sweeps.
+We then test them with 434 full-batch AdamW runs (6 seeds per width in the core sweep; 2--6 elsewhere) on modular addition with
+MLPs ($24$--$512$ hidden units), plus other operations, a modulus change, width-dependent learning-rate scalings and a small transformer.
+In the core setting ($p{=}53$, 30\% of pairs for training), time to fit the training set falls as $w^{-1.0}$ to $w^{-1.4}$, whereas time to generalise
+falls more slowly (log-log slope $-0.56$, 95\% CI $[-0.77,-0.36]$ for $w\ge128$), so the \emph{relative} delay $t_{val}/t_{train}$ grows with
+width while the \emph{absolute} delay shrinks. The growth of the relative delay is not robust: it vanishes under a
+$\mathrm{lr}\propto 1/w$ parameterisation that keeps the decay rate $\mathrm{lr}\cdot\mathrm{wd}$ fixed, reverses
+(wider models generalise later) when the decay rate falls with width, and is absent for $p{=}97$ and for some operations.
+Memorisation time is indistinguishable between true and random labels (Spearman $\rho{=}0.9999$ over 28 width--data-fraction cells), and
+fitting requires only $\approx$4--5 parameters per training example, but generalising needs several times more width: narrow models that fit the
+training set stay at chance for $10^5$ steps and generalise only after $2$--$3\times10^5$ steps, so the ``threshold'' is a budget-dependent
+soft boundary. Of the seven registered predictions, three are supported, three are partly supported (one component falsified in each) and one is falsified: at fixed width, generalisation time does not depend on learning rate and weight decay only through their product;
+a post-hoc test shows that a product-like dependence emerges only at large width. Scope limits: one small modulus, one optimiser recipe, $\le 6$ seeds, and the transformer evidence is weak.
+\end{abstract}
+
+\section{Introduction}
+Neural networks trained on small algorithmic datasets can reach perfect training accuracy long before validation accuracy rises~\citep{power2022grokking}.
+Explanations include mechanistic circuit formation~\citep{nanda2023progress}, a loss-landscape/weight-norm picture~\citep{liu2023omnigrok},
+efficiency of competing circuits under weight decay~\citep{varma2023circuit}, and a lazy-to-rich transition of the training dynamics~\citep{kumar2024grokking}.
+Most such studies fix the architecture size. Yet experimenters routinely choose the width of the model when building grokking testbeds,
+and the choice can change both \emph{whether} and \emph{how strongly} delayed generalisation appears. We ask:
+\emph{on modular arithmetic, how does the occurrence of delayed generalisation depend on model scale?}
+
+Rather than just plotting delay against size, we put forward an explanation that makes checkable predictions, state the predictions before the main
+experiments, and report which are falsified. The explanation (Sec.~\ref{sec:hyp}) says that two ``clocks'' scale differently with width:
+fitting the training labels (memorisation) speeds up quickly with width, while generalisation is released on a time scale set by weight decay.
+Our contributions are empirical:
+\begin{itemize}\setlength\itemsep{0pt}
+\item A measurement protocol with bootstrap uncertainty and explicit handling of censored runs (as lower bounds), and a self-registered predictions file written before the main sweeps (\texttt{code/PREREG.md}).
+\item In the core setting, the memorisation clock scales as $w^{-1.0}\!\ldots w^{-1.4}$ and is label-agnostic, whereas the generalisation clock
+scales much more weakly at large width (steeply near a threshold), so relative delay grows and absolute delay shrinks with width (Sec.~\ref{sec:core},\ref{sec:mem}).
+\item Fitting and generalising have very different capacity thresholds, and the latter is a soft, budget-dependent boundary; with more data, narrow models generalise without any delay (Sec.~\ref{sec:thresh}).
+\item The width--delay relation is \emph{parameterisation dependent}: depending on how lr and wd scale with width, relative delay grows, stays flat, or grows faster, and absolute generalisation time can even increase with width (Sec.~\ref{sec:timescale},\ref{sec:robust}).
+\item An honest scorecard (Table~\ref{tab:score}): of seven registered predictions, 3 are supported (P1, P2 in the core setting, P7), 3 are partly supported (P3, P5, P6) and 1 is falsified (P4).
+\end{itemize}
+
+\section{Related work}
+\textbf{Grokking.} \citet{power2022grokking} introduced delayed generalisation on algorithmic datasets, including modular arithmetic.
+\citet{nanda2023progress} reverse-engineer a one-layer transformer on modular addition and define progress measures; \citet{liu2023omnigrok} relate grokking to weight norm and
+initialisation scale and extend it beyond algorithmic data; \citet{varma2023circuit} explain it via the relative efficiency of memorising and generalising circuits and
+test predictions by training experiments; \citet{kumar2024grokking} connect it to a lazy-to-rich dynamics transition in two-layer networks.
+\citet{davies2023unifying} discuss grokking together with double descent~\citep{nakkiran2020deep}. We do not test any of these mechanisms directly
+(we do no interpretability); we use them to motivate predictions on how timing should scale with width, learning rate and weight decay.\\
+\textbf{Memorisation capacity.} \citet{zhang2017rethinking} show that networks fit random labels; \citet{tirumala2022memorization} and \citet{morris2025memorize}
+study memorisation in language models, the latter with a method that estimates how much information a model holds about its data points. Our random-label probe is a small-scale analogue used to time
+the ``memorisation clock''. \\
+\textbf{Optimiser.} We use AdamW~\citep{loshchilov2017decoupled}, in which weight decay shrinks weights by a factor $(1-\mathrm{lr}\cdot\mathrm{wd})$ per step, which is why the product $\mathrm{lr}\cdot\mathrm{wd}$ appears in our time-scale prediction.\\
+\textbf{Positioning.} Prior work (e.g.\ \citealp{power2022grokking,liu2023omnigrok}) varies data fraction, weight decay and initialisation scale; here we focus on \emph{model width as the controlled variable}, separate absolute from relative delay, and
+stress-test conclusions against optimiser parameterisation and censoring.
+
+\section{Setup, hypothesis and registered predictions}\label{sec:setup}
+\textbf{Data.} For a prime $p$ and operation $\circ$, all $p^2$ pairs $(a,b)$ are enumerated with label $a\circ b \bmod p$
+(add, sub, mul, or $a^2{+}b^2$); a random fraction $f$ (default $0.3$) is the training set and the rest the validation set. Main modulus: $p{=}53$ ($843$ training pairs);
+$p{=}97$ is a robustness check. Data are generated in memory (no download).\\
+\textbf{Models.} (i) MLP: learned $w$-dim embeddings of $a$ and $b$, concatenated, two hidden ReLU layers of width $w$, linear readout to $p$ logits ($4$k--$842$k parameters for $w{=}24$--$512$).
+(ii) One-layer transformer ($d_{model}{=}w$, 4 heads, MLP $4w$, no LayerNorm; input tokens $[a,b,=]$). Initialisation: all weight matrices $\mathcal N(0,1/\text{fan-in})$ (He scale for MLP hidden layers), i.e.\ a standard (``SP'') parameterisation.\\
+\textbf{Training.} Full-batch AdamW ($\beta{=}(0.9,0.98)$, lr $10^{-3}$, wd $1.0$, 10-step warm-up), cross-entropy, up to $T_{max}$ steps ($10^5$ for most MLP runs). Accuracy is evaluated every 10 steps up to step 500, every 50 up to 5000, then every 200.
+Each \emph{seed} controls the initialisation and the train/validation split.\\
+\textbf{Metrics.} $\ttr$ ($\tva$): first evaluation step with train (validation) accuracy $\ge0.99$. Relative delay $R=\tva/\ttr$, absolute delay $D=\tva-\ttr$.
+Runs that do not reach the threshold by $T_{max}$ are \emph{censored} and their value is set to $T_{max}$ (a lower bound); medians over seeds are therefore bounds when $\ge$ half of the runs are censored (hollow markers, ``$\ge$'' in tables).
+Uncertainty: 95\% bootstrap CI of the median (4000 resamples of seeds); log-log slopes are fit to per-width medians, with CIs from bootstrap resampling of seeds within width.
+$\ttr$ has a resolution of 10 steps for $\ttr\le500$ (e.g.\ $\pm25\%$ at $\ttr{=}20$), which bootstrap CIs do not capture.
+Slopes and rank correlations use only widths where fewer than half of the runs are censored unless stated.
+
+\subsection{Explanation under test: a ``two-clock'' account}\label{sec:hyp}
+\emph{Memorisation clock} $t_{mem}(w)$: how fast the network fits training labels; it is limited by memorisation speed and should shorten quickly with width.
+\emph{Generalisation clock} $t_{gen}$: when weight decay has pruned the memorising solution enough for the generalising circuit to take over; it should be set mainly by the optimiser time scale $1/(\mathrm{lr}\cdot\mathrm{wd})$ and depend only weakly on width.
+Registered predictions (full text with falsification criteria in \texttt{code/PREREG.md}; written after an exploratory pilot, seeds 0--2, but before the sweeps with seeds 100+):
+\begin{description}\setlength\itemsep{0pt}
+\item[P1] $\ttr$ decreases monotonically with width (negative log-log slope).
+\item[P2] $R$ increases with width while $D$ does not increase.
+\item[P3] Random-label fitting time tracks real-label $\ttr$ (Spearman $>0.8$), and the smallest width that fits random labels predicts the smallest width that fits true labels within a factor 1.5, shifting to larger widths with more training data.
+\item[P4] At fixed width, $\tva$ depends on lr and wd through lr$\cdot$wd: log-log slope in $[-1.3,-0.7]$, and equal-product pairs differ by $<1.5\times$.
+\item[P5] P1 and P2 hold for sub, mul, $a^2{+}b^2$ and $p{=}97$.
+\item[P6] P1, P2 hold for the transformer.
+\item[P7] (exploratory) The width trend changes if lr is scaled with width, i.e.\ it depends on the parameterisation.
+\end{description}
+A post-hoc, clearly exploratory prediction P8 (Sec.~\ref{sec:timescale}) was registered after the main sweeps and before its test.
+
+\section{Experiments and results}
+All experiments use the code in \texttt{code/}; Appendix~\ref{app:exp} lists which script and result file produce each figure and table.
+Counts of runs per cell are given in tables; because $n\le6$ seeds per cell, CIs are coarse and we avoid claims resting on small differences.
+No multiple-comparison correction was applied: we report effect sizes with CIs rather than p-values, and no conclusion rests on a single borderline test.
+
+\subsection{Core sweep: scale makes the delay relatively longer but absolutely shorter}\label{sec:core}
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figs/fig_e1.pdf}
+\caption{Core MLP width sweep (modular addition, $p{=}53$, $f{=}0.3$, 6 seeds/width). (a) Example runs (seed 100). (b) Time to 99\% accuracy; median and bootstrap 95\% CI;
+hollow markers: $\ge$ half the runs censored at $10^5$ steps. (c) Relative delay $R$. (d) Absolute delay $D$.}\label{fig:e1}
+\end{figure}
+\begin{table}[t]\centering\scriptsize
+\caption{Core sweep. Median [95\% bootstrap CI] over 6 seeds; steps. cens.: runs not reaching 99\% validation accuracy within $10^5$ steps. For widths $\le64$, $t_{val}$, $R$, $D$ are lower bounds (censored).}\label{tab:e1}
+\input{tables/tab_e1.tex}
+\end{table}
+Figure~\ref{fig:e1} and Table~\ref{tab:e1} show the core sweep. Training accuracy reaches 99\% in $\ttr=2000$ steps at $w{=}24$ and $20$ steps at $w{=}512$.
+Over the ten widths the log-log slope of $\ttr$ is $-1.39$ [$-1.40,-1.37$]; restricted to $w\ge128$ it is $-1.04$ [$-1.06,-1.02$] (Spearman $\rho=-0.997$ over 30 runs): \textbf{P1 is supported}.
+Validation accuracy tells a different story. For $w\le64$ none of 24 runs reaches 99\% validation accuracy in $10^5$ steps (final validation accuracy $\le 0.07$, i.e.\ near chance $1/53$), at $w{=}96$ five of six runs do, and for $w\ge128$ all do.
+Among $w\ge128$, $\tva$ falls from $37.2$k to $16.3$k steps: slope $-0.56$ [$-0.77,-0.36$] (Spearman $\rho=-0.81$ [$-0.92,-0.60$]), i.e.\ shallower than $\ttr$ (slope difference $\approx0.5$).
+Consequently $R$ rises from $413$ ($w{=}128$) to $815$ ($w{=}512$) (slope $+0.49$ [$+0.25,+0.71$]; $\rho=+0.78$ [$0.51,0.94$]), while $D$ falls from $37$k to $16$k (slope $-0.56$ [$-0.77,-0.34$]): \textbf{P2 is supported for this setting}.
+$R$ is not monotone in $w$ at intermediate widths ($555,413,402,492,590,815$ for $w{=}96\ldots512$), so the claim is about the trend.
+The local slope of $\tva$ is much steeper at small width ($-2.2$ for $96\to128$, $-1.1$ for $128\to192$, $-0.6$ for $192\to256$) than at large width ($-0.26$ for $256\to384$, $-0.29$ for $384\to512$): $\tva$ appears to
+flatten towards a floor of roughly $1.5\times10^4$ steps, about $15/(\mathrm{lr}\cdot\mathrm{wd})$. The final parameter $L_2$ norm is $41$--$48$ for all widths $\ge24$, whether the model memorised or generalised, so this norm does not distinguish the two phases here.
+
+\subsection{The memorisation clock is label-agnostic}\label{sec:mem}
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figs/fig_probe.pdf}
+\caption{Memorisation probe (MLP, $p{=}53$, three training fractions $f$; random-label runs use the same training inputs with uniformly random labels). (a) Fraction of runs reaching 99\% train accuracy within budget (60--100k steps; 3--6 seeds). (b) Median fitting time, random vs.\ real labels, one point per (width, $f$) cell where both fit. (c) $\ttr$ vs width, real labels (hollow: censored).}\label{fig:probe}
+\end{figure}
+We repeat training on random labels (same inputs, 3 seeds per cell, 28 (width,$f$) cells where both label types fit). Median fitting times for random and true labels are almost identical
+(Fig.~\ref{fig:probe}b; Spearman $\rho=0.9999$ [$0.998,1.0$] on log scale, median ratio $0.96$): the time to fit is a property of the model and training-set size rather than of label structure, supporting
+the interpretation of $\ttr$ as a memorisation clock (first half of \textbf{P3 supported}).
+With random labels the smallest width at which at least half of runs fit is $16$, $20$, $32$ for $f{=}0.2,0.3,0.5$, i.e.\ $2.5$k, $3.4$k, $6.5$k parameters for $562$, $843$, $1404$ training pairs:
+$\approx4.4$, $4.0$, $4.6$ parameters per training example (wd$=1$, budget $\le 10^5$ steps). So capacity needed for \emph{fitting} grows roughly proportionally to the amount of data.
+The second half of P3 is \textbf{falsified at $f{=}0.5$}: true labels are fitted from $w{=}16$ (3/4 runs) while random labels need $w{=}32$ (a factor 2 $>1.5$), because small models can fit true labels by learning the rule
+(Sec.~\ref{sec:thresh}). At $f{=}0.2$ and $0.3$ the thresholds agree ($16$ vs $16$; $20$ vs $20$), and thresholds shift to larger width with more data as predicted (random labels).
+
+\subsection{Fitting is cheap; generalising needs far more width, and the boundary is soft}\label{sec:thresh}
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figs/fig_thresh.pdf}
+\caption{(a,b) Fraction of runs reaching 99\% train / validation accuracy within 60k steps vs width, for three training fractions (3--6 seeds per cell; Wilson 95\% CIs). (c) Validation accuracy of narrow MLPs ($f{=}0.3$) that stayed at chance in the $10^5$-step runs, with a $4\times10^5$-step budget (3 seeds each).}\label{fig:thresh}
+\end{figure}
+At $f{=}0.3$ the smallest fitting width is $\approx20$ but models with $w$ up to $88$ remain at chance validation accuracy for $10^5$ steps (generalisation by $10^5$ steps: $w{=}72$: 1/6, $80$: 1/6, $88$: 4/6, $96$: 5/6, $128$: 6/6).
+The boundary is a budget effect, not a hard capacity limit: with a $4\times10^5$-step budget, 2/3 runs at $w{=}64$ ($t_{val}{=}1.99$ and $2.70\times10^5$) and 1/3 at $w{=}48$ ($2.88\times10^5$) do generalise (Fig.~\ref{fig:thresh}c; the other runs are still at chance).
+With $f{=}0.2$ no run generalises within 60k steps up to $w{=}256$ (3 seeds each; budget-limited, not shown to be impossible). With $f{=}0.5$ the generalising width is much smaller (3/3 runs from $w{=}64$ within 60k steps) and very narrow models
+($w{=}12$--$24$) sometimes generalise \emph{without delay}: 6 runs have $R\le3.2$ (all at $f{=}0.5$, $w\in\{12,16,20,24\}$; 5 with $R\le1.35$). They are too small to memorise 1404 pairs and must learn the rule directly; in absolute terms they are slow ($\tva$ up to $6\times10^4$ steps).
+So the picture is three-regimes-in-width for a given data fraction: too small to fit; fits only by memorisation (generalisation slow or absent within the budget); and a regime where generalisation arrives after a delay that shrinks in absolute terms with width. Delay as such exists only
+in the middle and upper regimes. We did not map the full $(f,w)$ phase diagram.
+
+\subsection{Optimiser time scale}\label{sec:timescale}
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figs/fig_e4.pdf}
+\caption{(a,b) MLP $w{=}128$, 7 (lr, wd) settings, 4 seeds each, $T_{max}=8\times10^4$: $\tva$ vs lr$\cdot$wd (median, bootstrap CI; marker = lr, colour = wd; (lr=$10^{-3}$, wd$=0.3$) censored in all runs) and $\ttr$ vs lr. (c) $w{=}384$, post-hoc test P8 (individual runs).}\label{fig:e4}
+\end{figure}
+P4 predicts that $\tva$ depends on lr and wd only via lr$\cdot$wd. At $w{=}128$ the log-log slope of $\tva$ on lr$\cdot$wd is $-0.62$ [$-0.83,-0.42$] (run-level bootstrap; 7/28 runs censored, which biases the slope towards 0), outside the registered $[-1.3,-0.7]$.
+Three settings with identical product $10^{-3}$ (lr $5\!\times\!10^{-4},10^{-3},2\!\times\!10^{-3}$) give median $\tva$ of $62$k (1/4 censored), $37.8$k and $41.2$k: ratio $1.64>1.5$. A regression of $\log\tva$ on $\log$ lr and $\log$ wd gives exponents
+$-0.82$ [$-1.09,-0.54$] for lr and $-0.55$ [$-0.78,-0.33$] for wd. \textbf{P4 is falsified} as registered at $w{=}128$. The memorisation clock is mostly an lr clock: $\ttr\propto \mathrm{lr}^{-0.77}$.
+
+\emph{Post-hoc saturation test (P8).} Since $\tva$ flattens at large width, one expects it to be controlled by the optimiser at large width. At $w{=}384$ (4 seeds per setting; baseline 6 seeds), doubling lr reduces median $\tva$ from $17.7$k to $9.7$k (ratio $1.82$ [$1.58,2.39$]) and tripling wd to $7.4$k (ratio $2.39$ [$2.06,3.2$]): both exceed the registered factor 1.4 (\textbf{P8 supported}).
+Together with P4: the generalisation clock follows lr$\cdot$wd approximately (exponents $\approx-0.8$) only at large width, while near the generalisation threshold it also depends on width.
+
+\subsection{Robustness: tasks, modulus, parameterisation, architecture}\label{sec:robust}
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figs/fig_e7.pdf}
+\caption{Width dependence under three scalings of lr/wd with width (MLP, $p{=}53$; reference $w{=}128$, lr $10^{-3}$, wd 1). Fixed lr, wd (6 seeds); lr$\propto1/w$ with lr$\cdot$wd fixed (4 seeds; 2 at $w{=}512$); lr$\propto1/w$ with wd fixed (same seeds). Hollow markers: censored.}\label{fig:e7}
+\end{figure}
+\textbf{Parameterisation (P7).} Fig.~\ref{fig:e7} and Table~\ref{tab:e7}: with lr$\propto1/w$ and lr$\cdot$wd fixed, the $\ttr$ slope for $w\ge128$ is $-0.50$ [$-0.58,-0.42$], the $\tva$ slope $-0.50$ [$-0.87,-0.09$], and the $R$ slope $+0.005$ [$-0.37,+0.42$]: $R$ is flat ($420,402,423$).
+With lr$\propto1/w$ and wd fixed (decay rate $\propto1/w$), $\tva$ \emph{increases} with width (slope $+0.51$ [$+0.14,+0.92$]; $46$k at $w{=}256$, $76$k at $w{=}512$ with 2 seeds) and $R$ grows faster (slope $+1.03$ [$+0.57,+1.44$]).
+Hence ``bigger models grok relatively later'' is parameterisation-dependent; the absolute generalisation time follows the decay rate (compare $\tva$ at $w{=}512$: $16.3$k fixed lr; $18.8$k fixed decay rate; $76$k decay rate $\propto1/w$). \textbf{P7 is supported.}
+(The $w{=}128$ rows of the two scaled settings coincide because they are the same configuration run twice with identical seeds, which also confirms determinism.)
+
+\begin{table}[t]\centering\scriptsize
+\caption{Other operations and modulus (MLP, $f{=}0.3$, lr $10^{-3}$, wd 1). Median [95\% CI]; $\geq$: at least half of the runs censored at $10^5$ steps.}\label{tab:e6}
+\input{tables/tab_e6.tex}
+\end{table}
+\textbf{Other operations and modulus (P5).} Table~\ref{tab:e6}: $\ttr$ falls with width in every task (P1 holds), and the absolute delay $D$ falls from $w{=}128$ to $256$ for all five tasks. The relative delay behaves differently across tasks:
+$R$ rises from $128$ to $256$ for addition ($413\to492$) and subtraction ($342\to550$), is flat for multiplication ($433\to412$) and \emph{falls} for $p{=}97$ ($343\to194$); for $a^2{+}b^2$, $R$ at $w{=}128$ is a lower bound ($\ge909$, 2/4 censored), above $R$ at $w{=}256$ ($627$), so $R$ does not rise there either.
+\textbf{P5 is therefore only partly supported}: P1 and the decrease of $D$ generalise; the increase of $R$ does not. For $p{=}97$, $w{=}64$ is censored for all 3 seeds, i.e.\ the generalisation threshold moves up with $p$.
+
+\textbf{Transformer (P6).} One-layer transformer, $d_{model}\in\{16,32,64,128\}$ (5k--211k parameters), same optimiser, $T_{max}=4\times10^4$ steps ($10^5$ at $d_{model}{=}128$ after the first runs did not finish), 4 seeds (3 at $d_{model}{=}128$).
+$\ttr$ falls monotonically ($1075,345,165,100$ steps; slope $-1.13$ [$-1.18,-1.08$]): P1 holds. For $d_{model}\le32$ validation accuracy stays below $0.09$ for all 8 runs within $4\times10^4$ steps; at $d_{model}{=}64$ three of four runs reach 99\% ($14$--$33$k steps);
+at $d_{model}{=}128$ one of three reaches 99\% ($89$k) and the other two plateau at $0.97$--$0.98$ validation accuracy, so the 99\% criterion is brittle for this model; with a 95\% criterion (post hoc; Tab.~\ref{tab:e5}) all three reach it ($14.4$k, $27.4$k, $88$k).
+The relative delay rises with width (median $R=180$ at $d_{model}{=}64$ with one censored run; $\ge890$ at 128 with 99\%), but the absolute delay does not fall: median $D=29.8$k at $64$ versus a lower bound of $99.9$k at 128 (99\%; 2/3 censored), and under 95\% the ranges overlap ($8.6$--$31.6$k vs $14.4$--$88$k).
+So \textbf{P6 is partly supported} (P1 and the rise of $R$); the MLP behaviour of a falling $D$ is not reproduced, but our transformers are in the near-threshold regime ($d_{model}\le128$) where even MLPs show a steep $\tva(w)$, and the comparison has few seeds and a brittle criterion.
+
+\begin{table}[t]\centering\small
+\caption{Scorecard for registered predictions (details in the text).}\label{tab:score}
+\begin{tabular}{p{3.5cm}p{4.6cm}p{4.8cm}}\toprule
+Prediction & Verdict & Evidence \\\midrule
+P1 $\ttr\downarrow$ in $w$ & supported & slope $-1.04$ to $-1.39$; all tasks \\
+P2 $R\uparrow$, $D\not\uparrow$ & supported for add, $p{=}53$; not general & $R$ slope $+0.49$; fails $p{=}97$, mul \\
+P3 label-agnostic fitting; threshold & partly: first half supported, second falsified at $f{=}0.5$ & $\rho{=}0.9999$; $16$ vs $32$ \\
+P4 lr$\cdot$wd scaling ($w{=}128$) & falsified & slope $-0.62$; ratio $1.64$ \\
+P5 other tasks/$p$ & partly & $D\downarrow$ everywhere; $R\uparrow$ only for add/sub \\
+P6 transformer & partly: P1 and $R\uparrow$ supported; $D\downarrow$ not reproduced & slope $-1.13$; $D(128)\ge D(64)$; brittle 99\% criterion \\
+P7 parameterisation & supported & $R$ slope $0.0$ vs $+1.0$ \\
+P8 (post hoc) saturation & supported & lr$\times2$: $1.8\times$; wd$\times3$: $2.4\times$ \\\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion and limitations}
+\textbf{What the evidence supports.} In this controlled setting, width acts on grokking mainly by accelerating memorisation (a label-agnostic, lr-driven clock) much more than generalisation. Whether this makes
+grokking ``more pronounced'' depends on the definition: relative delay rises in the core setting, absolute delay falls, and a narrow-model regime exists where generalisation needs about $10^3\times$ the steps of memorisation ($R\approx950$--$1300$ at $w{=}64$, $f{=}0.3$, two runs) or does not happen within the budget.
+We did not find a width above which grokking disappears (largest $w{=}512$, 842k parameters; $R\approx800$). The negative results are informative for experimental design: (i) with fixed lr, wd, wider models reach generalisation sooner in absolute time but delay is not independent of how the optimiser is scaled;
+(ii) a testbed that is ``too small'' will not show grokking within a typical budget; (iii) with more data some narrow models generalise directly.\\
+\textbf{Relation to prior explanations.} The label-agnostic memorisation time and the importance of lr$\cdot$wd at large width agree with weight-decay-driven pictures~\citep{varma2023circuit,liu2023omnigrok}, and the parameterisation dependence is
+what one would expect if width acts through the lazy/rich balance~\citep{kumar2024grokking}; we did not measure laziness or circuits, so these remain interpretations, not tests.\\
+\textbf{Limitations.} (1) One small modulus ($p{=}53$; one check at $97$), one optimiser recipe (full-batch AdamW, $\beta_2{=}0.98$), and a single data fraction for most sweeps; minibatch noise, dropout and other regularisers were not studied.
+(2) $\le6$ seeds per cell, so CIs are wide, and 3 seeds in the probes; seed variation of $\tva$ is large (e.g.\ $26.9$k--$53.2$k CI at $w{=}128$). (3) Censoring at $10^5$ steps (and $4\times10^5$ in one probe) means $\tva$ for narrow models is a bound, and the ``threshold'' depends on the budget. (4) $\ttr$ has a 10-step resolution, which matters for $w\ge256$ ($\ttr\le40$). (5) The two-clock account was refined after seeing the pilot and main sweeps; the confirmatory value is in the pre-registered predictions with fresh seeds (P1--P7), while P8 and the three-regime picture are post hoc.
+(6) The transformer evidence is limited: $d_{model}\le128$, 3--4 seeds, a validation criterion that is brittle for this model (plateaus at $0.96$--$0.99$), and only the near-threshold regime. (7) Width above $512$ (MLP) and all depth effects were not studied; the MLP widths reach $842$k parameters, near the $10^6$ budget. (8) No mechanistic analysis. (9) Results are for a 99\% accuracy criterion.
+
+\section{Conclusion}
+On modular addition, model width speeds up memorisation roughly as $w^{-1}$ and generalisation more slowly, so grokking is relatively longer but absolutely shorter for wider MLPs at fixed lr and wd. This relative effect is not universal: it depends on the optimiser parameterisation, the modulus and the operation.
+Narrow models that can fit the data still need orders of magnitude more steps to generalise (or do not within a practical budget), and with more data some of them skip the delay. We hope the scorecard against our self-registered predictions, including falsified predictions, helps calibrate future explanations of delayed generalisation.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+\section{Reproduction map and compute}\label{app:exp}
+\input{appendix.tex}
+
+\newpage
+\input{checklist.tex}
+\end{document}

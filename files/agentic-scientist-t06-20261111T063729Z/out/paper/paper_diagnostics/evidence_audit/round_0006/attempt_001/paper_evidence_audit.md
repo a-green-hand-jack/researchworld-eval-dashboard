@@ -1,0 +1,32 @@
+# Agentic evidence audit
+
+- verdict: `fail`
+- finding_count: `4`
+
+## Summary
+Reported numbers, qualification wording, and the search-versus-final separation match the evidence. Four protocol, provenance and implementation statements are ungrounded or contradicted by the staged source.
+
+## Findings
+### 1. protocol-definitions-ungrounded-1 — Problem Setup and Method (Sec. 3.1, Eq. 1)
+- claim: Ridge lambda=0.01 in Eq. (1), plus "The top pair is ranks 1 and 2 of the full-table fit; the mid pair is ranks floor(M/2) and floor(M/2)+1", stated as the definition used.
+- issue: The evaluator source is not staged, so these definitions cannot be checked against any artifact. The candidate source takes `ridge`, `hi` and `lo` from the request, so it does not show the value 0.01 or how the mid pair is chosen. Only the Research-question paragraph hedges ("as defined by the task's metric"); Sec. 3.1 states them as fact.
+- evidence: source_evidence/downstream/program/src/program.py lines 20-24 and 238-240 (ridge, hi, lo are request fields); claims_grounding.json has no claim for lambda=0.01 or the mid-rank rule; the only mention of "ridge 0.01" is in paper_strategy.md, which is not an evidence source.
+- requested_fix: State that lambda=0.01 and the top/mid pair rule are taken from the task description and could not be verified against evaluator source, or drop them. Keep the wording consistent with the "as we understand it" caveats used elsewhere.
+
+### 2. dataset-provenance-ungrounded-1 — Supplementary Information, Data provenance (Table tab:prov)
+- claim: Dataset repositories, commit hashes (18c29834, 6322995a, f7d2896d, 4c1ff5e3) and licences (apache-2.0, cc-by-4.0, CC-BY-4.0), attributed to "the public task brief".
+- issue: No artifact in the evidence trail contains these commits or licences. claims_grounding.json has no claim for them, and the brief itself is not among the staged artifacts. They are visible Supplementary Information claims with no support.
+- evidence: claims_grounding.json (no claim or source id covers dataset versions or licences); derived/task_meta/final_meta.json and search_meta.json record only row and model counts; paper.tex Table tab:prov.
+- requested_fix: Remove the commit and licence columns, or mark them explicitly as unverified, transcribed values with no artifact support. Keep only the grounded row and model counts.
+
+### 3. warm-start-source-mismatch-1 — Supplementary Information, Algorithmic specification of the studied configuration
+- claim: All fits are warm-started from the previous solution.
+- issue: The staged source does not warm-start every fit. `verify_by_refit` defaults to the full-table `ctx["theta0"]` when no `theta_start` is passed. Every probe in `_min_prefix`, and the refit at the start of each polish round, therefore starts from the full-table fit. Only the re-linearised loop in `_relinearize` passes the previous theta.
+- evidence: source_evidence/downstream/program/src/program.py line 137-138 (`ctx["theta0"] if theta_start is None`), lines 161 and 204 (calls without theta_start), line 193 (call with theta).
+- requested_fix: Change to "refits inside the re-linearised greedy loop are warm-started from the previous solution; prefix-bisection probes and polish refits start from the full-table fit", or delete the sentence.
+
+### 4. llm-usage-overclaim-1 — Supplementary Information, LLM Usage
+- claim: Every figure and table in this paper is derived by script from the evaluator's recorded outputs. The assistant "proposed configurations, ran a development evaluation, froze one selection".
+- issue: The sentence conflicts with the manuscript itself and with the artifacts. The protocol-overview figure is a schematic with no derived content, as the Data provenance subsection says. Table tab:data takes its development sizes from the copied meta JSON files, and Table tab:prov comes from a task brief that is not staged. The pipeline narrative, including the claim about who proposed configurations, has no entry in claims_grounding.json.
+- evidence: paper.tex Data provenance paragraph ("Figure fig:overview is a schematic with no quantitative content"); figure_manifest.json protocol_overview with source_ids []; claims_grounding.json (no claim for the pipeline description); derived/task_meta/*.json.
+- requested_fix: Narrow to "the quantitative figures and the case, aggregate and development-score tables are derived by script from the recorded evaluator outputs". Remove or soften the unsupported statements about how configurations were proposed and the pipeline's order of steps.

@@ -1,0 +1,22 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T08:46:51.032073+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `2`
+- audit_json_path: `work/results/t03/claude/20261111_071336/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/t03/claude/20261111_071336/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/t03/claude/20261111_071336/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+Numbers, comparisons, qualification wording and figures match the evaluator metrics, derived_metrics.json and source files. However, the budget-prior provenance is asserted more firmly than the retained evidence allows, and several claims are grounded to source ids that do not support them.
+
+## Findings
+- `prior-provenance-overstated` (Abstract; Method (Provenance of constants); Table 4 (consts) caption; Results (search-plane checks)): The retained evidence never records any search-plane label means. The only support is the configuration's own notes and a code comment, which say the values are aggregate label means by budget seen in earlier evaluation metrics, so the figures 0.84 and 0.96 and the search-plane origin cannot be checked. The abstract and table caption state this as established fact. The claims_grounding.json entry for it cites final.metric.mean_label_low_budget and final.metric.mean_label_high_budget, which are the sealed-final values 0.8065 and 0.9315 and so cannot support 0.84/0.96 or the search-plane origin.
+  - claim: The budget prior was taken from earlier search-plane aggregate label means; 0.84 and 0.96 are aggregate label means by budget from earlier search-plane evaluations.
+  - evidence: source_evidence/selected_config_NOTES.md (Provenance of constants) and selected_config_program.py lines 35-46 (hand-set from aggregate label means reported in earlier evaluation metrics). search_eval_evidence_selected.json and paper_data.json contain no search-plane label means. claims_grounding.json last claim has final.* source_ids only.
+  - requested_fix: In the abstract and the Table 4 caption, say that the prior constants are hand-set values that the configuration notes describe as aggregate label means from earlier evaluation metrics, and that these means are not retained in the evidence. Drop or soften the unqualified 'search-plane' wording elsewhere, and do not present the grounded claim as backed by the final-evaluation label metrics.
+- `grounding-source-mismatch-1` (Method (Experimental protocol, Compared predictors); Supplementary Information A and B): The claims_grounding.json entries for these facts cite only final.qualification.status (a 'completed' flag) and result.best_correct_score (a score). Neither id carries any protocol constant, dataset fact or implementation detail. The facts are in source_evidence files that no grounding source id references, so the evidence trail does not resolve the visible wording. The text does cite these files, and I checked those cited files against the manuscript statements and found them consistent.
+  - claim: Protocol facts (36 episodes, 720 labeled instances, 8 reruns, 20 derangements, 200 bootstrap replicates, d=10/10/20) and diagnostic constants (8 folds, 4 partitions, 1000 draws, weights, shrinkage 0.6/0.4, margin 0.02), plus the hash-disjointness of final and search data.
+  - evidence: claims_grounding.json claims 'Protocol facts...' and 'Diagnostic constants...' list final.qualification.status and result.best_correct_score as their source_ids. paper_data.json grounding_sources holds value-only entries for these ids. The constants appear in source_evidence/evaluator_final.py (lines 66-72, 761-812), task_contract.json, final_resources_manifest.json and selected_config_program.py (lines 35-46).
+  - requested_fix: Anchor each protocol, dataset-disjointness and constant statement in the manuscript to the specific source_evidence file and line, as the text mostly already does. State that these items are read from source files rather than from the sealed metrics, and drop any implication that final.qualification.status or the search score supports them.

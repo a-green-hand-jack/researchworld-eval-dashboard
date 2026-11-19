@@ -1,0 +1,103 @@
+\documentclass{article}
+\usepackage[main]{neurips_2025}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref,url,booktabs,amsfonts,amsmath,graphicx,xcolor,microtype}
+\newcommand{\gtrsim}{\mathrel{\raisebox{-0.5ex}{$\stackrel{>}{\sim}$}}}
+\newcommand{\lesssim}{\mathrel{\raisebox{-0.5ex}{$\stackrel{<}{\sim}$}}}
+\newcommand{\topk}{\mathrm{top}_3}
+\title{How Reliable Is a Single Run of Kernel SHAP? Repeat-Run Reproducibility of Feature Attributions on Tabular Models}
+\author{Anonymous Author(s)}
+\begin{document}
+\maketitle
+\begin{abstract}
+SHAP attributions for tabular models are usually computed once per instance with a sampling-based estimator (Kernel SHAP) under a fixed compute budget, and the result is reported as the reason for the prediction. We ask when this single run can be trusted. For 22 (dataset, model) cells---six public tabular datasets with $d\in\{8,\dots,279\}$ features, and logistic regression, random forest, XGBoost and an MLP---we run Kernel SHAP 10 times on 60 test instances at four budgets ($M{=}128$ to $8192$ sampled coalitions) and compare each run with a reference (exact interventional TreeSHAP, or a high-budget Kernel SHAP average). Our headline measure is whether the single-run top-3 feature set equals the reference top-3 set. Pooled over cells in which Kernel SHAP is actually stochastic, this holds for 0.91 (95\% CI 0.90--0.92) of runs at $M{=}128$, 0.95 (0.94--0.95) at $M{=}512$, 0.98 (0.97--0.98) at $M{=}2048$ and 0.99 (0.98--0.99) at $M{=}8192$, with signs of the top-3 features correct in all non-degenerate cells; for $d\le 10$ any budget $\ge 2^d-2$ is exhaustive and the run is deterministic. Estimator noise at moderate budgets is smaller than two other sources of variation that single-run practice also ignores---background-sample choice and model retraining (top-3 Jaccard 0.62--0.84 and 0.39--0.94, respectively). However, reliability is very uneven across instances: it is concentrated in the instances whose 3rd and 4th attributions are nearly tied (lowest quintile of rank gap: 0.76 at $M{=}512$), and it collapses when $M$ is not large relative to $d$ (Arrhythmia, $d{=}279$, $M{=}128$: degenerate; $M{=}512$ RF: 0.77). Our verdict is \emph{conditionally reliable}: a single run is adequate against estimator noise when $M\gtrsim 2048$ and $d\lesssim 20$, a cheap two-run agreement check flags most unreliable instances, and the estimator is never the dominant uncertainty about ``the'' explanation.
+\end{abstract}
+
+\section{Introduction}
+SHAP \citep{lundberg2017} is the default tool for justifying individual predictions of tabular models in credit, medical and similar settings. For all but linear and tree models exact computation is exponential in the number of features $d$, so deployments use Kernel SHAP, which estimates Shapley values from a random sample of $M$ feature coalitions, each costing as many model evaluations as there are background rows. Budgets are small in practice (the \texttt{shap} default is $2d{+}2048$), and the standard workflow explains each instance \emph{once}. The attribution vector is then read as a property of the model and the instance, although it is also a draw from a randomized algorithm.
+
+We study the question: \emph{for a trained tabular model, how far can a single-run SHAP attribution be treated as a reliable basis for that prediction, by which measures and against which standards, and under what conditions does this fail?} We keep the compute budget explicit, because it is the constraint practitioners face, and treat it as the main experimental factor.
+
+\paragraph{Contributions.} (i) A protocol that separates \emph{estimator variability} (repeat runs, fixed model/background) from \emph{bias} (distance to an exact or high-budget reference) and puts both next to two other, usually ignored sources of explanation variability: background resampling and model retraining. (ii) A grid over six datasets, four model families, four budgets, 60 instances and 10 repeats, with decision-relevant metrics (top-3 set identity, top-1, sign, relative $\ell_2$ error) and bootstrap confidence intervals. (iii) Evidence on \emph{which instances} fail (small rank gap) and a cheap diagnostic (agreement of two runs). (iv) Negative/qualifying findings: exhaustive regimes make the question moot for $d\le10$; budgets below $\sim$ several times $d$ break down; and one apparent ``bias'' in our own pipeline (XGBoost probability-space TreeSHAP) turned out to be a reference error, which we document (Sec.~\ref{sec:ref}).
+
+\section{Related Work}
+Kernel SHAP \citep{lundberg2017} fits a weighted linear model on sampled coalitions; \citet{covert2021} analyse its estimator and propose a lower-variance variant with convergence detection, and \citet{musco2024} give leverage-score sampling with provable accuracy guarantees. These works study estimator error as a function of samples, usually in $\ell_2$ and for stylised budgets; we instead measure the \emph{decision-relevant} agreement of rankings and signs in default-like practical settings and compare with other variability sources. \citet{chen2020} show that the choice of conditional vs.\ interventional expectation changes what an attribution means; we use the interventional (marginal) value function throughout and do not study that choice. \citet{yuan2022} study the effect of background size on SHAP stability for deep models, and \citet{krishna2022} study disagreement \emph{between} explanation methods; our background-resampling and repeat-run comparisons are in the same spirit for one method. The idea that equally good models disagree on individual predictions is \emph{predictive multiplicity} \citep{marx2020}; our retraining comparison is an attribution-level analogue. For quantifying agreement between sets/rankings of features we use top-$k$ set overlap, related to feature-selection stability \citep{nogueira2018} and to rank-biased similarity \citep{webber2010}; we chose plain top-3 identity because it maps to the common ``top reasons'' presentation. We are not aware of a systematic grid combining budget, dimensionality, model family and instance-level heterogeneity for single-run reliability; our search was not exhaustive.
+
+\section{Method}
+\subsection{Setup}
+Let $f$ be the model output being explained (probability of the positive class; for XGBoost the log-odds, see Sec.~\ref{sec:ref}), $B$ a background set of $n_B{=}50$ training rows, and $\phi(x;M,s)\in\mathbb{R}^d$ the interventional Kernel SHAP estimate for instance $x$ from \texttt{shap} 0.51.0 with $M$ coalitions (\texttt{nsamples}), no $\ell_1$ regularisation, and seed $s$. Each coalition costs $n_B$ evaluations of $f$, so the budget is $M\,n_B$ model calls. \texttt{shap} enumerates coalitions by size from the extremes inward while the budget permits and samples the remainder at random; when $M\ge 2^d-2$ it enumerates everything and the output is deterministic. We call a cell \emph{stochastic} if $d<M<2^d-2$ and \emph{degenerate} if $M<d$ (the regression is under-determined). Background, model and instance are held fixed across the 10 repeats, so repeat-to-repeat variation is pure estimator noise.
+
+\subsection{Reference and metrics}
+\textbf{Reference $\phi^\star(x)$.} For RF and XGBoost: exact interventional TreeSHAP with the \emph{same} background. For logistic regression and the MLP (no exact algorithm for the probability output): the mean of 5 independent Kernel SHAP runs at $M{=}16384$ (so for $d{=}20$ the reference itself has small residual noise; we report it as a limitation). Arrhythmia ($d{=}279$) is restricted to RF/XGBoost for this reason. For $d\le10$ the $M\ge2^d-2$ runs are exact and agree with the reference up to numerical error.
+
+\textbf{Metrics} (per instance, then averaged over instances; $\topk(v)$ = indices of the 3 largest $|v_j|$):
+(a) \emph{top-3 match}: fraction of the 10 runs with $\topk(\phi_r)=\topk(\phi^\star)$ --- the probability that one run gives the same ``three main reasons'' as the reference;
+(b) top-1 match and sign agreement of the reference top-3 features;
+(c) relative error $\|\phi_r-\phi^\star\|_2/\|\phi^\star\|_2$;
+(d) pairwise top-3 Jaccard among runs (reference-free self-consistency).
+\textbf{Comparison standards.} (1) \emph{Reference} (bias+noise). (2) \emph{Other variability sources} for RF and XGBoost, in exact TreeSHAP so no estimator noise is involved: pairwise top-3 Jaccard over 10 different random background draws (same model), and over 5 models retrained with different seeds (same background). For XGBoost our training is deterministic given the data, so seed retraining changes nothing and we report it as not applicable. (3) \emph{Instance-level diagnostics}: the normalised rank gap $g=(|\phi^\star|_{(3)}-|\phi^\star|_{(4)})/\|\phi^\star\|_1$ and a two-run agreement check: do $\topk(\phi_a)$ and $\topk(\phi_b)$ coincide for two runs, and does a third held-out run then match the reference? (three disjoint triples per instance).
+
+\subsection{Statistics}
+All intervals are 95\% percentile bootstrap intervals (2000 resamples) over the 60 test instances (the unit of replication); for the two-run diagnostic we resample instances as clusters. Intervals therefore capture instance sampling, not variability over models, backgrounds or train/test splits, which are fixed per cell (see limitations). No significance tests are used; claims rest on effect sizes and intervals.
+
+\section{Experiments}
+\paragraph{Data and models.} Statlog German Credit (OpenML 31; $d{=}20$, ordinal-coded categoricals), Pima Diabetes (OpenML 37; $d{=}8$), Give Me Some Credit (OpenML 46929; $d{=}10$, median imputation), ACSIncome and ACSPublicCoverage (California, 2018, 1-year, via folktables \citep{ding2021}; $d{=}10$ and $19$), and Arrhythmia (OpenML 5; $d{=}279$; abnormal vs.\ normal, median imputation). Large sets are subsampled to 20{,}000 rows; 70/30 stratified split (seed 0). Models, with fixed non-tuned hyperparameters: standardised logistic regression, random forest (100 trees, min leaf 3), XGBoost (150 trees, depth 4, rate 0.1), MLP (64--64, early stopping). Test AUCs are in Appendix~\ref{app:auc}. We deliberately chose datasets with different $d$ since the budget-to-dimension ratio is the key structural factor. Budgets are $M\in\{128,512,2048,8192\}$; 2048 is close to the \texttt{shap} default $2d{+}2048$. 60 random test instances, 10 repeats per instance and budget. Total: 22 cells, $\le$16 CPU-hours for the final runs (Appendix~\ref{app:repro}).
+
+\subsection{Results}
+\paragraph{Headline: reliability against estimator noise grows steeply with $M$, and exhaustive regimes are exact.} Table~\ref{tab:head} pools the stochastic cells. Full per-cell numbers are in Table~\ref{tab:match} (Appendix) and Fig.~\ref{fig:budget}. For all $d\le 10$ datasets, $M\ge 2048$ ($\ge$512 for Pima) is exhaustive: runs are identical and match the reference exactly, so a single run is trivially reliable and the question is moot. Sign agreement for the reference top-3 features was 1.00 in every non-degenerate cell and budget (\texttt{results/summary.csv}). At $M{=}128$, the minimum cell value of top-3 match is 0.83; at $M{=}512$ it is 0.77 (Arrhythmia RF); at $M{=}2048$ 0.945 (German RF, where it plateaus at 0.95 at $M{=}8192$ although run-to-run Jaccard is 0.98, which suggests near-ties in the reference rather than noise).
+
+\begin{table}[t]\centering\small
+\caption{Single-run top-3 set equals reference top-3 set, pooled over stochastic cells ($d<M<2^d-2$): mean over instances with 95\% bootstrap CI; range over cells; fraction of instances where fewer than half of the 10 runs match. Source: \texttt{results/headline.json}.}\label{tab:head}
+\begin{tabular}{rcccc}\toprule $M$ & \#cells & pooled match (CI) & cell range & inst.\ with $<50\%$ matching\\\midrule
+128 & 20 & 0.91 (0.90, 0.92) & 0.83--0.99 & 3.8\%\\
+512 & 18 & 0.95 (0.94, 0.95) & 0.77--1.00 & 2.4\%\\
+2048 & 10 & 0.98 (0.97, 0.98) & 0.95--0.99 & 0.5\%\\
+8192 & 10 & 0.99 (0.98, 0.99) & 0.95--1.00 & 0.3\%\\\bottomrule\end{tabular}\end{table}
+
+\begin{figure}[t]\centering\includegraphics[width=\linewidth]{../figs/match_vs_budget.pdf}
+\caption{P(single-run top-3 = reference top-3) against budget $M$; mean and 95\% bootstrap CI over 60 instances; degenerate ($M<d$) points omitted. Produced by \texttt{analyze.py}.}\label{fig:budget}\end{figure}
+
+\paragraph{Dimension matters: budget must be several times $d$.} For Arrhythmia, $M{=}128<d{=}279$ gives a degenerate solve (relative errors $\sim10^{28}$, top-3 match 0), $M{=}512$ gives 0.77 (RF) and 0.91 (XGBoost), and $M{=}8192$ reaches 0.99 and 0.98. At $d{=}19$--20 with $M{=}128$ (about $6d$), top-3 match is already only 0.83--0.87 for the tree and MLP models (0.91--0.96 for logistic regression). Logistic regression is the easiest model (e.g.\ German: 0.91, 0.96, 0.99, 1.00 for the four budgets), RF/XGBoost/MLP behave similarly to one another with no consistent ordering beyond that.
+
+\paragraph{Estimator noise is smaller than other single-run-ignored variability.} Table~\ref{tab:noise} compares, for tree models, run-to-run Jaccard of Kernel SHAP with Jaccard across background resamples and across retrained models (exact TreeSHAP). With $M\ge2048$, where applicable, Kernel SHAP repeats agree at 0.96--1.00, while changing the 50-row background drops agreement to 0.62--0.84 and retraining RF to 0.39--0.94. Estimator agreement exceeds background-resampling agreement in every RF/XGBoost cell and non-degenerate budget (smallest margin 0.10 in Jaccard, at $M{=}128$), so estimator noise is never the dominant source in our grid. This is a statement about \emph{variability of the attribution of a given instance}; it does not say any of these attributions is ``correct''.
+
+\begin{table}[t]\centering\scriptsize
+\caption{Mean pairwise top-3 Jaccard (95\% CI over instances): Kernel SHAP repeat runs vs.\ 10 background resamples (exact TreeSHAP, fixed model) vs.\ 5 retrained models (exact TreeSHAP). n/a: degenerate ($M<d$), or XGBoost retraining (deterministic training). Source: \texttt{analyze.py}.}\label{tab:noise}
+\resizebox{\linewidth}{!}{\input{../results/tex_noise.tex}}\end{table}
+
+\paragraph{Unreliability is concentrated in near-tied instances, and a two-run check detects it.} Fig.~\ref{fig:gap} bins instances (stochastic cells pooled) by the normalised gap between the 3rd and 4th largest reference attribution. In the lowest quintile top-3 match is 0.76 at $M{=}512$ (0.89 at $M{=}2048$), versus $\ge0.97$ in the others (Spearman between gap and match 0.60 and 0.50). Two runs that agree on their top-3 identify well the cases where a third run matches the reference: $P(\text{match}\mid\text{agree})=0.97$ (0.96, 0.98) vs.\ $P(\text{match}\mid\text{disagree})=0.66$ (0.59, 0.72) at $M{=}512$; 0.98 vs.\ 0.80 (0.70, 0.89) at $M{=}2048$; at $M{=}8192$ disagreement occurs for only 24 of 1800 triples and the conditional estimate is imprecise (0.54, CI 0.31--0.80). Disagreeing pairs are rare enough at larger $M$ that this check is cheap there, but it doubles cost.
+
+\begin{figure}[t]\centering\includegraphics[width=0.62\linewidth]{../figs/gap.pdf}
+\caption{Single-run top-3 match by quintile of the normalised rank-3/4 gap of the reference (Q1 = smallest gaps), stochastic cells pooled; left $M{=}512$, right $M{=}2048$.}\label{fig:gap}\end{figure}
+
+\paragraph{Negative result and pitfall: a biased reference.} In a first version of our pipeline XGBoost was explained in probability space and compared with TreeSHAP's \texttt{model\_output="probability"}. The Kernel SHAP runs agreed with each other (Jaccard$\approx1$) but plateaued at 12\% relative error to this reference even when the algorithm was exhaustive (Pima). A check (\texttt{check\_xgb.py}, \texttt{results/check\_xgb.txt}) shows that exhaustive Kernel SHAP matches TreeSHAP in log-odds space to $2\times10^{-7}$ relative error, while the probability-space TreeSHAP differs by 12.7\% from the exact Shapley values of the probability function. We therefore explain XGBoost in log-odds. This does not affect RF (probability, matches to $\sim10^{-3}$), but shows that a reference must itself be validated; reported numbers all use the corrected pipeline.\label{sec:ref}
+
+\section{Discussion and Limitations}
+\textbf{Verdict.} Under our conditions, a single Kernel SHAP run is a reliable basis \emph{with respect to estimator noise} when (i) the coalition space is enumerated ($d\lesssim10$ at the default budget), or (ii) $M\gtrsim2048$ for $d\le20$ ($\ge0.95$ top-3 match in every cell, signs always right). It is \emph{not} reliable when $M$ is of the order of $d$ or smaller, when the audited instances are near-ties in rank (the explanation's top-3 membership is then nearly arbitrary), or when one needs a ranking beyond the top few features (not tested). Even where the estimator is reliable, the attribution is much less reproducible under a different 50-row background or a retrained random forest, so the \emph{justification} claim that a single run supports is bounded by those, not by estimator noise. Practical recommendations: report $M$ relative to $d$; prefer exact methods where available; run two seeds and flag disagreeing instances; report the rank gap.
+
+\textbf{Limitations.} (1) One train/test split, one fixed background and one trained model per cell; our CIs reflect instance sampling only. (2) 60 instances per cell; the strongest claims are pooled and cell-level intervals (Table~\ref{tab:match}) are wide for some cells. (3) References for LR/MLP are themselves Kernel SHAP averages ($M{=}16384$, 5 runs); for $d\ge19$ they carry small noise, which makes our reliability estimates slightly pessimistic; an exact reference is unavailable. (4) Only the \texttt{shap} implementation of Kernel SHAP with interventional values and a 50-row background was studied; variance-reduced or leverage-score estimators \citep{covert2021,musco2024} could behave differently, and we did not test them or other explainers (sampling/permutation explainers). (5) Only $d\le279$, all budgets $\le8192$, and only top-3 identity as the main decision metric; other $k$, full-rank metrics, and downstream use were not examined. (6) Hyperparameters were not tuned; the models are not state of the art, and two datasets are subsampled to 20{,}000 rows. (7) Background-resampling and retraining comparisons exist only for RF/XGBoost, and the retraining comparison is meaningless for the deterministic XGBoost training. (8) The NeurIPS 2026 template was not available at the time (the URL returned 404), so the 2025 style is used. (9) ACS data are a single state and year; fairness-relevant behaviour was not studied.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+\section{Reproducibility, compute and data}\label{app:repro}
+Code, commands, library versions (\texttt{requirements.txt}), data sources and expected times are in \texttt{README.md}. Compute: CPU only, a 16 GB-memory container; final runs sum to at most 16 CPU-hours (workers $\times$ wall-clock). Two earlier crashes (out-of-memory at $M{=}32768$ reference and for Arrhythmia with 16 workers) and one discarded XGBoost run (the biased probability reference above) were re-run with the settings in the code; the reference budget was reduced from 32768 to 16384 accordingly.
+
+\section{Test AUC of explained models}\label{app:auc}
+\begin{center}\small\input{../results/tex_auc.tex}\end{center}
+Test AUC, seed-0 model (\texttt{aucs.py}).
+
+\section{Full per-cell results}
+\begin{table}[h]\centering\scriptsize
+\caption{Single-run top-3 match to reference, mean over 60 instances [95\% bootstrap CI]. Cells with $M\ge2^d-2$ are exhaustive (deterministic), so equal 1.00 up to reference noise. Source: \texttt{analyze.py}.}\label{tab:match}
+\resizebox{\linewidth}{!}{\input{../results/tex_match3.tex}}\end{table}
+\begin{table}[h]\centering\scriptsize
+\caption{Mean relative $\ell_2$ error to reference [95\% CI]. Zero entries are exhaustive regimes. Source: \texttt{analyze.py}.}
+\resizebox{\linewidth}{!}{\input{../results/tex_relerr.tex}}\end{table}
+Further columns (top-1, sign, pairwise Jaccard, fraction of instances with all 10 runs matching) are in \texttt{results/summary.csv}.
+
+\newpage
+\input{checklist.tex}
+\end{document}

@@ -1,0 +1,10 @@
+# Agentic evidence audit
+
+- verdict: `pass`
+- finding_count: `0`
+
+## Summary
+The visible claims, including the Supplementary Information tables, match claims_grounding.json, paper_data.json, the retained evaluator and search metric files, and the planner and evaluator sources. The qualified outcome is stated accurately and its limitations are kept.
+
+## Findings
+- None.

@@ -1,0 +1,18 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-07T04:19:18.583628+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `1`
+- audit_json_path: `work/results/t09/codex/20261107_014043/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/t09/codex/20261107_014043/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/t09/codex/20261107_014043/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+Qualification and main comparisons are grounded, but six supplementary table entries disagree with the evidence at the displayed precision.
+
+## Findings
+- `supplementary-table-precision` (Supplementary Information, Complete Condition-Level Accuracy): Six entries incorrectly round the grounded values to three decimal places.
+  - claim: The table reports BA strong-linear/cluster biases -0.054/-0.068, WS cluster Own RMSE/bias 1.025/0.005, Stanford3 strong-linear DM RMSE 1.999, and Stanford3 cluster Own RMSE 1.690.
+  - evidence: paper.tex:262, paper.tex:265, paper.tex:271, paper.tex:274, paper.tex:277; claims_grounding.json claims[15,18,24,27,30]; analysis/summary.json cell_rmse and cell_signed_bias give, respectively, -0.053485631, -0.068513819, 1.025548947, 0.005513490, 1.999528100, and 1.689488544, consistent with paper_data.json final_evaluation.evaluation_evidence.episodes.
+  - requested_fix: Correct these six manuscript table entries, respectively, to -0.053, -0.069, 1.026, 0.006, 2.000, and 1.689.

@@ -1,0 +1,178 @@
+\documentclass{article}
+\usepackage{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts,amsmath,amssymb,amsthm}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\rmse}{\mathrm{RMSE}_z}
+
+\title{How many benchmarks must be run? Selecting benchmarks and inferring the rest of a model's scores from a public score matrix}
+
+\author{Anonymous Author(s)}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Evaluating a model on every benchmark of a large suite is costly, yet public leaderboards hold many ``model $\times$ benchmark'' score records. We ask: if only $k$ benchmarks can be run for a new model, which $k$ should they be, how should the remaining scores be inferred, and how large must $k$ be? We study this on real, partially observed score matrices (MTEB embedding results at three data densities, Open LLM Leaderboard v2, HELM Lite, LiveBench) with a held-out-\emph{model} protocol in which whole model families are held out and the choice of the $k$ benchmarks never sees the held-out scores. We compare random subsets with greedy designs derived from a latent-factor model (Bayesian I-optimal design) and from an empirical Gaussian covariance (greedy variance reduction), and with k-means, pivoted-QR and communality-ranked choices, using factor-analysis, Gaussian-conditional and kNN predictors, and report family-cluster-bootstrap intervals. We also derive the error of random-subset prediction under a Gaussian factor model: an exact finite-$k$ formula for least squares, a Jensen lower bound and a Marchenko--Pastur deterministic equivalent (1.4\% median error against simulation) for the Bayes predictor, and we check it on real matrices. Findings: (i) the matrices are strongly low-rank-dominated (first PC 56--73\% of variance) and, on MTEB, a random subset of 3--4 benchmarks closes half of the gap between the no-information baseline and the error reached with $k=24$--$48$, while 8--16 are needed for 80\%; (ii) choosing benchmarks matters most at small $k$ (6--20\% lower median error than random at $k\le4$) but the advantage of factor-model designs fades beyond $k\approx8$--$16$, where the covariance-based greedy rule keeps a 6--19\% edge and communality ranking becomes \emph{worse} than random (+4 to +13\%); (iii) the theory predicts the measured random-subset error curve of the factor predictor on MTEB to within about 20--35\% but is pessimistic (measured 23--32\% below implied) at $k=1$ on the small LLM leaderboards; (iv) the benefit of designed subsets survives training on only $\approx$15 models but the pairwise-covariance predictor collapses when 80\% of training cells are missing, while the EM factor model degrades gracefully. The LLM-leaderboard matrices have only 6--10 benchmarks, so our conclusions about $k$ for generative LLMs are limited to $k\le6$.
+\end{abstract}
+
+\section{Introduction}
+Public leaderboards accumulate a ``model $\times$ benchmark'' score matrix in which scores of different benchmarks are far from independent. An evaluator who must assess a new model but can afford to run only $k$ of the $N$ benchmarks faces three linked questions: \emph{which} $k$ benchmarks to run, \emph{how} to infer the other $N-k$ scores from them and from the historical matrix, and \emph{how large} $k$ has to be. Item-level subsampling within one benchmark has been studied \citep{polo2024tiny,vivek2024anchor,kipnis2024metabench}; here we study the complementary benchmark-level problem, with the unit of selection being an entire benchmark (or task), and the unit of evaluation being a held-out \emph{model}.
+
+We state three hypotheses before running experiments. \textbf{H1} (low effective rank): because score matrices are dominated by a few latent factors, a small $k$ suffices for most of the attainable accuracy. \textbf{H2} (design matters): subsets chosen by an experimental-design criterion beat random subsets, with an advantage that is largest when $k$ is comparable to the effective rank and shrinks as $k$ grows. \textbf{H3} (theory): under a Gaussian factor model the error of random-subset prediction follows a closed-form curve with a transition near $k\approx r$, and this curve describes real matrices. \textbf{H4} (data conditions): the conclusions hold when the history is small or sparse, but only for predictors that handle missing data properly.
+
+\paragraph{Contributions.} (1) A held-out-model, held-out-family evaluation protocol for benchmark-subset selection in which selection is blind to the new model's scores and hyper-parameters are tuned on training rows only. (2) A comparison of six selection rules and six predictors on six real matrices with cluster-bootstrap uncertainty. (3) Derivations of the random-subset error (Section~\ref{sec:theory}) with synthetic verification and a check against real matrices, including where it fails. (4) A candid account of where the conclusions do and do not hold: they are supported on embedding benchmarks with up to 357 benchmarks, and only weakly testable on generative-LLM leaderboards that have 6--10 benchmarks.
+
+\section{Related work}
+\textbf{Few-example evaluation.} tinyBenchmarks selects or reweights evaluation \emph{items} to estimate a model's accuracy on one benchmark \citep{polo2024tiny}; Anchor Points clusters items by model-confidence patterns \citep{vivek2024anchor}; metabench distills six benchmarks into a sparse benchmark from the evaluations of thousands of models \citep{kipnis2024metabench}. Our unit of selection is a whole benchmark and the target is the model's score on the \emph{other} benchmarks.
+\textbf{Cross-benchmark structure.} BenchBench studies whether benchmarks agree and how methodological choices change that conclusion \citep{perlitz2024benchbench}; observational scaling laws explain scores on many benchmarks through a low-dimensional capability space estimated from public models \citep{ruan2024observational}; Sloth fits skill-based scaling laws to predict multi-benchmark performance across families \citep{polo2024sloth}. These works show that benchmark scores share a low-dimensional structure; we use the same structural assumption but ask the \emph{design} question (which benchmarks to run) and quantify error as a function of $k$.
+\textbf{Statistical tools.} Factor analysis with missing data fit by EM \citep{rubin1982em,tipping1999ppca}, low-rank completion \citep{candes2012exact}, Bayesian optimal design \citep{chaloner1995bayesian} and greedy sensor placement in Gaussian models \citep{guestrin2005near} are the building blocks; the contribution here is their combination and empirical assessment in the benchmark-selection setting, not a new estimator. The benchmark suites we use are MTEB \citep{muennighoff2022mteb}, HELM \citep{liang2022helm}, the Open LLM Leaderboard and LiveBench.
+
+\section{Problem, methods and theory}
+\paragraph{Setting.} A historical matrix $Y\in\mathbb{R}^{M\times N}$ (NaN = missing) of $M$ models and $N$ benchmarks. A new model has an unknown score vector $y\in\mathbb{R}^N$, of which the benchmarks $C$ (those it has been evaluated on, in the data) are \emph{candidates}. The evaluator chooses $S\subset C$, $|S|=k$ using only $Y$ (selection is blind to $y$), observes $y_S$, and predicts $\hat y_T$ for $T=C\setminus S$. Columns are standardised with training-row statistics to $z$; error is $\rmse=\sqrt{\frac1{|T|}\sum_{j\in T}(\hat z_j-z_j)^2}$ per held-out model, i.e.\ in units of the across-model standard deviation of each benchmark (also reported in score points).
+
+\paragraph{Predictors.} (a) \emph{Train mean} ($\hat z=0$; uses no scores; reference for ``no information''). (b) \emph{FA($r$)}: a factor model $z=Vu+\varepsilon$, $u\sim\mathcal N(0,I_r)$, $\varepsilon_j\sim\mathcal N(0,\psi_j)$, fit by EM on the incomplete training matrix (80 EM iterations, SVD initialisation, loadings ridge $10^{-2}$, $\psi_j\ge0.02$; $r\in\{1,2,3,4,6,8,12,16,24\}$, $\alpha\in\{.02,.05,.1,.2,.4\}$), prediction $=V\,\E[u\mid z_S]$. (c) \emph{Gauss-cov}: the Gaussian conditional mean $\Sigma_{\cdot S}(\Sigma_{SS}+10^{-2}I)^{-1}z_S$ with $\Sigma$ a pairwise-complete correlation matrix (min.\ 15 shared models, projected to the PSD cone) shrunk towards identity by $\alpha$. (d) \emph{kNN}: mean of the $K{=}10$ training models closest on $S$. (e) PPCA (isotropic $\psi$) and a 1-factor model. $r$ and $\alpha$ are chosen per fold on a validation split of the training rows (random subsets of sizes spanning the $k$ grid).
+
+\paragraph{Selection rules.} \emph{Random} (10 draws per model and $k$, averaged). \emph{Greedy I-opt}: with fitted $(V,\psi)$, the posterior covariance of $u$ is $\Sigma_S=(I+V_S^\top\Psi_S^{-1}V_S)^{-1}$; greedily add the benchmark minimising $\tr(V^\top V\,\Sigma_S)$, the total posterior variance of the signal over all benchmarks (Bayesian A-optimal design; rank-one updates; $O(Nkr^2)$). Nested in $k$. We claim no approximation guarantee. \emph{Greedy cov}: model-free greedy variance reduction on the shrunk correlation matrix, targets $=C$. \emph{Top communality}: rank benchmarks by $\|v_j\|^2/(\|v_j\|^2+\psi_j)$. \emph{Pivoted QR} on $\Psi^{-1/2}V$ (deterministic leverage-type selection; falls back to communality for $k>r$). \emph{k-means cover}: $k$ clusters in loading space, one member each. Each rule is restricted to the benchmarks the model was actually evaluated on.
+
+\subsection{Theory: error of random subsets under a Gaussian factor model}\label{sec:theory}
+Assume $z_j=v_j^\top u+e_j$, $u\sim\mathcal N(0,I_r)$, $e_j\sim\mathcal N(0,\sigma^2)$, loadings $v_j\overset{iid}{\sim}\mathcal N(0,I_r)$ known, and $S$ a uniformly random $k$-subset. Let $W=V_S^\top V_S\sim\mathrm{Wishart}_r(k,I)$.
+\begin{proposition}[Exact error of least squares]\label{prop:ols}
+With $\hat u=(V_S^\top V_S)^{-1}V_S^\top z_S$ and $k>r+1$, the expected squared error on a fresh benchmark is $\sigma^2\bigl(1+\tfrac{r}{k-r-1}\bigr)$; for $k\le r+1$ it is infinite (and for $k\le r$ the estimator is not defined).
+\end{proposition}
+\begin{proposition}[Bayes predictor]\label{prop:bayes}
+With $\hat u=(\sigma^2I+W)^{-1}V_S^\top z_S$ the expected error is $\sigma^2+\E\,\tr\bigl[(I+W/\sigma^2)^{-1}\bigr]$, which (i) is at least $\sigma^2\bigl(1+\tfrac{r}{k+\sigma^2}\bigr)$ by Jensen (matrix inversion is operator convex), (ii) is finite for every $k\ge0$, (iii) satisfies, for $r,k\to\infty$ with $r/k\to c$, $\E\,\tr[(I+W/\sigma^2)^{-1}]\simeq r\lambda\,m(-\lambda)$ with $\lambda=\sigma^2/k$ and $m(-\lambda)=\frac{-(\lambda+1-c)+\sqrt{(\lambda+1-c)^2+4c\lambda}}{2c\lambda}$ the Stieltjes transform of the Marchenko--Pastur law \citep{marchenko1967distribution} at $-\lambda$. Limits: $\to\sigma^2r/k$ for $k\gg r$, and $\to r-k$ for $k\ll r$ with $\sigma^2\to0$.
+\end{proposition}
+Proofs are in Appendix~\ref{app:proofs}. The consequence for the evaluator is a \emph{phase transition} at $k\approx r$: below it, unresolved latent directions keep (nearly) their prior variance, above it the excess shrinks like $\sigma^2r/k$. For a \emph{given} subset, the error under a fitted factor model is $\frac1{|T|}\sum_{j\in T}\bigl(\psi_j+v_j^\top\Sigma_S v_j\bigr)$ (``model-implied error''), which is exactly the quantity that the I-opt rule minimises (up to the choice of $T$). When loadings are estimated from $M$ rows the error has an additional term, which we measure rather than derive (Appendix~\ref{app:synth}).
+
+\section{Experimental protocol}\label{sec:protocol}
+\paragraph{Data.} All from the pinned versions in \texttt{data.md}. \textbf{MTEB} (embeddings-benchmark/results at commit \texttt{6dabbcc}): one score per (model, task) = mean over subsets of \texttt{main\_score} on the test (else validation/dev) split, averaged over a model's result directories; tasks with $\ge100$ models and models with $\ge20$ such tasks give \emph{MTEB-wide} ($291\times357$, 58\% observed; the 234 models with $\ge45$ observed tasks are held out in turn, 70\% observed). Two complete sub-matrices are extracted from it by greedily deleting the row or column with most missing cells (row scores multiplied by $\alpha=1$ for \emph{MTEB-dense} and $\alpha=0.6$ for \emph{MTEB-mid}; see \texttt{data\_prep.py}): \emph{MTEB-dense} ($117\times287$) and \emph{MTEB-mid} ($139\times65$). \textbf{Open LLM Leaderboard v2} (4496 unflagged, de-duplicated models $\times$ 6 raw scores), \textbf{HELM Lite v1.13.0} ($91\times10$), \textbf{LiveBench} judgments (mean per model and task; 7 tasks, 195 models, 318 missing cells; models with $\ge6$ tasks evaluated). The three MTEB matrices are nested views of the same data, not independent replications; the LLM boards are independent but tiny in $N$.
+\paragraph{Splits.} 10-fold cross-validation over \emph{models}. \emph{Family split} (primary): all models sharing a family key (organisation prefix for MTEB/OLB, first token of the model name for HELM/LiveBench) are held out together, folds balanced by size; \emph{random split} for comparison. For every held-out model and every $k$ in $\{1,2,3,4,5,6,8,10,12,16,20,24,\dots\}$ up to $k_{\max}$ (24, 48, 32, 3, 6, 4 for the six matrices) all rules choose $S$ from the model's observed benchmarks; the remaining observed ones are targets (at least 8 for MTEB, 3 for OLB/HELM, 2 for LiveBench; a held-out model must have observed at least $k_{\max}$ plus that many benchmarks, which is why MTEB-wide is restricted to models with $\ge45$ tasks). Standardisation, EM, correlation estimation, and the selection of $r,\alpha$ use training rows only.
+\paragraph{Statistics.} Headline: median over held-out models of $\rmse$ (a few new-family models are gross outliers, so means are also reported in the repository and quoted where they differ), with 95\% percentile intervals from a cluster bootstrap over families (1000 resamples); paired comparisons use the same resamples. Wilcoxon signed-rank tests with Holm correction over all (matrix, split, rule, $k$) comparisons are descriptive only because models within a family are dependent. Fold-assignment seeds 0--2 are compared for MTEB-mid in Table~\ref{tab:seeds}. $k_{50}$/$k_{80}$ denote the smallest $k$ closing 50\%/80\% of the gap between the train-mean baseline and the error at $k_{\max}$ (so they depend on $k_{\max}$).
+
+\section{Results}
+\subsection{A few benchmarks carry most of the signal (H1)}
+Table~\ref{tab:data} shows strong dominance of the first principal component (56--73\% of variance) and small participation ratios (1.8--3.0), although 90\% of variance needs 9--23 components on MTEB. Figure~\ref{fig:main} and Table~\ref{tab:mteb} show that the median $\rmse$ falls from 0.76--0.86 for the train-mean baseline to 0.43--0.55 at $k=8$ and 0.35--0.49 at $k=24$ on MTEB (family split; range over the three matrices and over random/designed subsets). Table~\ref{tab:kneeded}: random subsets need $k_{50}=3$--4 and $k_{80}=8$--16 on MTEB; in raw units (Table~\ref{tab:raw}) the median mean-absolute error on MTEB-mid drops from 9.6 score points (train mean) to 5.0 at $k=8$ with random choice and to 4.2--4.4 with a designed subset. On OLB/HELM/LiveBench, $k_{\max}=3,6,4$ already removes about 40\% (random subsets) to 55\% (greedy cov) of the baseline error (Table~\ref{tab:llm}), but $k_{\max}$ is so small that $k_{50}$ and $k_{80}$ there are weakly informative.
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figs/fig_main_curves.pdf}
+\caption{Median $\rmse$ over held-out models (family split) vs.\ number of benchmarks run $k$; bands: 95\% cluster-bootstrap CI. ``Train mean'' uses none of the new model's scores.}\label{fig:main}
+\end{figure}
+\begin{table}[t]
+\caption{Matrix summaries (z-scored correlation spectrum; pairwise-complete correlations where cells are missing). MTEB-wide: 291 models, of which the 234 with $\ge45$ observed tasks serve as held-out models. $r_{80},r_{90}$: components for 80\%/90\% of variance.}\label{tab:data}
+\centering\small\input{tables/tab_data}
+\end{table}
+\begin{table}[t]
+\caption{MTEB, family split: median $\rmse$ [95\% family-cluster CI] over held-out models.}\label{tab:mteb}
+\centering\scriptsize\setlength{\tabcolsep}{3pt}\input{tables/tab_main_mteb}
+\end{table}
+
+\subsection{Selection matters most at small $k$ (H2)}
+Table~\ref{tab:selgain} and Figure~\ref{fig:gain} give the paired change of median error relative to random subsets under the same Gauss-cov predictor. On the three MTEB matrices both greedy rules beat random, with intervals excluding zero in 41 of 42 (matrix, rule, $k\le8$) cases (the exception is I-opt at $k=1$ on MTEB-mid, $[-17,+0.5]\%$); the median gain is 6--20\% at $k\le4$ and 4--12\% at $k=8$. Beyond $k\approx8$--$16$ the I-opt design, which is tailored to the rank-$r$ factor posterior, loses most of its edge (MTEB-mid: $-20\%$ at $k=2$ but $-3\%$ and $-5\%$ at $k=16,24$), whereas the model-free covariance greedy rule keeps $-6$ to $-19\%$. Pure communality ranking is the worst rule: it is better than random only at small $k$ on MTEB-mid (and not reliably elsewhere), and its point estimate is 4--13\% \emph{worse} than random at $k=16$ and 10--12\% worse at $k=24$ on the three MTEB matrices; inspection (Appendix~\ref{app:selected}) shows it picks near-duplicate tasks (six CQADupstack subforums on MTEB-dense), i.e.\ redundancy is the failure mode. Holm-corrected Wilcoxon tests find the greedy-cov advantage significant at all tested $k$ on the three MTEB matrices and the I-opt advantage at 36 of 40 $(\text{matrix},k)$ settings there (descriptive; Appendix~\ref{app:tests}). On the LLM boards, designed subsets at $k=1$ reduce error by 10--19\% (e.g.\ OLB: MMLU-PRO is picked first by both greedy rules), but intervals are wide for HELM and LiveBench and the advantage at larger $k$ is mixed (LiveBench $k=4$: pivoted QR $+13\%$, I-opt $-2\%$).
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figs/fig_selection_gain.pdf}
+\caption{Change (\%) of median $\rmse$ relative to random subsets (same Gauss-cov predictor), family split; bands: 95\% cluster-bootstrap CI for the two greedy rules.}\label{fig:gain}
+\end{figure}
+\begin{table}[t]
+\caption{Selection rules vs.\ random (Gauss-cov predictor), family split: change of median $\rmse$ [95\% CI], percent.}\label{tab:selgain}
+\centering\scriptsize\setlength{\tabcolsep}{2.5pt}\input{tables/tab_selgain}
+\end{table}
+
+\paragraph{Predictors.} With random subsets, Gauss-cov, FA($r$) and kNN are within about 0.01--0.03 of each other for $k\ge4$ on MTEB (e.g.\ MTEB-mid, $k=8$: 0.487, 0.489, 0.496), a one-factor model is clearly worse (0.591), (Appendix Fig.~\ref{fig:pred}). The gap that matters is between methods that use the new model's scores and the train mean, and between selection rules, not between sensible predictors. At large $k$ the FA predictor saturates: its error cannot fall below the fitted noise level $\bar\psi$ per benchmark, while the Gauss-cov predictor, which exploits correlated \emph{residuals} between sibling tasks, goes below it (MTEB-mid, random split, greedy cov + Gauss-cov, $k=24$: trimmed MSE 0.089 vs.\ $\bar\psi=0.096$). This is why factor-based design plateaus and a covariance-based design does not.
+
+\subsection{Theory against data (H3)}
+\emph{Synthetic check.} Under the stated model, simulation (Appendix Fig.~\ref{fig:synth}) reproduces Proposition~\ref{prop:ols} (e.g.\ $r=6,\sigma^2=0.25$: simulated 1.015 vs.\ formula 1.000 at $k=9$; the 99th percentile of the OLS error is 6.6 there, 16 at $k=8$) and shows that the Bayes predictor tames the heavy tail (99th percentile 3.4 vs.\ 6.6 at $k=9$). The Marchenko--Pastur formula has 1.4\% median relative error against simulation over 60 settings (max.\ 15\% for $k\ge r$) versus 48\% for the naive $\sigma^2r/k$. Design value (T3): for $r=6$, greedy I-opt reduces MSE relative to random by 42\% (homogeneous loadings) to 90\% (strongly heterogeneous benchmarks) at $k=r$, and the gain shrinks to 8--13\% at $k=6r$.
+\emph{Real matrices.} Table~\ref{tab:theory} compares the measured (10\%-upper-trimmed mean) MSE of random subsets with FA predictor with the model-implied error computed from the fitted factor model of each fold (no held-out scores used), random split. On MTEB the implied curve tracks the measured one: measured/implied ratios are $0.81$--$1.17$ at $k=4,16$ (mean log-ratio over $k$: $-0.10$ MTEB-mid, $-0.13$ MTEB-wide, $+0.10$ MTEB-dense), with larger deviations at $k=1$ (measured 12--20\% below implied) and for MTEB-dense at $k=24,32$ (measured 26--36\% above implied; we did not diagnose the cause). On OLB, HELM and LiveBench the measured error at $k=1$ is 23--32\% \emph{below} the implied one (the model is pessimistic). For the Gauss-cov predictor (implied error = conditional variance of the shrunk correlation matrix) the measured error is on average 18--35\% below the implied one across $k$ and matrices (Appendix Fig.~\ref{fig:theoryreal}), as expected since shrinkage towards the identity inflates the implied variance. H3 is therefore supported \emph{qualitatively} (shape, transition, ordering of rules) and \emph{quantitatively} only to within tens of percent.
+\begin{table}[t]
+\caption{Measured / model-implied MSE$_z$ for random $k$-subsets with the FA predictor (random split; measured = 10\%-trimmed mean over held-out models). $\bar\psi$: mean fitted noise variance.}\label{tab:theory}
+\centering\small\input{tables/tab_theory}
+\end{table}
+
+\subsection{Data conditions (H4) and how large $k$ must be}
+Table~\ref{tab:cond} (MTEB-mid, random split) varies the history. Keeping only 12\% of the training rows ($M\approx15$) leaves the median error with designed subsets at $k=12$ at 0.61--0.64 versus 0.93 for the train mean on the same folds (Appendix Table~\ref{tab:cond}), so the benefit of a few observed scores persists and the covariance-greedy design keeps a 10\% edge over random at $k=12$ (0.613 vs.\ 0.678), while the FA-based design stops improving beyond $k=6$ (0.642 at $k=6$, 0.643 at $k=12$, 0.665 at $k=24$). With 60\% of training cells masked the designed-subset predictors degrade substantially (greedy cov + Gauss-cov at $k=12$: 0.55 vs.\ 0.38 with full history) while FA-based ones degrade less (I-opt + FA: 0.50 vs.\ 0.39), and at 80\% masked the Gauss-cov predictor collapses to the train mean: with few shared models per pair, the min.-overlap rule zeroes most correlations. This is an artefact of our pairwise-correlation estimator, not of the problem; the EM factor model still reaches $\rmse\approx0.62$ at $k=12$ (vs.\ 0.84 for the mean). Fold-assignment seeds change medians by $\le0.02$ for random and greedy-cov subsets and by up to 0.045 for greedy I-opt at $k=4$ (Table~\ref{tab:seeds}), and the family split costs 0.02--0.05 relative to a random split, so family-level leakage is not what drives the MTEB results (but near-duplicate models from different organisations remain, see Section~\ref{sec:disc}).
+
+\paragraph{Answer to ``how large must $k$ be?''} On MTEB: $k\approx3$--$4$ for half of the achievable error reduction, $k\approx8$--$10$ with covariance-greedy design (8--16 random) for 80\% (the $k_{80}$ values of different rules are not comparable because each is relative to that rule's own error at $k_{\max}$), and no tested $k\le48$ reaches a plateau with covariance-based design (median $\rmse$ 0.40 at $k=48$ on MTEB-dense, vs.\ 0.85 for the mean baseline). Consistent with Proposition~\ref{prop:bayes}, the relevant scale is $k\approx r_{\mathrm{eff}}$ (participation ratio 2.5--3, $r_{80}=4$--$8$), with a long tail set by idiosyncratic benchmark variance.
+
+\begin{table}[t]
+\caption{How many benchmarks are needed (family split): smallest $k$ closing 50\% / 80\% of the gap between the train-mean error and the error at $k_{\max}$ [95\% bootstrap CI]. For OLB/HELM/LiveBench $k_{\max}\le6$, so these are weakly informative.}\label{tab:kneeded}
+\centering\scriptsize\setlength{\tabcolsep}{3pt}\input{tables/tab_kneeded}
+\end{table}
+
+\section{Discussion and limitations}\label{sec:disc}
+\textbf{What the evidence supports.} H1 is supported on MTEB: low effective rank means few benchmarks capture most of the recoverable signal. H2 is supported at small $k$ and refuted as a general statement: the advantage of a factor-model design is concentrated near $k\approx r$ and disappears afterwards; communality ranking is harmful. H3 is supported in shape, not in constants. H4 is partly supported: designed subsets help with a small history, but conclusions depend on a predictor that handles missingness.
+\textbf{Limitations.} (1) The benchmarks are embedding tasks; the three generative-LLM matrices have only 6, 10 and 7 benchmarks, so $k\le6$ and claims about $k$ for generative LLMs are weak, and families in HELM/LiveBench are defined by a crude name heuristic. (2) The dense MTEB matrices are selected by coverage, i.e.\ popular tasks and heavily evaluated models, which may inflate predictability; MTEB-wide (70\% observed) is the least selected view. (3) A model's scores on the \emph{target} benchmarks are those that were reported; selection bias in what authors report is not modelled. (4) Near-duplicate models from different organisations (fine-tunes, re-uploads) are not removed and may make the family split optimistic. (5) The median hides a heavy tail: the mean MSE$_z$ of random+FA on MTEB-mid at $k=1$ (family split) is 1.40 versus median 0.48, driven by new-family models with extreme scores (e.g.\ one model family scores up to 39 standard deviations, computed on the other models, above them on a language-specific task); no method here protects against such models. (6) The $r$ grid is capped at 24 and the selected $r$ often hits the cap on MTEB-mid/dense, so the FA fits are likely under-parametrised there. (7) Theory assumes Gaussian i.i.d.\ loadings, homoscedastic noise and a fresh benchmark; real loadings are clustered and heteroscedastic, the Marchenko--Pastur result is asymptotic, and our heuristic for the cost of estimating $V$ from $M$ rows (excess $\propto\sigma^2r/M$) under-predicted the measured excess by 1.6--4.8$\times$ (the $1/M$ scaling itself held: log-log slopes $-0.87,-0.99,-1.06$ at $k=5,10,20$). (8) The three MTEB matrices overlap and are not independent replications. (9) Scores are standardised per benchmark; rank-based or logit-scale models were not tried. (10) We do not compare with published methods for this specific task: baselines here are our own implementations of standard estimators and rules.
+\textbf{Reproducibility and honesty notes.} All numbers come from the scripts listed in the repository README; failed or unfinished items are listed there. Methods that were considered but not run: matrix-completion by nuclear-norm minimisation and gradient-boosted predictors.
+
+\section{Conclusion}
+For embedding benchmarks, running 3--4 well-chosen benchmarks recovers about half and 8--16 about 80\% of the achievable error reduction for a new model's remaining scores, designed subsets beat random ones by 6--20\% (median) at $k\le4$ but, for factor-model designs, little at large $k$, and a Marchenko--Pastur-based analysis explains the shape of the random-subset curve. On the small LLM leaderboards the same pattern appears for $k\le3$--$6$ but cannot be tested further.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+\section{Proofs}\label{app:proofs}
+\paragraph{Proposition~\ref{prop:ols}.} Write $z_S=V_Su+e_S$. Then $\hat u-u=W^{-1}V_S^\top e_S$ with $W=V_S^\top V_S$; conditional on $V_S$ it is $\mathcal N(0,\sigma^2W^{-1})$. For a fresh benchmark with $v\sim\mathcal N(0,I_r)$ independent of everything, $z-\hat z=e+v^\top(u-\hat u)$ has mean-square $\sigma^2+\E\|\hat u-u\|^2=\sigma^2+\sigma^2\tr\E W^{-1}$. For $W\sim\mathrm{Wishart}_r(k,I_r)$, $\E W^{-1}=I_r/(k-r-1)$ when $k>r+1$ and the expectation diverges otherwise, giving the claim.
+\paragraph{Proposition~\ref{prop:bayes}.} With prior $u\sim\mathcal N(0,I)$, the posterior is $\mathcal N(\hat u,\Sigma_S)$ with $\Sigma_S=(I+W/\sigma^2)^{-1}$ and $\hat u=\Sigma_SV_S^\top z_S/\sigma^2=(\sigma^2I+W)^{-1}V_S^\top z_S$; since the model is correctly specified, the mean-square error of $\hat z=v^\top\hat u$ on a fresh benchmark, averaged over $u$, $e$ and $v$, equals $\sigma^2+\E\tr\Sigma_S$. (i) $A\mapsto A^{-1}$ is operator convex on positive definite matrices, so $\E(I+W/\sigma^2)^{-1}\succeq(I+\E W/\sigma^2)^{-1}=(1+k/\sigma^2)^{-1}I$; taking the trace gives $r\sigma^2/(\sigma^2+k)$. (ii) $\tr\Sigma_S\le r$. (iii) $(I+W/\sigma^2)^{-1}=\lambda(\lambda I+W/k)^{-1}$ with $\lambda=\sigma^2/k$; the empirical spectral distribution of $W/k$ converges to the Marchenko--Pastur law with ratio $c=r/k$, so $\frac1r\tr(\lambda I+W/k)^{-1}\to m(-\lambda)$, which for the MP law is the positive root of $c\lambda\,m^2+(\lambda+1-c)m-1=0$, i.e.\ the stated expression. Limits follow by expanding $m(-\lambda)$ for $c\to0$ (giving $r\lambda=\sigma^2r/k$) and for $\lambda\to0,c>1$ (giving $m(-\lambda)\approx(1-1/c)/\lambda$, i.e.\ excess $r-k$). The statement is asymptotic; Appendix~\ref{app:synth} reports finite-$(r,k)$ accuracy. \hfill$\square$
+
+\section{Synthetic verification, selected benchmarks and additional results}\label{app:synth}
+Figure~\ref{fig:synth}: (a) OLS (Prop.~\ref{prop:ols}) and Bayes errors with 99th percentiles, 4000/4 trials per point; (b) MP formula vs.\ simulation, 3000 trials per point; (c) greedy I-opt vs.\ random under heterogeneous loadings/noise (60 instances per heterogeneity level, 200 simulated models each, loadings known); (d) excess MSE from estimating loadings by EM from $M$ simulated models ($N=100$, $r=5$, $\sigma^2=0.3$, 8 repetitions, 0 or 50\% missing), against the effective number of rows $M(1-p)$. All data in this figure are \emph{simulated} from the stated model.
+\begin{figure}[h]
+\centering\includegraphics[width=.92\linewidth]{figs/fig_synthetic.pdf}
+\caption{Synthetic checks of the theory (simulated data).}\label{fig:synth}
+\end{figure}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{figs/fig_theory_vs_real.pdf}
+\caption{Measured (solid) vs.\ model-implied (dashed) MSE$_z$ on real matrices, random split.}\label{fig:theoryreal}
+\end{figure}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{figs/fig_predictors.pdf}
+\caption{Predictors with random subsets (family split, median $\rmse$).}\label{fig:pred}
+\end{figure}
+\begin{figure}[h]
+\centering\includegraphics[width=.55\linewidth]{figs/fig_spectrum.pdf}
+\caption{Cumulative variance of the correlation spectrum of each matrix.}\label{fig:spec}
+\end{figure}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{figs/fig_conditions.pdf}
+\caption{MTEB-mid (random split): median $\rmse$ vs.\ fraction of training rows kept, for selected $k$.}\label{fig:cond}
+\end{figure}
+\begin{table}[h]
+\caption{Generative-LLM leaderboards (family split), median $\rmse$ [95\% CI].}\label{tab:llm}
+\centering\scriptsize\setlength{\tabcolsep}{3pt}\input{tables/tab_main_llm}
+\end{table}
+\begin{table}[h]
+\caption{Median mean-absolute error in benchmark score points (family split).}\label{tab:raw}
+\centering\small\input{tables/tab_raw_units}
+\end{table}
+\begin{table}[h]
+\caption{Stability across fold-assignment seeds and split type (MTEB-mid, median $\rmse$).}\label{tab:seeds}
+\centering\small\input{tables/tab_seeds}
+\end{table}
+\begin{table}[h]
+\caption{Data-condition sweep, MTEB-mid, random split, median $\rmse$ (train-mean baseline $\approx0.74$ at full history; the baseline changes with the retained rows because standardisation is refit).}\label{tab:cond}
+\centering\small\input{tables/tab_conditions}
+\end{table}
+
+\section{Benchmarks chosen by each rule (in-sample illustration)}\label{app:selected}
+Fitted on all rows (not used in any accuracy claim). OLB: greedy I-opt MMLU-PRO, GPQA, MATH Lvl 5; greedy cov MMLU-PRO, IFEval, MUSR; communality BBH, MMLU-PRO, GPQA. HELM Lite ($k=4$): greedy cov MMLU, NarrativeQA, NaturalQuestions (closed-book), WMT 2014; communality MMLU, OpenbookQA, MedQA, NaturalQuestions (open-book). LiveBench: greedy cov coding\_completion, paraphrase, connections, typos. MTEB-mid ($k=6$, $r=8$): I-opt WikipediaRetrievalMultilingual, NFCorpus, MedrxivClusteringS2S.v2, STS15, AmazonReviewsClassification, MassiveScenarioClassification; communality MassiveScenarioClassification, BiorxivClusteringP2P.v2, MedrxivClusteringP2P.v2, MedrxivClusteringS2S.v2, STS14, CQADupstackGamingRetrieval. MTEB-dense: communality picks six CQADupstack subforum retrieval tasks. Full output: \texttt{results/summary\_selected.json}.
+
+\section{Paired tests}\label{app:tests}
+\texttt{results/summary\_paired\_tests.csv} lists, for each matrix, split, rule ($\in$\{greedy I-opt, greedy cov\}) and $k$, the number of held-out models, mean/median paired difference of $\rmse$ to random (Gauss-cov) and the Holm-adjusted Wilcoxon $p$-value over all comparisons. Because models of one family are dependent these $p$-values are optimistic; the cluster-bootstrap intervals in Table~\ref{tab:selgain} are the primary uncertainty statement.
+
+\section{Compute, software, data licences}
+CPU only (40 cores available; all experiments $\approx$ 40 min wall-clock; synthetic checks $\approx$ 3 min). Python 3.11, numpy 2.4, scipy 1.17, pandas 3.0, scikit-learn 1.9, pyarrow 26, joblib 1.6. MTEB results: CC0-1.0. Open LLM Leaderboard and LiveBench dataset cards declare no licence; HELM Lite data follow the licences of the underlying scenarios (not verified item-by-item); only aggregate score tables are used.
+
+\newpage
+\input{checklist_filled}
+\end{document}

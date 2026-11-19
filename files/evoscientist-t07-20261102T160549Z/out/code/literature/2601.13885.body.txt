@@ -1,0 +1,871 @@
+[PDF PAGE 1]
+Confident Rankings with Fewer Items: Adaptive LLM Evaluation with
+Continuous Scores
+Esma Balkır1, Alice Pernthaller1, Marco Basaldella*,
+José Hernández-Orallo2,3†,Nigel Collier 1,4†
+1Trismik, 2Leverhulme Centre for the Future of Intelligence, University of Cambridge,
+3Universitat Politècnica de València, 4University of Cambridge
+{esma, alice}@trismik.com, {jh2135, nhc30}@cam.ac.uk
+Abstract
+Computerized Adaptive Testing (CAT) has
+proven effective for efficient LLM evaluation
+on multiple-choice benchmarks, but modern
+LLM evaluation increasingly relies on gener-
+ation tasks where outputs are scored continu-
+ously rather than marked correct/incorrect. We
+present a principled extension of IRT-based
+adaptive testing to continuous bounded scores
+(ROUGE, BLEU, LLM-as-a-Judge) by replac-
+ing the Bernoulli response distribution with
+a heteroskedastic normal distribution. Build-
+ing on this, we introduce an uncertainty aware
+ranker with adaptive stopping criteria that
+achieves reliable model ranking while testing
+as few items and as cheaply as possible. We val-
+idate our method on five benchmarks spanning
+n-gram-based, embedding-based, and LLM-as-
+judge metrics. Our method improves ranking
+correlation by 0.13 τ over random sampling
+and has 99% accuracy on confident predictions
+while using 2% of the items after a one-time
+calibration step.
+1 Introduction
+Rigorous evaluation of large language models is es-
+sential, but current practice faces many challenges.
+One is cost: exhaustive evaluation becomes ex-
+pensive as the number of models, test items, and
+metrics grows. Another is methodological: score
+differences are often reported without significance
+testing, leading many studies to mistake statisti-
+cal noise with improved performance and produce
+non-replicable results (Dror et al., 2018). Efficient
+evaluation methods that maintain statistical validity
+remain underexplored.
+Computerized Adaptive Testing (CAT) and Item
+Response Theory (IRT) originate in psychomet-
+rics, where they estimate test-takers’ latent ability
+on a construct of interest. In ML evaluation (Liu
+*Work done while at Trismik.
+†Joint senior authors.
+et al., 2024), the same statistical machinery has
+been adopted as scaffolding for efficient sampling:
+identifying representative subsets or adaptively se-
+lecting items so that rankings can be recovered with
+far fewer evaluations than exhaustive benchmark-
+ing (Martínez-Plumed et al., 2016; Maia Polo et al.,
+2024; Rodriguez et al., 2021; Kipnis et al., 2025),
+with recent work extending this to fully adaptive
+item selection (Hofmann et al., 2025). We follow
+this efficiency-focused lineage: we assume that
+the benchmark scores reflect a capability that the
+practitioner is interested in, and aim to recover the
+ranking that full evaluation would produce.
+Existing CAT approaches for LLM evaluation fo-
+cus exclusively on multiple-choice datasets where
+responses can only be correct or incorrect. How-
+ever, many of the tasks that reflect real use cases of
+LLMs such as summarization, dialogue, instruction
+following and machine translation must be scored
+on a continuous scale. These scoring strategies
+cover traditional metrics such as BLEU (Papineni
+et al., 2002) and ROUGE (Lin, 2004), and embed-
+ding similarity-based scores such as BERTScore
+(Zhang et al., 2020) and COMET (Rei et al., 2020).
+LLM-as-judge evaluation (Zheng et al., 2023; Liu
+et al., 2023), now widely adopted for assessing
+instruction following and open-ended generation,
+also produces ordinal ratings that can be normal-
+ized and treated as continuous.
+We present a continuous extension of IRT-based
+adaptive testing that accommodates real-valued
+scores while preserving the mathematical structure
+of binary CAT. Our key insight is to replace the
+Bernoulli response distribution with a heteroskedas-
+tic normal distribution that maintains the same lo-
+gistic mean function while introducing variance
+that mimics the Bernoulli structure. This preserves
+the natural property that variance is highest when
+the expected score µ is most uncertain (µ= 0.5 )
+and shrinks at the boundaries.
+Continuous CAT already reduces evaluation cost
+arXiv:2601.13885v2  [cs.CL]  14 Sep 2026
+[PDF PAGE 2]
+substantially, but further savings are possible when
+we consider how evaluation results are typically
+used. Model evaluation is fundamentally compara-
+tive: the primary goal is often to determine whether
+one model is better than others on a given bench-
+mark. Building on continuous CAT, we introduce
+an adaptive multi-model ranking method that ef-
+ficiently obtains statistically significant rankings
+by monitoring uncertainty estimates around model
+scores. Rather than testing each model to a fixed
+precision threshold, we stop as soon as models are
+well-differentiated based on pairwise confidence at
+a user-specified level. This focuses the testing ef-
+fort on close competitors while reducing items for
+clearly separated models. Within this framework,
+we further observe that when distinguishing two
+models, testing either one yields useful information,
+allowing cost-aware allocation that preferentially
+tests cheaper models to maximize uncertainty re-
+duction per dollar spent.
+We validate our approach on five generation
+benchmarks that span summarization (GovRe-
+port, BioLaySumm2025), named entity recognition
+(Nemotron PII), question answering (TruthfulQA)
+and translation (FLORES). For each dataset,
+we evaluate 5 disjoint sets of 4 hold-out mod-
+els and multiple metric types (ROUGE, BLEU,
+BERTScore, COMET, readability indices, LLM-
+as-judge). Our adaptive ranker achieves 0.75
+Kendall’s τ correlation with ground-truth rankings
+while using only 2% of the full evaluation budget at
+evaluation time, outperforming random sampling
+by 0.13 τ. This figure excludes the one-time cost
+of calibrating item parameters, which is amortized
+over subsequent evaluations and breaks even after
+roughly 70 model evaluations on a dataset (Ap-
+pendix C). Compared to fixed-length CAT, adaptive
+stopping provides an additional 32% item reduction
+and 39% cost savings.
+Our contributions are:
+1. A principled extension of IRT-based CAT
+from binary to continuous bounded outcomes
+via heteroskedastic normal distribution
+2. Adaptive multi-model ranking algorithm with
+pairwise stopping and cost-aware allocation
+3. Empirical validation across diverse generation
+tasks, metrics, and model scales
+The continuous CAT framework opens adaptive
+testing to the full spectrum of modern LLM evalua-
+tion, and the adaptive multi-model ranker enables
+efficient comparisons of generation quality across
+model candidates. We make our code available.1
+2 Related Work
+Early studies on efficient model evaluation used
+IRT to analyze benchmark properties such as item
+difficulty and discrimination (Martínez-Plumed
+et al., 2016; Lalor et al., 2016; Vania et al., 2021;
+Rodriguez et al., 2021). Maia Polo et al. (2024) and
+Kipnis et al. (2025) used IRT to identify represen-
+tative static subsets, while Hofmann et al. (2025)
+developed a fully adaptive framework that dynami-
+cally selects items during evaluation. However, all
+existing approaches assume binary outcomes and
+cannot accommodate the continuous scores. Lalor
+et al. (2016) applied IRT to construct evaluation
+scales for NLP systems, and Prudêncio et al. (2015)
+and Lalor et al. (2019) showed that IRT models can
+be fit using response patterns from model ensem-
+bles rather than human annotations. Chen et al.
+(2019) proposed a Beta-distributed IRT model ap-
+plied to modelling classifier confidence scores.
+This follows the tradition in psychometrics,
+with Samejima (1973) introducing the continu-
+ous response model, and Noel and Dauvier (2007)
+proposing Beta-distributed models that naturally re-
+spect [0,1] bounds. Both introduce additional com-
+plexity to Fisher Information calculations, com-
+plicating item selection. Beta models also can-
+not accommodate exact boundary values, requir-
+ing either ad hoc transformations or zero-and-one
+inflated extensions (Molenaar et al., 2022). Re-
+lated continuous-response formulations include lin-
+ear factor-analytic indices for difficulty and infor-
+mation, and Rasch-type models for continuous re-
+sponses in large-scale learning systems (Ferrando,
+2009; Deonovic et al., 2020). These typically as-
+sume homoskedastic residuals or prioritize scal-
+able scoring over closed-form CAT information.
+Mellenbergh (1994) developed generalized linear
+IRT with simpler closed-form solutions, but as-
+sumes constant variance across the score range.
+Our heteroskedastic normal formulation combines
+simplicity with appropriate variance structure and
+maintains direct compatibility with standard CAT
+algorithms.
+3 Background
+Item Response Theory (IRT)(Hambleton et al.,
+1991) models the probability of a correct response
+1https://github.com/trismik/continuous-cat
+[PDF PAGE 3]
+Figure 1: Adaptive testing focuses on items around the
+model ability, skipping those for which it would most
+certainly (i.e., uninformatively) get high or low scores.
+as a function of the test-taker’s latent ability θ
+and item parameters. The simplest model, the 1-
+Parameter Logistic (1PL) model, defines this prob-
+ability as:
+P(X= 1|θ, a, b) = 11 + exp(−a(θ−b)) (1)
+where b is item difficulty and a is a discrimi-
+nation parameter shared across all items. When
+ability matches difficulty (θ=b ), the probability
+of success is exactly 0.5. Higher a yields steeper
+response curves that better differentiate between
+ability levels.
+Computerized adaptive testing (CAT)(Wainer,
+2000) dynamically selects items to efficiently es-
+timate a test-taker’s ability (see Figure 1). The
+algorithm initializes with a prior distribution over
+θ, typically N(0, σ20) where the prior variance is a
+hyperparameter controlling initial uncertainty. At
+each iteration, it selects the item that maximizes
+Fisher Information at the current ability estimate
+i∗ = arg max i I( ˆθ|bi). After observing the re-
+sponse, the ability estimate and posterior are up-
+dated via Bayesian updating. As items accumulate,
+the standard error SE(ˆθ) = 1/
+qPn
+i=1 Ii(ˆθ) de-
+creases. Testing terminates when it falls below a
+predetermined threshold.
+Fisher Informationquantifies how much an ob-
+servation tells us about θ. For the 1PL model
+with binary outcomes, this is derived directly from
+Bernoulli variance:
+I(θ|a, b) =a2 ·P(θ, b)·(1−P(θ, b))(2)
+Information is highest when P= 0.5 (maximum
+uncertainty about the outcome) and approaches
+zero as P approaches 0 or 1 (outcome nearly cer-
+tain). This creates heteroskedastic variance as a
+function of the predicted probabilityP(θ, b).
+4 Continuous CAT
+To extend CAT to continuous outcomes, we require
+a response distribution for scores in [0,1] rather
+than binary {0,1} . We retain the logistic mean
+function from standard IRT, which captures the re-
+lationship between ability, difficulty, and expected
+performance, and replace the Bernoulli distribution
+with a normal distribution:
+X|θ, b, k∼ N(µ(θ, b), σ2(θ, b))(3)
+where the mean follows the logistic function:
+µ(θ, b) = 11 + exp(−(θ−b)) (4)
+We preserve the Bernoulli variance structure
+Var(X) =P(1−P)by defining:
+σ2(θ, b) =k·µ(θ, b)·(1−µ(θ, b))(5)
+where k= 1/a 2 is a noise parameter capturing
+measurement precision. We estimate a single k per
+dataset-metric combination from calibration data.
+Since both the mean and the variance of the re-
+sponse distribution depend on θ, the Fisher Infor-
+mation for this model has two terms:
+I(θ|b, k) =µ(1−µ)k + (1−2µ) 22 (6)
+Throughout, we use the first term ˜I(θ|b, k) =
+µ(1−µ)/k and ignore the second term. This sim-
+plification is safe since the full information is lin-
+ear in u=µ(1−µ) , so it orders items identically
+to ˜I∝u whenever a= 1/ √k > √2 (8 of our
+9 dataset-metric pairs), and the omitted term is
+nonnegative, so ˜I only overstates standard errors.
+Appendix E gives the derivation and an empiri-
+cal comparison confirming that the full FI changes
+nothing on the a >
+√
+2 pairs and destabilizes the
+one low-discrimination dataset.
+Comparing ˜I with the 1PL Fisher Information
+I=a 2 ·P(1−P) , we see that k= 1/a 2: high
+discrimination (a >1) corresponds to low noise
+(k <1 ), and vice versa. Both parameterizations
+capture the same underlying question: how reli-
+ably does an observed response reflect θ? This
+equivalence indicates that our continuous extension
+constitutes a natural generalization that unifies the
+treatment of measurement precision across binary
+and continuous settings.
+[PDF PAGE 4]
+A: n=5
+B: n=5
+(cheap)
+C: n=5
+(costly) D: n=5
+A–B
+uncertain
+B–C
+uncertain
+C–D
+uncertain
+ability ̂θ
+1 · Warm-up: n0 items per model
+A: n=7
+B: n=14
+(cheap)
+C: n=11
+(costly) D: n=6
+A–B
+confident ✓
+B–C
+uncertain
+C–D
+confident ✓
+next item:
+cheaper of {B, C},
+at max information
+ability ̂θ
+2 · T esting focuses on the uncertain pair
+A: n=7
+B: n=22
+(cheap)
+C: n=17
+(costly) D: n=6
+A–B
+confident ✓
+B–C
+reported tie
+C–D
+confident ✓
+ability ̂θ
+3 · Stop: confident ranking, one tie
+Figure 2: The adaptive multi-model ranker on four models A–D (illustrative). After warm-up, posteriors over ability
+θ are wide and every adjacent pair in the ranking is uncertain (left). Testing then concentrates on the remaining
+uncertain pair: clearly separated models stop receiving items, and the next item goes to the cheaper model of the
+pair, chosen at maximum Fisher information (middle). The run stops when every adjacent pair is either confidently
+ordered or reported as a tie at the budget (right).nis the number of items administered to each model.
+A limitation of the normal distribution is its un-
+bounded support: it can technically assign prob-
+ability to values outside [0,1] . However, the het-
+eroskedastic variance structure mitigates this con-
+cern: as µ approaches the boundaries, σ2 =k·
+µ(1−µ) shrinks, concentrating the distribution
+within the valid range. Alternatives such as the
+β-distribution are naturally bounded but do not pre-
+serve the connection to binary IRT and complicate
+the Fisher Information derivation. In practice, we
+find that the normal approximation performs well
+across the metrics we consider.
+The CAT algorithm itself remains unchanged.
+Item selection still maximizes Fisher Information
+at the current ability estimate, with the informa-
+tion formula now incorporating k. Posterior up-
+dates follow the same Bayesian logic with normal
+likelihoods. The standard error formula SE(ˆθ) =
+1/
+pP
+i Ii applies as before.
+5 Parameter Estimation
+We estimate both bi and k from historical evalu-
+ation data by fitting the model to observed score
+distributions across a population of models.
+Item Difficulty.We adopt the 1PL model and es-
+timate item difficulties from observed scores across
+calibration models. Following standard IRT con-
+vention, we center the ability scale such that the
+mean model ability is zero. Under this parameteri-
+zation, the maximum likelihood estimate for item
+difficulty simplifies to:
+bi =−logit(ˆpi) = log
+ 1−ˆpi
+ˆpi
+
+(7)
+where ˆpi is the average score on itemi across all cal-
+ibration model-temperature configurations. When
+scores cluster in a narrow range (e.g. like ROUGE
+where most models achieve 0.3–0.5), the resulting
+difficulties may not span the full ability range. We
+therefore apply min-max normalization to [ϵ,1−ϵ]
+before the logit transformation.
+Noise Parameter.We estimate a global k from
+the calibration data using method-of-moments.
+Given item difficulties {bi} and model ability esti-
+mates {θj} (computed as θj =logit(¯yj) where ¯yj
+is the model’s average scaled score), we obtain:
+k=
+P
+i,j(yij −µ ij)2P
+i,j µij(1−µ ij) (8)
+where µij =logit −1(θj −b i) is the predicted
+mean score for model j on item i. This formula di-
+rectly estimates the variance inflation factor: when
+k= 1 , observed variance matches the Bernoulli
+structure exactly; k >1 indicates noisier measure-
+ments than binary responses; k <1 indicates more
+precise measurements.
+Filtering Negative Discrimination Items.Some
+items may anti-correlate with model ability. On
+these items, weaker models score higher than
+stronger models, rendering them effectively un-
+informative. Because we use a 1PL model with
+a global discrimination parameter, we filter such
+items by computing the Pearson correlation be-
+tween item scores and model abilities across the
+calibration set, and excluding items with negative
+correlation from the adaptive item pool.
+6 Adaptive Ranker
+Standard CAT runs each model independently
+until its own standard error falls below the fixed
+[PDF PAGE 5]
+Algorithm 1Adaptive Multi-Model Ranking
+Require: Models {1, . . . , M}, item bank {bi} with global noise k, costs {cm}, confidence γ, max items
+nmax
+1:Initialize ˆθm ∼ N(median(bi),25),
+2:Warm-up:Administern init items to each model using MFI selection
+3:whilenot all adjacent pairs confident or at max itemsdo
+4:Rank models by ˆθm
+5:Identify uncertain pairs:U={(i, j) :γ > P(θ i > θj)>1−γandn i < nmax andn j < nmax}
+6:ifU=∅then
+7:break
+8:end if
+9:Collect candidate models:C={m:m∈(i, j)for some(i, j)∈ U }
+10:Select model:m ∗ = arg maxm∈C SE2m(nm+1)·cm
+11:Select item:i ∗ = arg maxi I( ˆθm∗|bi, k)
+12:Administer itemi ∗ to modelm ∗, observe scorey
+13:Update ˆθm∗ and SEm∗
+14:end while
+15:returnRanking with pairwise confidence scores
+precision threshold ϵ introduced in §4. However,
+when model ranking is the main goal and ˆθ values
+are an intermediate quantity used to place all mod-
+els on a shared scale, this is inefficient: a model
+whose ability lies several standard errors above the
+next-best receives the same item budget as two
+models within half a standard error of each other,
+even though only the latter pair requires further
+testing to establish their relative order. We pro-
+pose an adaptive multi-model ranking algorithm
+(Algorithm 1) that directly optimizes for the com-
+parative goal. Given M models to evaluate on
+a shared item bank, the algorithm runs indepen-
+dent CAT estimators for each model, but monitors
+pairwise confidence in the ranking and terminates
+when all adjacent model pairs are statistically well-
+differentiated at a user-specified confidence level.
+Figure 2 illustrates the procedure.
+Pairwise confidence.Given ability estimates ˆθi
+and ˆθj with standard errors SEi and SEj, we
+compute the probability that model i outperforms
+modeljunder a normal approximation:
+P(θ i > θj) = Φ
+
+ ˆθi − ˆθjq
+SE2i +SE 2j
+
+ (9)
+where Φ is the standard normal CDF. This quan-
+tifies our confidence in the pairwise ordering given
+current uncertainty in both estimates.
+Adaptive stopping.Traditional CAT terminates
+when each model’s standard error falls below a
+threshold ϵ, regardless of how the models compare.
+We instead terminate when all adjacent pairs in the
+current ranking satisfy P(θ i > θj)>1− 1−γ2 or
+P(θ i > θj)< 1−γ2 , corresponding to a two-sided
+confidence interval at level γ, or we reach a maxi-
+mum item budget nmax. This focuses testing effort
+where it matters: models that are clearly separated
+require fewer items to establish their relative or-
+dering, while close competitors receive additional
+testing until their difference reaches statistical sig-
+nificance or the budget is exhausted. If two models
+remain indistinguishable at the budget limit, they
+can be reported as tied rather than forced into an
+arbitrary ordering.
+Cost-aware allocation.When a pair (i, j)re-
+quires additional testing to reach confidence thresh-
+old γ, we must choose which model to evaluate
+next. Since testing either model reduces uncer-
+tainty in the pairwise comparison, we select the
+model that provides the greatest expected uncer-
+tainty reduction per unit cost:
+valuem = SE2m(nm + 1)·c m (10)
+where nm is the number of items already adminis-
+tered to model m and cm is its per-item evaluation
+cost. The numerator reflects current uncertainty;
+the denominator captures diminishing returns (each
+additional item contributes less) weighted by cost.
+[PDF PAGE 6]
+This criterion naturally allocates more items to
+cheaper models when resolving uncertain compar-
+isons, yielding additional cost savings beyond item
+reduction alone.
+Algorithm.The complete procedure combines
+continuous CAT estimation with pairwise stopping
+and cost-aware allocation under a total budget con-
+straint. Rather than allocating a fixed maximum
+number of items per model, we specify a total cost
+budget B that can be flexibly distributed across
+models. After a warm-up phase that administers
+initial items to all models via MFI selection, the
+algorithm iteratively identifies uncertain pairs, se-
+lects the most cost-effective model to test, chooses
+the maximally informative item for that model, and
+updates posteriors. Testing continues until either
+all adjacent pairs reach the confidence threshold,
+or the total budgetBis exhausted.
+7 Experiments
+We evaluate our continuous CAT extension and
+adaptive ranker across five generation tasks span-
+ning summarization, machine translation, question
+answering, and named entity recognition. Our goal
+is to approximate ground-truth rankings from full
+dataset evaluation using as few items as possible.
+7.1 Experimental Protocol
+We select tasks representing diverse generation set-
+tings and metric types (Table 1). This selection
+covers n-gram overlap (ROUGE, BLEU), learned
+embeddings (BERTScore, COMET), readability
+indices (FKGL), LLM-as-judge, and span-level
+F1. We exclude BERTScore from GovReport as
+all models achieved near-identical scores (range
+<0.02), yielding no meaningful ground-truth rank-
+ing. Full prompts and scoring details are provided
+in Appendix A.
+We evaluate 21 models from 6 families: Ope-
+nAI GPT, Google Gemini, Amazon Nova, Meta
+Llama, Mistral, and Qwen (see Appendix A for
+full list). For each dataset-metric pair, we collect
+exhaustive evaluation scores by running all mod-
+els on all items, establishing ground-truth rankings.
+Each model is evaluated at four temperature set-
+tings (T∈ {0.0,0.4,0.7,1.0} ), which yields 84
+model-temperature configurations per item. Our
+main experiment uses five-fold cross-validation
+over models. In each fold, we randomly select 4
+models as the hold-out set to be ranked adaptively;
+all temperature variants of hold-out models are ex-
+cluded from calibration. The remaining 17 models
+(68 configurations) provide calibration data for es-
+timating item parameters (bi, k). We fit parameters
+via maximum likelihood on the calibration set, then
+simulate adaptive evaluation on the hold-out mod-
+els at T= 0 . We set the confidence threshold
+γ= 0.95 for pairwise decisions and require a min-
+imum of 10 items per model before stopping.
+For each hold-out set, we compare the adap-
+tive ranker to two baselines at the same matched
+cost.Random samplingallocates the total budget B
+across models by iteratively selecting a random af-
+fordable model and a random unseen item to admin-
+ister, stopping at the first draw whose cost exceeds
+the remaining budget. Amost-informative static
+subsettransposes static subset selection (Maia Polo
+et al., 2024; Kipnis et al., 2025) to continuous
+scores: per fold, items are ranked by their corrected
+item–total correlation on the calibration models
+and accumulated greedily until the next item would
+exceed the budget; the identical subset is adminis-
+tered to every holdout model, which is then ranked
+by its mean normalized score. We assess ranking
+quality using Kendall’s τ correlation between pre-
+dicted and ground-truth rankings computed from
+point estimates (mean ˆθ). For efficiency, we report
+the mean number of items administered per model.
+Budget.We set B to the cost equivalent of 20
+items per model. At this budget the adaptive ranker
+is in a budget-constrained regime: its pairwise-
+confidence stopping rule would naturally fire at
+roughly 30–100 items per model depending on
+dataset. Appendix D traces ranking quality as
+a function of B and shows that adaptive outper-
+forms random sampling across the small-to-mid
+budget regime that motivates this work, with the
+gap shrinking asBapproaches full evaluation.
+7.2 Main Results
+Table 2 presents results across all dataset-metric
+combinations. On 7 of 9 dataset-metric pairs, the
+adaptive ranker achieves higher Kendall’s τ than
+the random sampling baseline. The largest gains
+occur on discriminative metrics: +0.10 τ on Bi-
+oLaySumm ROUGE-L (0.957 vs 0.853), +0.33
+on TruthfulQA BERTScore (0.520 vs 0.193), and
++0.20 on FLORES BLEU (0.760 vs 0.563). These
+results demonstrate that our adaptive ranker pro-
+vides genuine performance gains over random sam-
+pling. The adaptive ranker uses 52–101 items per
+hold-out set, and achieves 0.75 τ with the full
+[PDF PAGE 7]
+Table 1: Evaluation datasets. FKGL: Flesch-Kincaid Grade Level (Kincaid et al., 1975).
+Dataset Size Split Task Metrics
+BioLaySumm (Goldsack et al., 2024) 1,376 val Lay summarization ROUGE-L, BERTScore, FKGL
+GovReport (Huang et al., 2021) 973 val Document summarization ROUGE-L
+TruthfulQA (Lin et al., 2022) 817 val Open-ended QA LLM-Judge, BERTScore (diff.)
+FLORES (NLLB Team et al., 2022) 1,012 devtest Translation (TR→EN) COMET, BLEU
+Nemotron-PII (Steier et al., 2025) 2,000 test 2 NER/PII detection F1 (span-level)
+Table 2: Ranking performance across benchmarks. Higher discrimination (a, mean over calibration folds) indicates
+more informative items. Items is the total number of items administered across the four hold-out models. % Used
+is Items divided by ( 4× Size), i.e., the fraction of the full hold-out evaluation. Random and Static are the two
+matched-cost baselines of §7.1; the static subset (15–21 items) is deterministic within a fold, so its τ is aggregated
+over the 5 folds.
+Dataset Metric SizeaAdaptiveτ↑Randomτ↑Staticτ↑Items % Used↓
+BioLaySumm ROUGE-L 1376 4.100.957±0.11 0.853±0.20 0.800±0.16 81±18 1.5±0.3%
+BioLaySumm BERTScore 1376 3.570.930±0.14 0.750±0.36 0.533±0.45 90±10 1.6±0.2%
+BioLaySumm FKGL 1376 2.420.777±0.28 0.750±0.38 0.733±0.39 91±15 1.6±0.3%
+GovReport ROUGE-L 973 4.67 0.813±0.180.820±0.24 0.667±0.21 95±29 2.4±0.8%
+TruthfulQA LLM-Judge 817 2.630.637±0.39 0.417±0.43 0.600±0.25 93±12 2.8±0.4%
+TruthfulQA BERTScore 817 2.68 0.520±0.38 0.193±0.460.533±0.45 93±7 2.9±0.2%
+FLORES BLEU 1012 3.15 0.760±0.23 0.563±0.430.933±0.13 91±8 2.2±0.2%
+FLORES COMET 1012 3.96 0.670±0.28 0.513±0.410.800±0.27 101±10 2.5±0.3%
+Nemotron F1 2000 1.39 0.673±0.27 0.717±0.280.800±0.16 52±4 0.6±0.1%
+Overall (mean)3.170.750.62 0.71 87 2.0%
+dataset ranking while using only 2% of the items
+per new-model evaluation (excluding the one-time
+calibration cost; Appendix C).
+The discrimination parameter a predicts where
+adaptive methods provide the most benefit. On
+high-discrimination metrics (a >3), the adaptive
+ranker matches or outperforms random sampling.
+On low-discrimination metrics like Nemotron F1
+(a= 1.39 ), individual items provide less informa-
+tion, limiting the advantage of intelligent selection.
+Comparison to the informed static subset.Al-
+though our model cannot target discrimination ex-
+plicitly, the items it selects are typically also the
+items whose scores vary most across models, so
+adaptive selection could still act as an implicit
+proxy for concentrating evaluation on empirically
+discriminative items. We test whether this is the
+main source of the adaptive method’s gains by ad-
+ministering a static highest discrimination set with
+matched cost. We find that the static subset trails
+adaptive testing on average (τ= 0.71 vs 0.75), al-
+though it wins on 4 of 9 pairs, against 4 for adaptive
+and one for random. However, a fixed subset yields
+only a point ranking, identical whether models are
+cleanly separated or statistically indistinguishable,
+whereas the adaptive ranker additionally provides
+pairwise confidence, early stopping, cost-aware al-
+location, and tie detection. The out-of-family evalu-
+ation (§7.5) also shows that the static subset method
+is more brittle when ranking models less similar to
+those found in the calibration set.
+Distributional Conformance.In practice, met-
+rics conform to the assumed variance structure
+σ2 =k·µ(1−µ) to widely varying degrees, yet
+ranking quality does not track this conformance:
+the best-ranking metric is among the worst con-
+formers, and it is low discrimination rather than
+poor fit that marks the settings where adaptive se-
+lection struggles. Appendix B presents the analy-
+sis; violations of the variance assumption do not
+degrade ranking performance when items are suffi-
+ciently discriminative.
+7.3 Tie Detection
+The τ correlation in Table 2 measures ranking accu-
+racy based on point estimates, but point estimates
+alone do not indicate when a ranking is reliable.
+Our method uses the IRT model’s posterior to de-
+tect statistical ties, where a pair is reported as a tie
+when confidence falls below 95%.
+[PDF PAGE 8]
+Table 3: Tie detection against ground-truth ties from bootstrap CIs on full evaluation. Adapt/GT Tie% are the
+fraction of pairs reported as ties for adaptive ranker and ground truth. Tie P/R/F1 are the precision, recall and F1 on
+tie detection quality of the adaptive ranker compared to the full evaluation. Conf Acc is the accuracy of the adaptive
+ranker on its non-tie predictions.
+Dataset Metric Adapt Tie% GT Tie% Tie P↑Tie R↑Tie F1↑Conf Acc↑
+BioLaySumm ROUGE-L 13% 3% 0.63 0.99 0.66 1.00
+BioLaySumm BERTScore 40% 13% 0.32 0.97 0.39 1.00
+BioLaySumm FKGL 37% 17% 0.39 0.92 0.45 0.98
+GovReport ROUGE-L 18% 10% 0.42 0.76 0.47 0.94
+TruthfulQA LLM-Judge 79% 47% 0.52 0.91 0.61 0.98
+TruthfulQA BERTScore 98% 73% 0.74 1.00 0.82 1.00
+FLORES BLEU 59% 30% 0.44 1.00 0.55 1.00
+FLORES COMET 54% 37% 0.52 0.92 0.54 0.98
+Nemotron F1 61% 7% 0.09 1.00 0.14 0.98
+Overall (mean)51% 26% 0.45 0.94 0.51 0.99
+Table 4: Isolating the stopping rule. Fixed-length CAT administersn= max items adaptive used per holdout to every
+model, so it sees a strict superset of adaptive’s items in the same holdout. Any τ difference (∆τ=Fixed−Adapt )
+reflects only the value of those extra items; any cost difference reflects only what stopping saved.
+Dataset Metric Adaptτ↑Fixedτ↑∆τItem Savings Cost Savings
+BioLaySumm BERTScore 0.93 0.94 +0.01 36% 42%
+BioLaySumm FKGL 0.78 0.78 +0.01 32% 36%
+BioLaySumm ROUGE-L 0.96 0.92−0.03 39% 43%
+FLORES BLEU 0.76 0.83 +0.07 31% 40%
+FLORES COMET 0.67 0.87 +0.20 34% 46%
+GovReport ROUGE-L 0.81 0.76−0.05 34% 41%
+Nemotron F1 0.67 0.74 +0.07 24% 30%
+TruthfulQA BERTScore 0.52 0.57 +0.05 28% 37%
+TruthfulQA LLM-Judge 0.64 0.57−0.06 27% 39%
+Overall0.75 0.78 +0.03 32% 39%
+Table 3 presents tie detection performance of
+the adaptive ranker against ground-truth ties de-
+rived from bootstrap confidence intervals on full
+evaluation. The adaptive ranker is consistently con-
+servative: Adapt Tie% exceeds GT Tie% for all
+metrics. Tie detection recall is high (0.76–1.00),
+which means that our method catches most ground-
+truth ties. For pairs where one model is ranked
+strictly higher than the other, overall accuracy is
+99%. TruthfulQA BERTScore reports 98% ties be-
+cause all models score within a 0.7% range, and the
+differences are too small to resolve within the bud-
+get constraints; the few confidently ordered pairs
+are all correct.
+The weakest case is GovReport ROUGE-L,
+which has both the lowest tie recall (0.76) and the
+lowest confident accuracy (0.94). Even so, the
+adaptive ranker achieves 99% overall accuracy on
+confidently ranked pairs and 94% recall in detect-
+ing ground truth ties.
+7.4 Ablation: Adaptive vs Fixed-Length CAT
+The adaptive ranker terminates based on pairwise
+confidence, allocating more items to close com-
+petitors and fewer to well-separated models, and
+further manages cost by preferentially choosing
+cheaper models. We run an experiment to see if
+this cost saving measure incurs any tradeoffs with
+ranking performance. In other words, if we hadn’t
+stopped early, would we see significant gains in τ?
+For each holdout set, we administer the same
+number of items n to all models, where n is set to
+the maximum items used by the adaptive ranker for
+any model in that holdout. Table 4 shows that adap-
+tive stopping saves 32% of items and 39% of cost
+while giving up little ranking quality: fixed-length
+CAT averages 0.03 higherτ (0.78 vs 0.75), with the
+difference concentrated in a single dataset-metric
+pair (FLORES COMET, +0.20) and within ±0.07
+elsewhere. This shows that the adaptive ranking
+works largely as intended: the items skipped are,
+on average, close to superfluous, and the stopping
+rule trades a marginal amount of ranking accuracy
+[PDF PAGE 9]
+Table 5: Family holdout evaluation. Calibration on OpenAI, Llama, Gemini (14 models); evaluation on hold-out
+Mistral, Qwen, Nova (3 models). The protocol matches the main experiment (total budget B, real per-model
+costs); Base is random sampling at matched cost, and Static is the most-informative subset of §7.1 selected on the
+calibration families only (it varies across seeds only through the per-seed matched budget).
+Dataset Metric Baseτ↑Staticτ↑Adaptτ↑
+BioLaySumm BERTScore 0.13±0.641.00±0.00 0.33±0.00
+BioLaySumm FKGL 0.90±0.241.00±0.001.00±0.00
+BioLaySumm ROUGE-L 0.80±0.371.00±0.00 0.70±0.33
+FLORES BLEU 0.83±0.291.00±0.001.00±0.00
+FLORES COMET 0.77±0.321.00±0.00 0.90±0.24
+GovReport ROUGE-L 0.77±0.320.97±0.150.97±0.15
+Nemotron F10.73±0.33 0.33±0.00 0.53±0.31
+TruthfulQA BERTScore 0.37±0.61−0.33±0.000.87±0.27
+TruthfulQA LLM-Judge−0.07±0.61−0.27±0.200.57±0.32
+Overall0.58 0.630.76
+for substantial savings.
+7.5 Generalization to Unseen Model Families
+Our main experiments use cross-validation over
+individual models, but calibration and hold-out
+models may share architectural similarities within
+families. To test whether item parameters gen-
+eralize to genuinely novel architectures, we con-
+duct a family-stratified evaluation: we hold out
+Mixtral-8x7b-instruct, Qwen3-32b, and Nova-pro-
+v1 and calibrate only on OpenAI, Meta/Llama, and
+Google/Gemini models (14 total).
+Table 5 shows results. The adaptive ranker
+outperforms random sampling on 7 of 9 dataset-
+metric pairs, with the largest gains on TruthfulQA
+(+0.64 τ on LLM-Judge, +0.50 on BERTScore)
+and GovReport ROUGE-L (+0.20). These re-
+sults suggest that item difficulty parameters trans-
+fer across model families: an item that is diffi-
+cult for Llama models tends to also be difficult
+for Qwen or Nova models. The main exception
+is BioLaySumm BERTScore, where adaptive and
+random both struggle (0.33 and 0.13); random
+also edges out adaptive on BioLaySumm ROUGE-
+L and Nemotron F1, the latter being the low-
+discrimination case discussed in §7.2.
+The static subset makes the value of adaptivity
+under family shift explicit: its behaviour is bimodal.
+Where the item discrimination estimated on the
+calibration families happens to transfer, the fixed
+subset is essentially perfect (τ= 1.0 on five pairs);
+where it does not, it fails catastrophically, rank-
+ing the unseen families in roughlyreverseorder
+on both TruthfulQA metrics (−0.27 and −0.33) —
+with no signal that anything has gone wrong. Adap-
+tive selection, which adjusts item choice to each
+model online, degrades gracefully in exactly those
+cases (0.57 and 0.87) and remains the best method
+on average (0.76 vs 0.63 static and 0.58 random).
+8 Conclusion
+We present a principled extension of IRT-based
+adaptive testing from binary to continuous bounded
+scores. Building on this foundation, we intro-
+duce an adaptive multi-model ranking algorithm
+with pairwise stopping and cost-aware allocation.
+Across five generation benchmarks spanning dif-
+ferent metrics, our method achieves 0.75 Kendall’s
+τ correlation with ground-truth rankings and 99%
+accuracy on confident predictions while using only
+2% of items per new-model evaluation. Notably,
+our method can reliably rank models from entirely
+unseen families, and remains robust to empirical
+deviations from the assumed variance structure.
+For future work, extending our model to item-
+specific discrimination parameters can improve
+item selection. Incorporating variable item costs
+can enable cost-optimal item selection at a more
+granular level. Extending to multi-metric evalua-
+tion can allow ranking models on several metrics
+simultaneously in a single adaptive run, further
+increasing evaluation efficiency. Developing meth-
+ods for more efficient item parameter estimation
+such as transfer learning from related benchmarks
+or few-shot calibration can reduce the cold-start
+cost for new datasets and enable faster deployment.
+9 Limitations
+Our method requires calibration data from exist-
+ing model evaluations to estimate item parame-
+ters, creating a cold-start problem for new bench-
+marks. This upfront cost of exhaustive evaluation
+[PDF PAGE 10]
+on calibration models is amortized over subsequent
+adaptive evaluations, but represents a barrier to
+immediate deployment on new datasets. Further-
+more, item parameters must be re-estimated for
+each metric separately, which might add overhead
+when comprehensive multi-metric evaluation is
+needed. Finally, our TruthfulQA judge (GPT-4.1-
+nano) shares a model family with several evaluated
+models, which may bias calibration in favor of
+same-family models; in practice we advise using
+a judge from a different family than the models
+under evaluation.
+Our stopping criterion evaluates each adjacent
+pair independently at significance level α, which
+controls the per-comparison error rate but not the
+family-wise error rate (FWER). With M models
+and M−1 adjacent comparisons, the probability
+of at least one incorrectly ordered pair under the
+null hypothesis is approximately 1−(1−α) M−1,
+reaching 18% for five models at α= 0.05 . Cor-
+rections such as Holm-Bonferroni could provide
+FWER control by requiring stricter thresholds for
+the most confident pairs at the cost of additional test
+items, potentially negating much of the efficiency
+gain from adaptive selection.
+Our method targets the ranking that full evalu-
+ation on the chosen benchmark and metric would
+produce, not models’ latent ability in the psycho-
+metric sense. We use ˆθ as an intermediate quan-
+tity that places models on a shared scale, and our
+experiments evaluate ranking fidelity to the full-
+evaluation ground truth. Whether the benchmark
+itself reflects models’ true underlying capabilities
+(construct validity) is a separate question requiring
+a different experimental setup, and is outside the
+scope of this work.
+10 Ethical Considerations
+Large language model inference carries substantial
+environmental costs, with energy consumption and
+carbon emissions scaling with the number of API
+calls. By reducing per-model evaluation from ex-
+haustive testing to approximately 2% of items (after
+a one-time calibration step), our method directly de-
+creases the environmental footprint of model com-
+parison. As the number of candidate models, bench-
+marks, and evaluation metrics continues to grow,
+efficient evaluation methods become increasingly
+important for sustainable AI development.
+Beyond environmental benefits, efficient evalua-
+tion has implications for equity in AI research. Ex-
+haustive evaluation across large benchmarks favors
+well-resourced organizations. By dramatically re-
+ducing the number of required items, our approach
+can lower barriers for smaller laboratories, students
+and independent researchers to perform meaning-
+ful model comparisons. Additionally, our method’s
+explicit uncertainty quantification and tie detection
+encourages more honest reporting practices.
+One potential concern is benchmark gaming: if
+certain items are predictably selected as most infor-
+mative, model developers could optimize specifi-
+cally for those items rather than general capability.
+Periodic re-calibration of data and item banks can
+mitigate this risk.

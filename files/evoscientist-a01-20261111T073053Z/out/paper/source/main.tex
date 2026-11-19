@@ -1,0 +1,236 @@
+\documentclass{article}
+\usepackage{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts,amsmath,amssymb,amsthm}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=*}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{definition}{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+\newcommand{\K}{K^\ast}
+\newcommand{\Lm}{L^\ast}
+\newcommand{\gs}{g^\ast}
+\newcommand{\R}{\mathbb{R}}
+
+\title{How Much Targeted Training Does It Take to Top a Multi-Task Leaderboard? Minimum-Investment Analysis Across Aggregation Rules}
+\author{Anonymous Authors}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+A multi-task leaderboard turns per-task scores into one ranking through an aggregation rule, and a developer can try to lift a chosen model to first place by training on data related to some of the sub-tasks. We ask what investment this takes and how it depends on the rule. We measure investment by three quantities: \emph{breadth} (number of sub-tasks improved), \emph{magnitude} (total score points gained) and \emph{depth} (largest single-task gain). We assume that rivals stay fixed and that an investment changes only the targeted sub-task's score. Under these assumptions we compute the exact minimum of each quantity for eight rules: arithmetic, geometric and harmonic mean, minimum, median, Borda, Copeland and plurality. We use closed forms for the cardinal rules and exact mixed-integer programs for the ordinal ones, and check both against brute force. We apply them to HELM-MMLU (79 models, 57 subjects) and to two views of the Open LLM Leaderboard (6 tasks; 24 BBH sub-tasks; more than 4,000 models each). We find the following. (i) The arithmetic mean is the most expensive rule in total points ($L^\ast=n\Delta$). The other seven rules need 6--94\% of that for the same targets, and the difference is significant in all 21 benchmark-by-rule comparisons (Holm-corrected $p<0.001$). (ii) The ordering by \emph{breadth} and by \emph{depth} is not stable. On the 57-task board Borda and Copeland need $2.8$--$3.8\times$ the mean's breadth, whereas on the 6-task board the rules differ by at most one task. Plurality needs $0.46\times$ the mean's depth on HELM but $1.6\times$ on the 6-task board. (iii) The requirement scales linearly with the number of tasks for the mean, but is flat for median, minimum and plurality. (iv) Whether a rule is easy to push depends on the achievable per-task gain. With gain caps taken from observed fine-tuning gains, only 15\% of contenders can reach first place under the mean, against 95--100\% under median and minimum. Requirements of the mean-type rules are stable under score noise, but the identity of the incumbent is not. Hence no aggregation rule is uniformly hardest to manipulate; the answer depends on how investment is measured. The conclusions hold under strong assumptions (static rivals, no spillover, noise-free scores), which we state and probe. Code and data checksums are provided.
+\end{abstract}
+
+\section{Introduction}
+Rankings from multi-task benchmarks such as MMLU, BIG-Bench Hard, HELM and the Open LLM Leaderboard shape which models are adopted, published and funded~\citep{hendrycks2021mmlu,suzgun2023bbh,liang2022helm}. A leaderboard row is an aggregate: each model has a score on every sub-task, and an aggregation rule maps the score vector to a rank. Developers therefore have an incentive to act on the inputs of the aggregation. A direct way is to fold data related to selected sub-tasks into a model's training, which raises the model's score on those sub-tasks. Contamination of test data~\citep{zhou2023cheater,yang2023rephrased} and selective private testing~\citep{singh2025illusion} are known cases. How easily such targeted investment changes the top of a board, and whether the answer depends on the aggregation rule, has received little systematic quantitative study. Prior work compares rules by their rankings~\citep{dehghani2021lottery,lanctot2023social}, or models strategic post-training as a game~\citep{chen2026incentives}.
+
+We take a complementary, non-game-theoretic view: \emph{measure the cheapest investment that makes a given model strictly first}, for several rules, on public boards. Our contributions are:
+\begin{enumerate}
+\item A \textbf{formalisation} of targeted investment with three nested cost measures: breadth $K$, magnitude $L$ and depth $g$. It includes explicit modelling assumptions and a per-task gain cap (\S\ref{sec:framework}).
+\item \textbf{Exact solvers} for eight rules: closed forms or water-filling for cardinal rules, exact MILPs for Borda, Copeland and plurality. Propositions 1--4 give monotonicity, closed forms and a breadth bound. The solvers are verified against brute force on 800 random instances (\S\ref{sec:framework}, App.~\ref{app:proofs}).
+\item An \textbf{empirical study} on three public boards with paired comparisons across rules, a score-noise bootstrap, a task-count scaling experiment, a synthetic latent-factor experiment that locates where conclusions flip, and a calibration of gain caps from observed fine-tuning pairs (\S\ref{sec:results}).
+\item A \textbf{qualified answer}: ``it depends'', with explicit conditions. The ordering of rules changes with the cost measure, the number of tasks and the incumbent, so claims that a rule is ``robust to leaderboard gaming'' need to name the cost measure and the assumed gain ceiling.
+\end{enumerate}
+
+\section{Related work}
+\textbf{Benchmark validity and leaderboard gaming.} The Benchmark Lottery shows that task selection and aggregation can reorder methods~\citep{dehghani2021lottery}. Leaderboard Illusion documents selective submission and uneven data access on Chatbot Arena~\citep{singh2025illusion}. Benchmark leakage and rephrased-sample contamination inflate scores~\citep{zhou2023cheater,yang2023rephrased}. These works establish that gaming occurs. We quantify \emph{how much of it is needed to change first place} under different rules. \citet{chen2026incentives} study equilibria of strategic post-training in a game between benchmark designers and developers; we do not model equilibrium, only the single-developer, static-rival cost. We know that work only through its title and the one-line description in the task's starter list and have not examined its results.
+
+\textbf{Social choice and evaluation.} \citet{lanctot2023social} apply voting theory to multi-task agent evaluation, and \citet{brandt2016handbook} survey computational social choice. By Gibbard--Satterthwaite~\citep{gibbard1973manipulation,satterthwaite1975strategy}, every deterministic, onto, non-dictatorial voting rule with at least three alternatives is manipulable by voters. Our manipulation is different: the developer changes the \emph{candidate's own scores} (the ``ballots'' are task-wise rankings that move when the candidate improves). This is closest to \emph{shift/swap bribery} with costs~\citep{faliszewski2009bribery,elkind2009swap} and to manipulation complexity~\citep{bartholdi1989computational}, where cost is the number of changed votes. We differ in using real-valued scores, ties, caps and three cost measures, and in reporting empirical rather than worst-case costs. We do not claim hardness results.
+
+\section{Framework}\label{sec:framework}
+\textbf{Board and rules.} A board has $M$ models and $n$ tasks with scores $s_{mj}\in[0,U]$ ($U=100$, higher is better). Target model $t$ has score vector $a=s_{t\cdot}$; rivals $S_{-t}$ are the other $M-1$ rows. A rule $\mathcal A$ maps each row to a score or a rank. We study:
+\emph{cardinal} rules (score depends only on the model's own row): arithmetic mean, geometric mean and harmonic mean (power means $p=1,0,-1$ on $s+1$, minus 1, so that zero scores are allowed), minimum, and median;
+\emph{ordinal} rules (depend on cross-model comparisons per task): Borda (mean win rate, i.e.\ total number of models beaten summed over tasks), Copeland (number of rivals beaten in pairwise task-majority), and plurality (number of tasks on which a model is best, ties split). Ties are counted as one half.
+
+\textbf{Investment.} An investment is a vector $\delta\in\R^n_{\ge0}$ with $a_j+\delta_j\le U$ and $\delta_j\le g$, where $g$ is the \emph{per-task gain cap}. It is interpreted as the score gain on task $j$ from training on data related to $j$. We use three costs:
+\[
+\text{breadth } K(\delta)=|\{j:\delta_j>0\}|,\qquad \text{magnitude } L(\delta)=\textstyle\sum_j\delta_j,\qquad \text{depth } \|\delta\|_\infty .
+\]
+$K^\ast(g)$ and $L^\ast(g)$ are the minima over investments that make $t$ \emph{strictly first} under $\mathcal A$ with rivals fixed; $g^\ast$ is the smallest cap for which any investment succeeds (the minimum depth). They are different objectives: $K^\ast$ proxies data-curation breadth, $L^\ast$ proxies total improvement effort, and $g^\ast$ the hardest single-task improvement. We report all three and never merge them into one cost.
+
+\textbf{Assumptions.}
+\textbf{(A1) Task-local effect:} an investment on task $j$ changes only $s_{tj}$ (no spillover). This favours neither low nor high costs: positive transfer would reduce $K^\ast$, negative transfer would raise it. \textbf{(A2) Static rivals:} other rows do not change, so the results are a one-shot, best-response-free cost. \textbf{(A3) Gain cap:} $g$ bounds per-task improvement; we sweep $g$ and calibrate it from observed fine-tuning pairs (\S\ref{sec:calib}). \textbf{(A4) Noise-free scores:} the published numbers are taken as the truth; relaxed by a bootstrap (\S\ref{sec:noise}). \textbf{(A5) Strictness:} the target must exceed every rival by a margin $\epsilon=10^{-6}$ points on the aggregate (cardinal) or $10^{-3}$ points on a task (ordinal), so ties never count as wins.
+
+\begin{proposition}[Monotonicity]\label{prop:mono}
+For all eight rules, if $\delta$ makes $t$ strictly first then so does any $\delta'\ge\delta$ within the caps. Hence (i) a cap $g$ is feasible iff the all-in investment $\delta_j=\min(g,U-a_j)$ succeeds; (ii) feasible caps form an up-set $[g^\ast,\infty)$, so $g^\ast$ is found by bisection; (iii) $K^\ast(g)$ and $L^\ast(g)$ are non-increasing in $g$.
+\end{proposition}
+\begin{proposition}[Mean]\label{prop:mean}
+Let $\Delta=T+\epsilon-\bar a$, where $T$ is the best rival mean, and $c_j=\min(g,U-a_j)$. If $\sum_jc_j\ge n\Delta$ then $L^\ast=n\Delta$ (independent of $g$), $K^\ast=\min\{k:\text{sum of the }k\text{ largest }c_j\ge n\Delta\}\ge\lceil n\Delta/g\rceil$, and $g^\ast\ge\Delta$ with equality if no ceiling binds. Otherwise the target cannot win.
+\end{proposition}
+\begin{proposition}[Minimum]\label{prop:min}
+With $T$ the best rival minimum, $K^\ast=|\{j:a_j<T+\epsilon\}|$, $L^\ast=\sum_j(T+\epsilon-a_j)_+$ and $g^\ast=\max_j(T+\epsilon-a_j)_+$. $K^\ast$ does not depend on $g$: breadth cannot be traded for depth under this rule.
+\end{proposition}
+\begin{proposition}[Order statistics]\label{prop:order}
+Let the rule be the $r$-th largest task score, $r=\lceil (n+1)/2\rceil$ for the median with odd $n$, and let $m=|\{j:a_j\ge T+\epsilon\}|$. Then $K^\ast=\max(0,r-m)\le r$, and $L^\ast$ is the sum of the $r-m$ smallest reachable deficits. For even $n$ the median averages ranks $n/2$ and $n/2+1$ and $K^\ast\le n/2+1$. Breadth is thus bounded by about half the tasks, whatever the gap.
+\end{proposition}
+Proofs are in App.~\ref{app:proofs}. Proposition~\ref{prop:mean} gives the main scaling prediction: at a fixed aggregate gap, the mean's total points grow linearly with $n$, whereas Proposition~\ref{prop:order} gives a bound that does not grow with the gap.
+
+\textbf{Algorithms.} Cardinal rules use the closed forms above (geometric and harmonic means by greedy selection of the largest gains for $K^\ast$, and water-filling for $L^\ast$; the median uses an exact breakpoint search). Ordinal rules are solved as exact MILPs (HiGHS via SciPy) over discrete ``level'' choices: for each task the target either keeps its score or rises to just above one rival's score (the only useful levels). We minimise $K$ or $L$ subject to strict first place, with a 60\,s limit (optimality flags were recorded in the main sweep, where no instance hit the limit). The correctness check in \texttt{code/test\_lib.py} compares every solver with brute-force enumeration (integer boards, 120 cardinal trials $\times$ 3 rules; 60 ordinal boards $\times$ 3 rules $\times$ 2 objectives) and SLSQP with subset enumeration for geometric/harmonic means (40 boards): 0 mismatches.
+
+\section{Experimental setup}\label{sec:setup}
+\textbf{Boards.} (1) \textbf{HELM-MMLU}: HELM release v1.13.0 (2025-01-10), exact-match accuracy on 57 MMLU subjects, 79 models with complete data~\citep{helm_release}. (2) \textbf{OLLB-6}: the Open LLM Leaderboard \texttt{contents} snapshot (commit 9c09a7c, 2025-03-20), six normalised task scores (IFEval, BBH, MATH Lvl 5, GPQA, MUSR, MMLU-PRO), 4,442 models after removing the one flagged model and models with an identical score vector~\citep{ollb_contents}. (3) \textbf{OLLB-BBH24}: the 24 BBH sub-task accuracies from the \texttt{results} snapshot (commit aa81ecc), latest file per model, 4,403 models after de-duplication~\citep{ollb_results}; their mean agrees with the \texttt{BBH Raw} column of the other snapshot (correlation $0.9996$). Licences are not declared for the score data; we use only aggregate scores (App.~\ref{app:repro}). Cardinal rules use the full board. Ordinal MILPs use the top-100 models by arithmetic mean for the two OLLB boards, to bound solver size; this changes the rival set for those rules (limitation).
+
+\textbf{Targets.} We take the model ranked $r$ under the rule in question. We use ranks $r=2$--$11$ (``contenders'') for the cap sweeps and the noise and scaling studies, ranks $2$--$21$ for ordinal rules (solver cost) in the rank sweep, and, for \emph{paired} comparisons across rules, a common target set: ranks $2$--$31$ by arithmetic mean (30 models), so every rule is evaluated on the same models. A target that is already first under the rule or under the mean is dropped from that pair.
+
+\textbf{Statistics.} Summaries are medians with inter-quartile ranges over targets; targets are not independent random draws, so intervals describe heterogeneity across contenders and not sampling error of the board. Paired comparisons use Wilcoxon signed-rank tests of (rule $-$ mean) over common targets, Holm-corrected over the 7 non-reference rules within each benchmark and metric, and a 10,000-sample bootstrap over targets for the median paired ratio. There are three boards, so we make no claim about generalisation across boards beyond what the three show. The study was developed with early exploratory runs on HELM-MMLU, so all analyses should be read as exploratory; we did not hold out a confirmatory board. Seeds, commands and timings are in App.~\ref{app:repro}.
+
+\section{Results}\label{sec:results}
+Descriptives of the boards are in Table~\ref{tab:desc}. The winner differs across rules on every board (App.~\ref{app:more}): on HELM, Claude 3.5 Sonnet (2024-10-22) wins under mean, Borda and Copeland, DeepSeek v3 under geometric/harmonic mean, minimum and median, and Claude 3.5 Sonnet (2024-06-20) under plurality. On OLLB-6 the winners also differ. Kendall's $\tau$ between mean and plurality scores (over the ordinal pool) is $0.51$ (HELM) and $0.17$ (OLLB-6). Therefore the choice of rule matters for who is the \emph{incumbent} a contender has to beat, which we return to below.
+
+\begin{table}[t]
+\centering\small
+\caption{Boards. ``Ordinal pool'' is the number of models used for ordinal rules; ``Add.\ resid.\ SD'' is the residual SD (points) of a two-way additive fit (model + task), i.e.\ the task-specific variation that is not a model-wide skill effect.}\label{tab:desc}
+\input{tables/descriptives.tex}
+\end{table}
+
+\subsection{Comparing rules on the same targets}
+Table~\ref{tab:paired} gives the median over the 30 common targets of the ratio (requirement under the rule)/(requirement under the mean), with the mean's absolute value for reference; Table~\ref{tab:summary} (App.) lists medians and IQRs per rule for rank 2--11 contenders, and Fig.~\ref{fig:rank} shows the requirement as a function of rank.
+
+\begin{table}[t]
+\centering\small
+\caption{Paired comparison on 30 common targets (ranks 2--31 by mean). Entries: median ratio of the requirement under the rule to that under the arithmetic mean ($<1$: easier than the mean). Cap $g{=}100$ for $L^\ast,K^\ast$. $^\dagger$: not significant after Holm correction (Wilcoxon, $\alpha=0.05$); all other entries have $p_{\rm Holm}<0.05$. CIs, shares and $p$-values in App.~\ref{app:more}, Table~\ref{tab:pairedfull}.}\label{tab:paired}
+\resizebox{\textwidth}{!}{\input{tables/paired_ratio.tex}}
+\end{table}
+
+\textbf{Magnitude.} All 21 ratios are below 1 and highly significant: the mean is the most expensive rule in total points on every board, as predicted by $L^\ast=n\Delta$. Geometric and harmonic means save only 6--43\%. The median, minimum, Copeland and plurality need 6--40\%, and Borda 8--63\%. A plausible reason, which our experiments do not isolate, is that mean-type rules require the target's \emph{whole-board} aggregate to move, whereas rank-based rules only need changes at the few tasks where the target loses to its rival.
+
+\textbf{Breadth.} The picture reverses. On HELM, Borda needs $3.8\times$ and Copeland $2.8\times$ the mean's breadth (medians $34.5$ and $27$ tasks against $9$ for the mean, out of 57), while the minimum needs $0.64\times$ and the median $1.3\times$; geometric, harmonic and plurality are indistinguishable from the mean. On OLLB-6 every rule needs one or two tasks, so the ratios are $1$--$2$ and represent a difference of a single task. On BBH24, Copeland and plurality need $1.5$--$1.75\times$. A plausible reason, again not isolated, is that a pairwise-majority or win-count rule asks the target to beat \emph{many} rivals, each on a majority of tasks, whereas a mean only asks it to cover a sum.
+
+\textbf{Depth.} The ordering by minimum depth $\gs$ is unstable across boards. Plurality needs $0.46\times$ the mean's depth on HELM, but $1.57\times$ on OLLB-6 and $1.13\times$ on BBH24. Copeland needs $0.72\times$, $0.76\times$ and $1.31\times$. Geometric and harmonic means need slightly \emph{more} depth than the mean everywhere ($1.08$--$1.29\times$), since low scores are weighted more and gains on already-high tasks count less. The minimum needs $1.6$--$2.1\times$ the mean's depth. The Borda ratio on BBH24 ($0.16\times$) reflects that Borda's incumbent there is a different, weaker model than under the other rules (Table~\ref{tab:winners}): paired comparisons fix the target but not the incumbent.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\textwidth]{figs/fig_rank_sweep.pdf}
+\caption{Minimum investment to become first versus the target's initial rank under each rule (uncapped gains, $g=100$). Rows: breadth $\K$, magnitude $\Lm$ (log), depth $\gs$ (log). Solid: cardinal; dashed: ordinal rules (ranks up to 21). The requirement of the mean rises steeply in magnitude, while for the minimum, median and plurality it stays small.}\label{fig:rank}
+\end{figure}
+
+\subsection{Scaling with the number of tasks}\label{sec:scaling}
+On HELM we repeatedly draw $m\in\{6,12,24,40\}$ of the 57 subjects (60 draws each) and recompute everything, including who the contenders are (Fig.~\ref{fig:subsample}). The mean's magnitude per task is flat at about $3$ points ($=\Delta$), i.e.\ $\Lm$ grows linearly with $m$ as in Proposition~\ref{prop:mean}; the median's and minimum's $\Lm$ are flat or decreasing in absolute terms (median $\approx5$ points at every $m$). Borda and Copeland breadth grow roughly linearly with $m$ ($3\to12$ tasks from $m=6$ to $40$, and $17$ at $m=57$), whereas mean breadth grows slowly ($1\to3$). So the \emph{relative cost of rules depends on board size}: Borda and Copeland need about 3 tasks against the mean's 1 at $m=6$, but 12 against 3 at $m=40$, so the absolute gap widens from 2 to 9 tasks.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\textwidth]{figs/fig_subsample.pdf}
+\caption{Task-subsampling on HELM-MMLU (median over 60 random subsets per $m$ and over contenders of rank 2--11; the point at $m=57$ is the full board). Left: breadth. Middle: magnitude per task. Right: depth.}\label{fig:subsample}
+\end{figure}
+
+\subsection{When do conclusions flip? A synthetic latent-factor study}
+To locate the mechanism, we generate boards $s_{mj}=\mathrm{clip}_{[0,100]}(60+\theta_m+b_j+\sigma\varepsilon_{mj})$ with $M=80$, $\theta_m\sim N(0,10^2)$, $b_j\sim N(0,8^2)$ and task-specific noise SD $\sigma\in\{1,2,4,8,16\}$ (40 boards per cell, $n\in\{12,57\}$; Fig.~\ref{fig:synth}). The empirical boards have additive residual SD of $5.8$--$9.5$ points (Table~\ref{tab:desc}), inside this range. At $n=57$, as $\sigma$ grows from 1 to 16, Borda's relative breadth $K^\ast/n$ falls from $0.79$ to $0.17$ and plurality's from $0.46$ to $0.07$, while the mean's falls only from $0.29$ to $0.17$; at $\sigma=1$ (nearly one-dimensional board) Borda must touch most tasks, since a target behind a rival is behind on almost every task. Magnitude per task stays near $8$--$10$ points for the mean at all $\sigma$ but falls for rank-based rules. The synthetic boards are an illustration of the mechanism and not evidence about real boards.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\textwidth]{figs/fig_synthetic.pdf}
+\caption{Synthetic boards (median over 40 boards and over contenders of rank 2--11). Top: $n=12$; bottom: $n=57$. Left: relative breadth $K^\ast/n$; middle: magnitude per task; right: depth $\gs$. Cap $g=100$.}\label{fig:synth}
+\end{figure}
+
+\subsection{Robustness to score noise}\label{sec:noise}
+HELM reports accuracies on 100--1,534 instances per subject. We re-draw every cell as $\mathrm{Binomial}(n_{\rm eval},p)/n_{\rm eval}$ around the observed accuracy (100 draws) and recompute everything including contender identity (Table~\ref{tab:noise} in the App.). The median requirement of mean-type rules is tight ($K^\ast$ 95\% interval width 2--2.5 tasks; $\Lm$ about $\pm20\%$), whereas the minimum, median and plurality vary widely ($\Lm$ for the minimum 3.1--35.8; for the median 2.9--14.3), since they depend on a few extreme cells. The \emph{incumbent} is unstable: the observed winner stays first in only 18--71\% of draws (mean $0.51$, median $0.18$, plurality $0.18$, Borda $0.68$, Copeland $0.71$). For Borda and Copeland the observed $\K$ ($17.5$ and $17$) is above the bootstrap 95\% interval ($7$--$14.5$ and $9$--$15.5$): the observed board is more ``consistently ordered'' across tasks than a noisy replicate, so ordinal requirements are sensitive to noise. The bootstrap is centred on already-noisy observed values, so it adds noise on top of noise and is a sensitivity check, not a calibrated error bar.
+
+\subsection{Realistic gain caps}\label{sec:calib}
+Everything above that uses $g=100$ is the least restrictive case for feasibility. We calibrate caps with naturally occurring gains in the Open LLM Leaderboard: for 88 non-merged, original-weight models whose declared base model is itself a fine-tuned or chat model on the board, we compute (fine-tuned $-$ base) per task, and take the per-task 90th percentile, 99th percentile and maximum as caps (App., Table~\ref{tab:calib}). With caps from this primary pair set, on OLLB-6 only $15\%$ (mean), $25\%$ (geometric) and $10\%$ (plurality) of the contenders at ranks 2--21 can reach first place with q90 caps, against $90\%$ (harmonic), $95\%$ (median), $100\%$ (minimum), $80\%$ (Borda) and $75\%$ (Copeland); with q99 caps all contenders succeed under every rule (Table~\ref{tab:calibfeas}). When the 480 pairs that include base$\to$instruct jumps are used, q90 caps (which reach 41 points on IFEval) already suffice for nearly everyone ($55$\% for plurality, $90$\% for Copeland, $100$\% otherwise). \emph{The apparent robustness of a rule thus depends on the assumed gain ceiling more than on the rule}. Gains are not automatic: in the primary pair set the median gain is at most $1.6$ points (negative on five of six tasks) and only 19--74\% of pairs gain on a given task.
+
+\begin{table}[t]
+\centering\small
+\caption{Fraction of ranks 2--21 on OLLB-6 that can reach first place when each task's gain is capped at the q90/q99/maximum of observed fine-tuning gains.}\label{tab:calibfeas}
+\input{tables/calib_feas.tex}
+\end{table}
+
+\subsection{An observed case}
+On OLLB-BBH24 the incumbent under seven of eight rules is \texttt{qingy2024/Benchmaxx-Llama-3.2-1B-Instruct} (mean $82.7$), whose declared parent \texttt{meta-llama/Llama-3.2-1B-Instruct} is also on the board (mean $35.0$). The child improves on the parent on \emph{all} 24 sub-tasks, by $16.4$--$68.4$ points, a total of $1145$ points. The same child has IFEval $20.1$ and MMLU-PRO $1.3$ (OLLB-6 columns), so its gain is concentrated on BBH. Table~\ref{tab:case} compares this observed gain with the minimum our solvers need for the parent to be strictly first against the field without the child: $13$ tasks and $981$ points under the mean (the observed gain is about $17\%$ above the minimum in magnitude and touches nearly twice as many tasks), and fewer than half the points under the median, minimum, Copeland and plurality rules. This is descriptive: we have no information about how the child was trained, the model name is suggestive only, and a single case shows that our requirements are the right order of magnitude and not that they were what the developer targeted.
+
+\begin{table}[t]
+\centering\small
+\caption{Case study on OLLB-BBH24: observed gain of the incumbent over its parent vs.\ the minimum investment the parent needs for strict first place (cap $g=100$).}\label{tab:case}
+\input{tables/case.tex}
+\end{table}
+
+\section{Discussion and limitations}
+\textbf{Answer to the research question.} Under static rivals and task-local effects, topping these boards from rank 2--11 needs only a few tasks (median $K^\ast$ 1--4 for the mean-type rules, up to 17 for Borda/Copeland on HELM) when per-task gains are unlimited, but the \emph{total} improvement is large for the mean (about 160 points on HELM, i.e.\ roughly $3$ points on every task, or $\ge 16$ tasks at a cap of $10$). The dependence on the rule is real but not a ranking: the mean is the costliest in magnitude; rank-based rules are cheaper in magnitude but can be costlier in breadth; depth flips with the board. Conclusions about ``which rule resists gaming'' are therefore conditional on (i) the cost measure, (ii) the number of tasks and the amount of task-specific variation, (iii) the incumbent and (iv) the assumed ceiling on per-task gains.
+
+\textbf{Limitations.} (1) \emph{Static rivals and one developer:} real boards are repeated games and rivals respond; our numbers are a one-shot cost, not an equilibrium. (2) \emph{No spillover (A1):} training on one subject can lift related subjects (HELM-MMLU subjects are strongly correlated), which would lower $K^\ast$ under the real process; the minimal $K^\ast$ is a lower bound only under A1. (3) \emph{Scores as cost proxy:} we have no model of how many training examples a point of gain costs, so magnitude is only a proxy and we do not say which cost measure is the ``right'' one. (4) \emph{Noise-free scores} (partly addressed in \S\ref{sec:noise}); HELM subjects have as few as 100 items. (5) \emph{Three boards}, all language-model benchmarks; the OLLB boards contain many near-duplicate fine-tunes and merges, and we use the top-100 pool for ordinal rules there, which changes the rival set. OLLB-6 scores are normalised so that random-guess accuracy maps to 0, which affects geometric and harmonic means (we add 1 to scores before taking them). (6) \emph{Calibration:} caps are derived from 88 pairs (480 in a sensitivity run), are the same for every target and ignore that gains saturate near the ceiling. (7) \emph{Exploratory design:} early pilots on HELM informed the study; there is no preregistered confirmatory board, and 3 boards $\times$ 8 rules do not support a statement about all boards. (8) Intervals over contenders describe heterogeneity, not sampling error. (9) The exact MILPs are not claimed to scale beyond the board sizes used. Solver optimality flags were checked only in the main sweep (no time-limit hits there); the Monte-Carlo studies use 20--30\,s limits and did not record them.
+
+\textbf{Broader impact.} The analysis could inform benchmark designers who choose aggregation rules and could in principle guide a developer wishing to game a board. We believe the former use dominates: the study is based on public scores and makes no claim about specific developers (the case study is descriptive and stated as such). We discuss no data or models with misuse risk. We recommend reporting results under several rules and reporting breadth, magnitude and depth together.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+\section{Proofs}\label{app:proofs}
+\textbf{Proposition~\ref{prop:mono}.} Raising $a_j$ weakly raises the target's aggregate under the mean, power means, minimum and median, and does not change any rival's cardinal score. For ordinal rules, let $\delta'\ge\delta$. On each task, the target beats a (weakly) larger set of rivals, so its Borda score $\sum_j\#\{\text{beaten}\}$ and each pairwise win count weakly increase, and each rival's win count against the target weakly decreases while its comparisons against other rivals are unchanged. Copeland scores follow: the target's pairwise wins against each rival can only change from loss to tie to win, and every rival's Copeland score only loses points against the target. Plurality credit of the target on task $j$ is $1/\#\text{ties}$ if it is tied-best and 1 if strictly best, which is weakly increasing in $a_j$, while every rival's credit on $j$ is weakly decreasing. Hence strict first place is preserved. (i) follows because the all-in vector is the largest feasible $\delta$; (ii) because a larger cap enlarges the feasible box; (iii) because the feasible set of a larger cap contains that of a smaller cap. \hfill$\square$
+
+\textbf{Proposition~\ref{prop:mean}.} Winning is equivalent to $\sum_j\delta_j\ge n\Delta$ with $0\le\delta_j\le c_j$. The minimum $\ell_1$ norm of a feasible $\delta$ is $n\Delta$, attained whenever $\sum_jc_j\ge n\Delta$. The support is minimal when the coordinates with the largest caps are used; the size $k$ is the smallest with $\sum_{i\le k}c_{(i)}\ge n\Delta$. Since each $c_j\le g$, $k\ge n\Delta/g$. For $g^\ast$: $\sum_j\min(g,U-a_j)\ge n\Delta$ requires $g\ge\Delta$ since $\sum_j\min(g,\cdot)\le ng$, with equality when no ceiling binds. \hfill$\square$
+
+\textbf{Proposition~\ref{prop:min}.} The minimum is $\ge T+\epsilon$ iff every coordinate is, so each coordinate with $a_j<T+\epsilon$ must be raised by at least $T+\epsilon-a_j$ and the others need nothing. Feasibility at cap $g$ iff $\max_j(T+\epsilon-a_j)_+\le g$ (and $T+\epsilon\le U$). \hfill$\square$
+
+\textbf{Proposition~\ref{prop:order}.} The $r$-th largest value is $\ge T+\epsilon$ iff at least $r$ coordinates are. Of these, $m$ already are, so $r-m$ coordinates must be raised, the cheapest being the $r-m$ smallest deficits among reachable coordinates. The bound $K^\ast\le r$ is immediate. For the even-$n$ median (the mean of ranks $n/2$ and $n/2+1$): given any winning $\delta$, let $I$ be the $n/2+1$ coordinates with the largest final scores and set $\delta_j=0$ for $j\notin I$. The values in $I$ are unchanged, and the others fall but stay below the $(n/2+1)$-th largest value, so both order statistics are unchanged and the new $\delta$ still wins; hence $K^\ast\le n/2+1$. The same argument gives $K^\ast\le r$ for a general rank $r$. \hfill$\square$
+
+\textbf{Exactness of the ordinal MILPs.} For each task only levels equal to a rival's score plus $10^{-3}$ can change an outcome; every other level costs more without changing a comparison. The binary choice of one level per task, together with linear constraints on the target's Borda/Copeland/plurality score against each rival's updated score, encodes strict first place exactly. Copeland needs auxiliary binaries for ``beaten'' and ``tied or beaten'' per rival. The match with brute force (App.~\ref{app:repro}) validates the encoding.
+
+\section{Additional results}\label{app:more}
+\begin{table}[h]
+\centering\small
+\caption{Median [IQR] of the requirement over contenders ranked 2--11 under each rule, with the best-rival gap $g^\ast$ (depth), breadth $K^\ast$ and magnitude $L^\ast$ (cap 100) and breadth at cap $10$ (``feas.'': share of contenders for which first place is reachable). Source: \texttt{code/02\_main.py}.}\label{tab:summary}
+\resizebox{\textwidth}{!}{\input{tables/main_summary.tex}}
+\end{table}
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Full paired comparison vs.\ the arithmetic mean (common targets, ranks 2--31 by mean), magnitude $L^\ast$; share lower . higher: fraction of targets whose requirement under the rule is lower . higher than under the mean; $p_{\rm Holm}$: Wilcoxon signed-rank, Holm-corrected over the 7 rules within benchmark and metric.}\label{tab:pairedfull}
+\input{tables/paired_full_L.tex}
+\end{table}
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Full paired comparison vs.\ the arithmetic mean (common targets, ranks 2--31 by mean), breadth $K^\ast$.}\label{tab:pairedfullK}
+\input{tables/paired_full_K.tex}
+\end{table}
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Full paired comparison vs.\ the arithmetic mean (common targets, ranks 2--31 by mean), depth $g^\ast$.}\label{tab:pairedfullg}
+\input{tables/paired_full_g.tex}
+\end{table}
+
+\begin{table}[h]
+\centering\small
+\caption{Score-noise bootstrap on HELM-MMLU (100 draws; contenders of rank 2--11 re-identified in every draw; $g=100$). ``P(winner unchanged)'' is the share of draws in which the incumbent equals the observed incumbent.}\label{tab:noise}
+\input{tables/noise.tex}
+\end{table}
+
+\begin{table}[h]
+\centering\small
+\caption{Observed fine-tuning gains (fine-tuned $-$ base, points) used for calibration: 88 non-merged, original-weight tuned$\to$tuned pairs from the Open LLM Leaderboard snapshot.}\label{tab:calib}
+\input{tables/calib.tex}
+\end{table}
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Incumbent (first place) under each rule. OLLB ordinal rules use the top-100 pool.}\label{tab:winners}
+\input{tables/winners.tex}
+\end{table}
+
+\begin{figure}[h]
+\centering\includegraphics[width=\textwidth]{figs/fig_cap_sweep.pdf}
+\caption{Requirement as a function of the per-task cap $g$ for contenders of rank 2--11. Top: median breadth $K^\ast(g)$ (shown when at least half of the contenders can win). Bottom: share of contenders for which first place is reachable.}\label{fig:cap}
+\end{figure}
+
+\begin{figure}[h]
+\centering\includegraphics[width=0.45\textwidth]{figs/fig_noise.pdf}\hfill
+\includegraphics[width=0.45\textwidth]{figs/fig_calibrated.pdf}
+\caption{Left: score-noise bootstrap on HELM (bars: 95\% interval over draws; dots: median; crosses: observed). Right: share of OLLB-6 ranks 2--21 that can reach first place under calibrated caps (primary pair set).}\label{fig:noisecal}
+\end{figure}
+
+\section{Reproducibility}\label{app:repro}
+The repository README lists the environment (Python 3.11, NumPy 2.4.6, SciPy 1.17.1, pandas 3.0.6, matplotlib 3.11.2, pyarrow 26.0.1), data URLs and SHA-256 checksums (\texttt{data/MANIFEST.json}), seeds, commands, approximate run times, and the script that produces each table and figure. All numbers in the paper are produced by the scripts in \texttt{code/}; no value was typed by hand. Total compute was about 20 CPU-hours on a shared 40-core CPU machine (an upper estimate; larger than the 4 CPU-hour planning estimate because the Monte-Carlo studies use 40--100 repetitions of every board and rule), with no GPU. \textbf{Licences and LLM use.} HELM's code is Apache-2.0; we found no licence statement for its score data, nor for the Open LLM Leaderboard \texttt{results} dataset; the \texttt{contents} card has no licence field but a per-model hub-licence column. We redistribute no raw data: scripts download from the public sources and verify checksums. The study design, code and text were produced by an autonomous LLM-based research agent working unattended, which is a non-standard element of the research process, not of the evaluated methods. We searched the web only for the template, the data, and to verify that cited references exist, and did not look for or read any page outside the permitted starter list. Failed or abandoned runs: the first download of the OLLB \texttt{results} files was rate-limited (HTTP 429) and was repeated with back-off; the first version of the median solver (breakpoint search without exact assignment of the breadth) failed our brute-force test and was replaced before any result was produced; no experiment reported here was dropped.
+
+\newpage
+\input{checklist_filled.tex}
+\end{document}

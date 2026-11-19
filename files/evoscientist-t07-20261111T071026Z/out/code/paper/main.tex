@@ -1,0 +1,224 @@
+\documentclass{article}
+\usepackage{iclr2027_conference,times}
+\input{math_commands.tex}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath,amssymb}
+\usepackage{microtype}
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=1.2em}
+
+\title{Which Items and Which Estimator? A Design-Based Study of Predicting Full LLM Benchmark Scores from a Few Items}
+
+\author{Anonymous authors\\ Paper under double-blind review}
+
+\newcommand{\ie}{\emph{i.e.}}
+\newcommand{\eg}{\emph{e.g.}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Evaluating a language model on every item of a benchmark is expensive, so a line of work predicts a model's full-benchmark accuracy from its results on a small coreset, using item-level results of previously evaluated ``source'' models to choose the coreset and to calibrate the prediction.
+We study this problem through the lens of survey sampling: a \emph{design} chooses items, an \emph{estimator} maps the target's answers on them to a score, and design-based unbiasedness is what protects an estimator when the target differs from the sources.
+On 13 public binary item-level benchmarks (7 Open LLM Leaderboard v2, 6 HELM-Lite; 79--448 models, 437--12{,}032 items), three source/target shift regimes (random models, held-out developers, targets stronger than every source), budgets of 10--100 items and 30 seeds, we compare random and stratified sampling, anchor points, IRT-based predictors, regression predictors, AIPW-style difference estimators, and a Neyman-allocation design with a cross-fitted latent-ability difference estimator that we proposed in advance.
+At 50 items, a ridge regression from coreset answers to full accuracy cuts the mean absolute error to 0.64 (random split) and 0.57 (held-out developers) of random sampling's, but is 2.5$\times$ worse than random sampling when targets are stronger than all sources, as are IRT plug-ins (2.8--3.1$\times$); only estimators with a design-unbiased component remain safe (0.86--0.87 of random), and none improves on difficulty-stratified sampling there.
+The proposed Neyman design lowers error by about 5\% relative to uniform sampling with the same estimator under interpolation (11/13 benchmarks) but does not beat existing AIPW or regression baselines, so we report it as a mostly negative result.
+A post hoc regression shrunk toward the design-unbiased mean with a range guard retains most interpolation gains (0.63) but still does not match stratified sampling under extrapolation (1.01 vs.\ 0.86).
+All numbers are reproducible from the released code.
+\end{abstract}
+
+\section{Introduction}
+Evaluation cost is a practical bottleneck: checkpoints are evaluated repeatedly during training, and inference or prompt settings are swept over many configurations.
+If a few well-chosen items could stand in for a full benchmark, evaluation would be cheaper.
+Existing proposals select items using the response vectors of earlier models---clustering them into ``anchor points''~\citep{vivek2024anchor}, using item response theory (IRT) parameters~\citep{polo2024tiny,kipnis2025metabench}, or learning item-selection policies~\citep{li2025active}---and then predict the full score with weighted averages, IRT ability estimates or regressors; others train assessors that predict a new model's results on unseen instances from a few reference instances~\citep{pacchiardi2024100}.
+A practical question is how well they work when the target model differs from the models used to fit them.
+The released benchmark-prediction code and data of~\citet{zhang2025benchmark} make it easy to ask what happens under other splits, and we use them as our data source.
+
+We make three contributions.
+(i) We cast benchmark prediction as finite-population estimation and separate \emph{design} (which items) from \emph{estimator} (how the target's answers are turned into a score), which lets us run a full design$\times$predictor factorial rather than comparing monolithic methods (Sec.~\ref{sec:method}).
+(ii) We propose, and fixed before running the main experiments, a Neyman-allocation sampling design combined with a cross-fitted latent-ability difference estimator (Neyman-DR), whose estimation error is design-unbiased under any shift.
+(iii) We report a controlled evaluation on 13 benchmarks $\times$ 3 shift regimes $\times$ 4 budgets $\times$ 30 seeds with hierarchical bootstrap intervals and paired tests, including failures: the proposed method does \emph{not} beat existing AIPW or regression baselines, learned predictors can be several times worse than random sampling under extrapolation, and a post hoc fix only partly closes that gap.
+
+\section{Related work}
+\paragraph{Benchmark prediction from few items.}
+Anchor points~\citep{vivek2024anchor} cluster items by the response vectors of source models and predict with cluster-size-weighted anchor accuracy.
+tinyBenchmarks~\citep{polo2024tiny} combine IRT-based predictions with anchors; metabench~\citep{kipnis2025metabench} selects items by IRT information and predicts with generalized additive models; \citet{pacchiardi2024100} train assessors on a model's results on reference instances to predict its results on others; \citet{li2025active} learn to acquire evaluations adaptively; \citet{balkir2026adaptive} extend IRT-based adaptive evaluation to continuous scores with stopping rules.
+ONEBench~\citep{ghosh2024onebench} studies aggregating sparse sample-level measurements across models.
+\citet{zhang2025benchmark} compare 11 such methods on 19 benchmarks and release data and implementations; their repository's README advises random sampling or AIPW (it states that most other methods struggle with targets that differ substantially from source models).
+We have not read that paper itself (our knowledge of it is limited to the one-line description in our reading list and the repository's README and code), and we re-implemented every method used here rather than calling the repository's code; our contribution relative to that work is the design/estimator factorial, the Neyman-DR proposal, and the negative findings about it, not the shift analysis itself.
+\paragraph{Survey sampling and prediction-powered estimation.}
+Horvitz--Thompson and H\'ajek estimators~\citep{horvitz1952generalization}, model-assisted difference estimators~\citep{sarndal1992model}, and Neyman allocation~\citep{neyman1934two} are classical; prediction-powered inference~\citep{angelopoulos2023ppi} revived them for ML predictions, and cross-fitting~\citep{chernozhukov2018double} removes over-fitting bias.
+We transplant these tools to benchmark prediction; the novelty is the application, the way source models define the residual variance for the design, and the empirical verdict, not the statistics.
+\paragraph{Data.}
+Our matrices derive from the Open LLM Leaderboard~\citep{fourrier2024openllm} (including MMLU-Pro~\citep{wang2024mmlupro}) and HELM~\citep{liang2023helm}.
+
+\input{sec_method_setup}
+
+\section{Results}
+\label{sec:results}
+
+\begin{table}[t]
+\centering\scriptsize
+\caption{Main comparison at $n{=}50$ items. For each regime: geometric-mean MAE ratio to random sampling over benchmarks with 95\% bootstrap interval (lower is better; 13 benchmarks for random split and top-30\% held out, 7 for held-out developers) and mean Spearman $\rho$ between predicted and true scores of target models. Bold: best in column among listed rows. $^\dagger$: defined after seeing stage-1 results (post hoc, Sec.~\ref{sec:posthoc}). Other budgets, RMSE and Kendall $\tau$: Appendix~\ref{app:tables}.}
+\label{tab:main}
+\setlength{\tabcolsep}{3pt}
+\input{tables/table1_n50_tab}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{../figures/fig_budget_curves.pdf}
+\caption{MAE ratio to random sampling (top, log scale, shaded 95\% bootstrap interval) and Spearman $\rho$ (bottom) versus number of items. Random sampling's absolute geometric-mean MAE is 0.10, 0.064, 0.045, 0.031 at $n=10,25,50,100$ (similar in all regimes).}
+\label{fig:budget}
+\end{figure}
+
+\subsection{Source-informed prediction helps under interpolation and fails under extrapolation}
+Table~\ref{tab:main} and Fig.~\ref{fig:budget} give the main picture (absolute MAE of random sampling at $n{=}50$ is $\approx0.045$).
+\textbf{Interpolation and unseen developers.}
+Every source-informed estimator except anchor points and pIRT has a lower MAE than random sampling at all budgets (pIRT is competitive at $n{=}10$, 0.58 on random splits, but rises to 0.99 ($k{=}2$) and 1.10 ($k{=}8$) at $n{=}100$).
+The regression from coreset answers to full accuracy (RS-Learn) is best among the stage-1 methods: 0.64 [0.54, 0.76] and 0.57 [0.44, 0.74] of random's MAE at $n{=}50$, equal to the accuracy of $\approx$122 and $\approx$152 random items.
+AIPW reaches 0.73 and 0.72 (equivalent to $\approx$94 and 96 items), stratified sampling on source difficulty alone 0.82 and 0.83 ($\approx$74 and 72 items), and the proposed Neyman-DR 0.80 and 0.81.
+Anchor points have a worse MAE than random sampling at $n\ge25$ (1.12 at $n{=}50$, 1.26 at $n{=}100$; positive bias, Fig.~\ref{fig:bias}) but the best Spearman correlation at $n{=}10$ (0.80 vs.\ 0.66 for random sampling), so they are better at ranking than at estimating levels.
+The advantage of learned predictors shrinks with budget (RS-Learn: 0.52 at $n{=}10$, 0.70 at $n{=}100$ on random splits), because sampling noise decays while model misfit does not.
+\textbf{Extrapolation.}
+When all targets are stronger than every source, RS-Learn, IRT plug-in and pIRT are 2.5, 2.8 and 3.1 times \emph{worse} than random sampling at $n{=}50$ (Spearman 0.38, 0.27, 0.29 vs.\ 0.67), and this gets worse with more items (RS-Learn 3.2$\times$ at $n{=}100$), because they are biased downward by 0.12--0.15 accuracy points (Fig.~\ref{fig:bias}): they shrink toward the sources' range.
+Only methods with a design-unbiased component stay near random sampling: stratified sampling 0.86 [0.78, 0.93], AIPW 0.87 [0.80, 0.95], stratified ridge-DR 0.86 [0.79, 0.94]; the other estimators are statistically indistinguishable from random sampling (Neyman-DR 0.95 [0.85, 1.08]; anchors 1.08 [0.81, 1.45]).
+\emph{Nothing we ran improves on difficulty-stratified sampling by more than noise under extrapolation}, and stratified sampling beats random sampling in 13/13 (interp), 7/7 (org) and 12/13 (extrap) benchmarks (Holm-adjusted $p<0.02$ for interp and extrap; with only 7 benchmarks, the smallest attainable two-sided Wilcoxon $p$ is 0.016, so Holm-adjusted org tests cannot reach 0.05; Table~\ref{app:signif}, Appendix).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.62\textwidth]{../figures/fig_bias.pdf}
+\caption{Mean signed error (prediction $-$ truth) at $n{=}50$, averaged over target models, seeds, and benchmarks; error bars: $\pm1.96$ s.e.\ over benchmarks. Estimators without a design-unbiased component (RS-Learn, pIRT, IRT plug-in) are strongly biased downward when targets are stronger than all sources.}
+\label{fig:bias}
+\end{figure}
+
+\subsection{Design versus estimator, and the proposed Neyman-DR}
+\begin{table}[t]
+\centering\small
+\caption{Design$\times$predictor factorial at $n{=}50$: MAE ratio to random sampling (geometric mean over benchmarks; lower is better). ``is'': residual correction computed in-sample; ``cf'': cross-fitted (5 folds). Neyman-DR (proposed) is Neyman-PPS $+$ latent $+$ cf. Intervals: \texttt{results/tables/grid\_*.csv}.}
+\label{tab:grid}
+\setlength{\tabcolsep}{4pt}
+\input{tables/grid_tab}
+\end{table}
+Table~\ref{tab:grid} separates design from estimator.
+\textbf{Design effect.}
+With the same predictor and cross-fitting, Neyman-PPS sampling reduces MAE relative to uniform sampling by 5\% under interpolation (latent: 0.948, 11/13 benchmarks, Holm $p=0.024$; ridge: 0.949, 12/13, $p=0.007$) and by a similar 5\% for held-out developers (7/7 benchmarks, but Holm $p=0.22$ because only 7 benchmarks are available).
+Under extrapolation there is no gain (latent 0.98, $p=1$) or a loss (ridge 1.05, $p=0.84$).
+Stratified sampling is statistically indistinguishable from uniform sampling as a design for the ridge DR estimator (0.986, $p=0.49$ under interpolation).
+Ablations (Table~\ref{tab:abl}, seeds 0--9; same-design sampling noise is about $\pm0.03$, as seen from $\gamma{=}1$ vs.\ uniform) show that removing the defensive uniform component ($\gamma{=}0$) gives the largest interpolation gain (0.77) but the worst extrapolation result (1.01, worse than random sampling), consistent with residual variances learned on weak models misallocating items for strong targets; increasing the latent dimension to $k{=}8$ hurts everywhere (0.90 interp, 1.07 extrap) because 50 items cannot identify a high-dimensional ability.
+\textbf{Estimator effect.}
+Cross-fitting costs accuracy: in-sample ridge-DR is 0.73 vs.\ 0.81 cross-fitted under interpolation, and 0.86 vs.\ 0.88 under extrapolation; our a priori choice of cross-fitting was therefore suboptimal on average, although the in-sample estimator has no guarantee (its mean signed error is small in these data, Fig.~\ref{fig:bias}, AIPW ref.).
+\textbf{Verdict on Neyman-DR.}
+Neyman-DR is better than random sampling under interpolation (0.80 [0.75, 0.86]) but significantly worse than the AIPW reference (ratio 1.10, 1/13 wins, Holm $p=0.007$), much worse than RS-Learn, and not better than random sampling under extrapolation (0.95 [0.85, 1.08]).
+The design effect is real but small relative to the estimator effect, so the central hypothesis---that a variance-optimal design plus a design-unbiased estimator would dominate existing methods---is not supported.
+
+\begin{table}[t]
+\centering\small
+\caption{Ablations of the proposed method at $n{=}50$, cross-fitted latent estimator, MAE ratio to random sampling [95\% CI]; seeds 0--9 only ($k{=}1,4$ were fitted only for these seeds), so intervals are wider than in Table~\ref{tab:main}.}
+\label{tab:abl}
+\setlength{\tabcolsep}{4pt}
+\input{tables/ablation_tab}
+\end{table}
+
+\subsection{Post hoc: regression shrunk toward the unbiased mean, with a range guard}
+\label{sec:posthoc}
+Stage-1 results suggested two things: learned model-level regression is strongest under interpolation, and its extrapolation failure comes from shrinking toward the source mean.
+We therefore added, \emph{after} seeing stage-1 results and clearly separated in code (\texttt{run\_stage2.py}), four variants on difficulty-stratified coresets: (a) regression on coreset answers shrunk toward the design-unbiased mean (ridge on the residual full accuracy $-$ coreset mean, then add the coreset mean back), (b) RS-Learn on the same coreset, (c) a 1-D linear calibration of the coreset mean, (d) a \emph{guarded} version of (a) that falls back to the coreset mean if the target's coreset accuracy lies outside the range of the sources' coreset accuracies (no tuned constant).
+Under interpolation (a) and (d) match or slightly beat RS-Learn (0.62/0.63 vs.\ 0.64; $n{=}50$) and beat stratified sampling in 13/13 benchmarks for (d) (ratio 0.76, Holm $p=0.003$).
+Shrinking toward the unbiased mean reduces the extrapolation damage (2.52 $\to$ 1.39) but does not remove it, and the 1-D calibration is similarly unsafe (1.40); the guard brings extrapolation to 1.01 [0.90, 1.13] but is still 18\% worse than plain stratified sampling (stratified sampling is better in 13/13 benchmarks, Holm $p=0.003$) because some in-range targets are still mis-predicted, and the guard needs the target's coreset accuracy, not its true accuracy, to detect shift, which is noisy at small $n$.
+These variants were selected after looking at the same benchmarks; they are hypotheses, not confirmed results.
+
+\section{Discussion and limitations}
+\textbf{What the evidence supports.}
+(1) When targets are surrounded by source models (random splits, unseen developers), source-informed estimators other than anchors match the MAE of 72--152 random items at $n{=}50$ (1.4--3$\times$ fewer items), with learned regression best; the gain shrinks with budget.
+(2) When targets exceed the sources' range, estimators lacking a design-unbiased component are 2.5--3.1$\times$ worse than random sampling, and the cheapest protection (stratified sampling on source difficulty, or AIPW) caps the gain at about 14\%.
+(3) A variance-optimal sampling design gives only a $\sim$5\% error reduction on top of a given estimator, and only when shift is mild.
+\textbf{What it does not support.} We have no evidence that Neyman-DR is a practical improvement, and our post hoc estimators are untested out-of-sample.
+\textbf{Limitations.}
+(i) Only binary item matrices from two leaderboard families; the 7 Open LLM benchmarks share the same model population, so benchmarks are not independent, and bootstrap and Wilcoxon intervals treat them as exchangeable.
+(ii) The model population has near-duplicates (4--16\% of Open LLM model rows are exact duplicates of another row within a benchmark, Appendix Table~\ref{tab:data}), favoring interpolation.
+(iii) The extrapolation split is one fixed partition per benchmark, so its intervals reflect coreset randomness and benchmark heterogeneity, not model-split uncertainty; the three regimes are not exhaustive (\eg\ no temporal split).
+(iv) IRT components are our own MAP fits (no hierarchical priors, 2 or 8 dimensions, 150 L-BFGS iterations), not the original implementations; pIRT may be disadvantaged.
+(v) We did not run metabench, assessor-based~\citep{pacchiardi2024100}, active~\citep{li2025active} or adaptive~\citep{balkir2026adaptive} methods, nor the reference repository's PCA, lasso, double-optimize and sort-and-search methods.
+(vi) Defaults ($k{=}2$, $\gamma{=}0.3$, $\alpha{=}10$, 5 folds, $K{=}10$ neighbours) were fixed in advance and not tuned; ablations cover only $k$ and $\gamma$, and on 10 seeds.
+(vii) The anchor-point $k$-means variant in pIRT may select the same item for two clusters (not merged in the stage-1 code; negligible effect expected, not quantified).
+(viii) The ground truth is each target's observed full-benchmark accuracy; item-level noise and benchmark contamination are not modeled.
+
+\paragraph{Reproducibility statement.}
+Code, exact commands, seeds, library versions and a table-to-script map are in the supplementary \texttt{README.md}; data are the public files at commit \texttt{55faff4} of the cited repository; the main grid took about 3.5 h on a shared CPU machine (Sec.~\ref{sec:exp}, Appendix~\ref{app:repro}).
+
+\paragraph{Ethics statement.}
+The work uses public, aggregated item-level outcomes of public models; it involves no human subjects. A risk is over-reliance on small coresets to certify models; our results show that learned predictors can be biased by large margins for models stronger than those seen.
+
+\subsection*{AI use statement}
+The research was carried out end to end by an autonomous AI research agent (an LLM-based coding agent) running unattended: it designed the study, wrote the code, executed the experiments, performed the analysis and drafted this paper; no human author checked the code line by line. Verification steps included: shared-coreset consistency checks between the two code stages (identical errors for random sampling and RS-Learn, max difference $0$), pilot runs, and re-generation of every table and figure from \texttt{results/main.csv} and \texttt{results/stage2.csv}. All claims, including limitations, are the agent's responsibility; the agent's citations were checked for existence via the arXiv API (titles and dates) or are standard textbooks, and papers were characterized only from the abstract-level descriptions provided with the task and, for the data repository, from its README and source code.
+
+\bibliography{refs}
+\bibliographystyle{iclr2027_conference}
+
+\appendix
+\section{Additional tables}
+\label{app:tables}
+\begin{table}[h]
+\centering\scriptsize
+\caption{Datasets (after loading the \texttt{.jbl} matrices at commit \texttt{55faff4}). \emph{sd}: standard deviation of model accuracies; \emph{const.}: fraction of items answered identically by all models; \emph{dup.}: fraction of model rows that duplicate another row.}
+\label{tab:data}
+\input{tables/data_tab}
+\end{table}
+
+\begin{table}[h]
+\centering\scriptsize
+\caption{Per-benchmark MAE ratio to random sampling at $n{=}50$ (mean over 30 seeds). Blocks: random split, held-out developers (Open LLM only), top-30\% held out. Columns: stratified, RS-Learn, AIPW (ref.), anchors, pIRT ($k{=}2$), strat.+ridge-DR (cf), Neyman-DR, guarded shrink-to-mean$^\dagger$.}
+\label{tab:perds}
+\setlength{\tabcolsep}{3pt}
+\input{tables/perdataset_tab}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{../figures/fig_heatmap.pdf}
+\caption{Per-benchmark MAE ratio to random sampling at $n{=}50$ (cell text = ratio; blue = better than random).}
+\end{figure}
+
+\begin{table}[h]
+\centering\scriptsize
+\caption{Paired tests at $n{=}50$ (full results for all budgets: \texttt{results/tables/significance.csv}). Geometric mean ratio of seed-averaged MAE (first method / second), number of benchmarks where the first method is better, two-sided Wilcoxon signed-rank $p$ across benchmarks, and Holm-adjusted $p$ over the 14 listed pairs within each regime. The last three pairs of each block are post hoc. With 7 benchmarks the smallest attainable $p$ is 0.0156.}
+\label{app:signif}
+\input{tables/signif_tab}
+\end{table}
+
+\begin{table}[h]
+\centering\scriptsize
+\caption{Random model split: all budgets. MAE and RMSE as ratio to random sampling, Spearman and Kendall (mean over benchmarks); 95\% bootstrap intervals in braces.}
+\setlength{\tabcolsep}{3pt}
+\input{tables/key_interp_tab}
+\end{table}
+
+\begin{table}[h]
+\centering\scriptsize
+\caption{Top-30\% held out: all budgets (same format).}
+\setlength{\tabcolsep}{3pt}
+\input{tables/key_extrap_tab}
+\end{table}
+
+\begin{table}[h]
+\centering\scriptsize
+\caption{Held-out developers (7 Open LLM benchmarks): $n=10,25,50,100$ (same format).}
+\setlength{\tabcolsep}{3pt}
+\input{tables/key_org_tab}
+\end{table}
+
+\section{Implementation notes, deviations and disclosures}
+\label{app:repro}
+\begin{itemize}
+\item \textbf{Run structure.} The main grid (stage 1, 990 tasks = 30 seeds $\times$ (7$\times$3 + 6$\times$2) (dataset, regime) pairs, 132{,}000 result rows) was executed as four invocations with disjoint seeds for speed (\texttt{code/merge\_results.py}); results are deterministic given the seed. Stage 2 (post hoc) is \texttt{code/run\_stage2.py}.
+\item \textbf{Code-level deviations.} AIPW (ref.) reproduces the reference formula (ridge $\alpha{=}10$, residual-mean shrinkage $1/(1+n/(N-n))$); anchors use \texttt{kmedoids.fasterpam} on $1-$correlation, random initialisation, 100 iterations; pIRT uses our MAP IRT instead of the hierarchical-prior fit with 10 dimensions of the original implementations.
+\item \textbf{Development process.} The stage-2 \emph{guard} was added after a first stage-2 pass showed that shrunk regression and 1-D calibration still degraded under extrapolation. All variants ever run are in the released results; no variant was discarded after being run on all benchmarks. During stage-1 development only 2--3-seed pilots on GSM, IFEval and MuSR were run to check that the code executes.
+\item \textbf{Access disclosure.} Resources accessed: the data repository at a fixed commit (README and source of the \texttt{benchpred} package were read; only the \texttt{.jbl} score files were used as data), the arXiv API for titles and dates of the cited arXiv identifiers, and the official ICLR 2027 LaTeX template (a NeurIPS 2025 style archive was also downloaded, but not used). No literature searches were performed. No page identified as the withheld prior publication, or discussing it, was knowingly encountered.
+\end{itemize}
+
+\end{document}

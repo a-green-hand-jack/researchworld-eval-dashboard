@@ -1,0 +1,59 @@
+\section{Setup and theory}\label{sec:theory}
+
+\paragraph{Setting.}
+A \emph{configuration} $c\in\{1,\dots,K\}$ is a complete prompt or LLM program (system prompt, instruction, option format, answer cue, demonstrations, \dots).
+Question $q$ is drawn from a distribution $\mathcal D$ and configuration $c$ answers it correctly, $Y_c(q)\in\{0,1\}$, so its \emph{true accuracy} is $\mu_c=\mathbb E_q Y_c(q)$.
+A benchmark $S=(q_1,\dots,q_n)$ is an i.i.d.\ sample; $\hat\mu_c=\frac1n\sum_i Y_c(q_i)$.
+A \emph{search procedure} $\mathcal A$ maps the observed outcomes on $S$ to a selected configuration $\hat c$ (exhaustive best-of-$K$, successive halving, a DSPy-style optimizer, a human iterating on the prompt, \dots).
+The \emph{reported score} is $\hat\mu_{\hat c}$ computed on the same $S$; the quantity one wants is the true accuracy $\mu_{\hat c}$ of the \emph{delivered} configuration on fresh questions.
+We call
+\begin{equation}
+B_{\mathcal A}(K,n)=\mathbb E\big[\hat\mu_{\hat c}-\mu_{\hat c}\big]
+\end{equation}
+the \emph{winner's curse} of the report (all expectations over $S$ and any algorithmic randomness; $\mu$ is fixed).
+This is the classical selection bias of post-selection inference \citep{berk2013valid,andrews2024inference}, specialised to the structure of benchmark reporting: all $K$ estimates share the same $n$ questions, and outcomes are binary.
+
+\begin{proposition}[sign and upper bound]\label{prop:bound}
+For exhaustive search $\hat c=\arg\max_c\hat\mu_c$:
+(i) $B\;\ge\;\max_c\mu_c-\mathbb E\mu_{\hat c}\;\ge 0$, i.e.\ the reported score exceeds in expectation even the true accuracy of the best configuration in the pool;
+(ii) $B\le\mathbb E\max_c(\hat\mu_c-\mu_c)\le\sqrt{\ln K/(2n)}$.
+\end{proposition}
+\begin{proof}
+(i) $\mathbb E\hat\mu_{\hat c}=\mathbb E\max_c\hat\mu_c\ge\max_c\mathbb E\hat\mu_c=\max_c\mu_c$, then subtract $\mathbb E\mu_{\hat c}$.
+(ii) $\hat\mu_{\hat c}-\mu_{\hat c}$ is one of the terms in $\max_c(\hat\mu_c-\mu_c)$; each term is sub-Gaussian with variance proxy $1/(4n)$ (Hoeffding's lemma), and the maximal inequality $\mathbb E\max_{c\le K}X_c\le\sqrt{2\sigma^2\ln K}$ applies.
+\end{proof}
+
+The Hoeffding bound ignores two things that dominate in practice: Bernoulli variance $\sigma^2=\bar p(1-\bar p)$ is well below $1/4$ for accuracies far from $1/2$, and configurations that differ only in wording answer largely the \emph{same} questions correctly, so their errors $\hat\mu_c-\mu_c$ are strongly positively correlated.
+Only the \emph{idiosyncratic} part of each error can be exploited by selection:
+
+\begin{proposition}[null with shared difficulty]\label{prop:null}
+Let all $\mu_c=\mu$ and assume $(\hat\mu_c-\mu)_c\sim\mathcal N\big(0,\tfrac{\sigma^2}{n}[(1-\rho)I+\rho\mathbf 1\mathbf 1^\top]\big)$.
+Then
+\begin{equation}
+B=\sigma\sqrt{\tfrac{1-\rho}{n}}\;\mathbb E[M_K],\qquad \mathbb E[M_K]=\sqrt{2\ln K}\,(1-o(1)),
+\end{equation}
+where $M_K$ is the maximum of $K$ i.i.d.\ standard normals.
+\end{proposition}
+\begin{proof}
+Write $\hat\mu_c-\mu=\frac{\sigma}{\sqrt n}(\sqrt\rho Z_0+\sqrt{1-\rho}Z_c)$ with $Z_0,Z_c$ i.i.d.\ $\mathcal N(0,1)$. The arg-max depends only on $(Z_c)$, so $\mathbb E[\hat\mu_{\hat c}-\mu]=\frac{\sigma}{\sqrt n}(\sqrt\rho\,\mathbb EZ_0+\sqrt{1-\rho}\,\mathbb EM_K)$.
+\end{proof}
+With $\sigma^2,\rho$ replaced by the average per-config variance and the average pairwise correlation of the outcome vectors (both measured from data), the formula of Prop.~\ref{prop:null} is what we call the \emph{null prediction}.
+Three consequences: the curse (a) shrinks like $n^{-1/2}$ (four times more questions halves it), (b) grows only like $\sqrt{\ln K}$ but with no saturation in practice, and (c) is multiplied by $\sqrt{1-\rho}$, so a search over near-duplicate prompts is cheap in bias but also in benefit.
+When the configurations differ by true gaps $\mu_c$ that are small relative to $\sigma\sqrt{(1-\rho)/n}$ the null prediction is nearly exact; when one configuration leads by several standard errors selection becomes (almost) deterministic and the curse vanishes (Fig.~\ref{fig:scaling}c).
+For general $\mu$ we use the plug-in Gaussian prediction $\mathbb E[\varepsilon_{\hat c}]$ with $\varepsilon\sim\mathcal N(0,\widehat{\mathrm{Cov}}_q(Y)/n)$ and $\hat c=\arg\max(\mu+\varepsilon)$ (``Gaussian prediction'').
+
+\paragraph{Consequence for comparisons.}
+If two systems are tuned with $K_A$ and $K_B$ candidates on the same benchmark and are equally good, the expected reported gap is $B_A-B_B=\sigma\sqrt{(1-\rho)/n}\,(\mathbb EM_{K_A}-\mathbb EM_{K_B})>0$ for $K_A>K_B$: \emph{the system that was tuned harder looks better}, with a sign error even though neither is better (Sec.~\ref{sec:decisions}).
+
+\subsection{Reporting protocols}\label{sec:protocols}
+We compare protocols that turn $(S,\mathcal A)$ into a point estimate and a nominal-95\% interval for $\mu_{\hat c}$:
+\begin{description}[leftmargin=1.2em,itemsep=0pt,topsep=2pt]
+\item[Naive] $\hat\mu_{\hat c}$ with a Wilson interval (status quo).
+\item[Split ($\rho_{\rm sel}$)] Search on a random fraction of $S$ (50\% or 20\%), report the score and Wilson interval of the selected configuration on the held-out rest.
+\begin{proposition}\label{prop:split}For any $\mathcal A$ (adaptive, black-box, randomised), conditional on the selection half $S_1$, the held-out count is $\mathrm{Bin}(n_2,\mu_{\hat c_1})$; hence the held-out mean is unbiased for $\mu_{\hat c_1}$ and exact (Clopper--Pearson) intervals have valid conditional coverage.\end{proposition}
+The price is (1) fewer questions for selection, so $\mathbb E\mu_{\hat c_1}\le\mathbb E\mu_{\hat c}$ in typical cases, and (2) fewer for estimation: width $\propto n_2^{-1/2}$.
+\item[Nested $k$-fold CV] ($k=5$) re-runs $\mathcal A$ inside every training fold and scores the held-out fold; it estimates the performance of the \emph{procedure} trained on $\tfrac{k-1}{k}n$ questions, and its folds are dependent (Wilson interval treats them as independent: an approximation we test).
+\item[Bootstrap optimism] \citep{efron1997improvements}: re-run $\mathcal A$ on $B{=}200$ bootstrap resamples, estimate optimism as the mean of (resample score of its winner $-$ original-sample score of that winner) and subtract; also the .632 variant.
+\item[Paired EB shrinkage] shrinks the selected configuration's deviation from the all-config mean toward zero by the empirical-Bayes factor $\hat\tau^2/(\hat\tau^2+\hat s^2_{\hat c})$, using per-question paired differences for $\hat s^2$. It assumes exchangeable true effects, so it should fail when one configuration is truly better.
+\item[Max-$T$ simultaneous bound] \citep[cf.][]{chernozhukov2013gaussian,berk2013valid}: let $T_c=(\hat\mu_c-\mu_c)/\widehat{\mathrm{se}}_c$ and $q_{1-\alpha}$ the bootstrap $(1-\alpha)$-quantile of $\max_cT_c$ (of $\max_c|T_c|$ for two-sided intervals). On $\{\max_cT_c\le q\}$ \emph{every} $c$, hence also any data-dependent $\hat c$ among the $K$, satisfies $\mu_c\ge\hat\mu_c-q\widehat{\mathrm{se}}_c$, so the lower bound $\hat\mu_{\hat c}-q\,\widehat{\mathrm{se}}_{\hat c}$ has asymptotic coverage $\ge1-\alpha$ for any selection rule, at the price of the larger critical value $q\approx\sqrt{2\ln K}$-ish instead of 1.645. Hoeffding--Bonferroni, $\hat\mu_{\hat c}-\sqrt{\ln(K/\alpha)/(2n)}$, is the non-asymptotic analogue.
+\end{description}

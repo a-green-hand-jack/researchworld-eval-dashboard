@@ -1,0 +1,26 @@
+# Agentic evidence audit
+
+- verdict: `fail`
+- finding_count: `3`
+
+## Summary
+Numbers and tables match paper_data.json, derived_stats.json, the V1-V3 metrics files and the evaluator source, and the qualified outcome is reported correctly. Three wording or grounding gaps remain: the frozen-configuration identity, the "close to nominal" coverage claim, and the loss-decomposition conclusion.
+
+## Findings
+### 1. frozen-config-identity-ungrounded — Method (Compared configurations; Experimental protocol) and Supplementary Information Table hyper/devfinal
+- claim: V2 "is the configuration recorded by the selection manifest"; the studied procedure "is the configuration frozen by the selection step and evaluated on sealed data"; "evaluated once on sealed cases"
+- issue: No retained artifact shows which configuration was frozen or that it was evaluated only once. The final manifest path in paper_data.json does not resolve in the workspace. V2 and V3 tie exactly at 0.9192069392814439, so the score cannot tell them apart. The sealed metrics are tied to V2's source only by that claim and by the ordering of top_programs.
+- evidence: paper.tex Method sections "Compared configurations" and "Experimental protocol"; claims_grounding.json claim "Final seeds 9001-9005 ... frozen procedure evaluated once on sealed cases" cites only final.evidence.episodes and result.top_program_01; paper_data.json top_programs lists c02 (V2) and c03 (V3) with identical scores; final_evaluation.manifest_path is not present; scientific-evidence/ledger.jsonl is empty.
+- requested_fix: State that the sealed evaluation is attributed to the V2 configuration on the basis of its position in the development ranking (tied with V3), and that the selection manifest is not retained. Remove or qualify "recorded by the selection manifest" and "evaluated once". Add a limitation that the frozen configuration's identity is not independently verified.
+
+### 2. intro-close-to-nominal — Introduction (answer paragraph)
+- claim: the procedure "also remains close to nominal marginal coverage on exchangeable cases"
+- issue: The only evidence is a one-sided under-coverage gap of 0.0017, averaged over a few seeded runs. The paper's own Results and Method sections say this gap does not show that coverage is tight, and over-coverage is not measured. "Close to nominal" is therefore stronger than the evidence and conflicts with the later caveat.
+- evidence: paper.tex Introduction; Results "Reliability profile" ("this is not a test of the guarantee and does not show coverage is tight"); Method on one-sided gaps; claims_grounding.json claim "Exchangeable-case marginal under-coverage gap is 0.0017"; evaluator score_sets uses max(0, 1-alpha-cov).
+- requested_fix: Reword to "shows a small one-sided marginal under-coverage gap (0.0017) on exchangeable cases". Do not describe coverage as close to nominal or tight.
+
+### 3. conclusion-marginal-largest-contributor — Conclusion
+- claim: the loss decomposition "identifies marginal under-coverage as the largest residual contributor"
+- issue: The marginal term (0.0893) is not measured. It is obtained by subtracting the size and slice terms from the mean loss, and alpha and per-case results are not retained. claims_grounding.json labels it "implied", and Results hedges it. The Conclusion drops that qualifier and states it as an identified result.
+- evidence: derived/derived_stats.json final_loss_decomposition ("marginal term obtained by subtraction"); claims_grounding.json loss-decomposition claim ("implied marginal term"); paper.tex Results ("we cannot establish this without per-case results"); figure loss_decomposition legend "Marginal term (implied)".
+- requested_fix: Change the Conclusion to say the decomposition implies, by subtraction under the evaluator's aggregation, that the marginal term is the largest component. Keep the caveat that alpha and per-case results are unavailable.

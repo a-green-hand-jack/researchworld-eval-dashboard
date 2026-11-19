@@ -1,0 +1,117 @@
+Efficient multi-prompt evaluation of LLMs
+Felipe Maia Polo1∗, Ronald Xu2.6, Lucas Weber3, Mírian Silva4,5,6, Onkar Bhardwaj5,6
+Leshem Choshen2,5,6, Allysson Flavio Melo de Oliveira5,6, Yuekai Sun1, Mikhail Yurochkin5,6
+1University of Michigan, 2MIT, 3University Pompeu Fabra, 4Federal University of Minas Gerais
+5IBM Research, 6MIT-IBM Watson AI Lab
+Abstract
+Most popular benchmarks for comparing LLMs rely on a limited set of prompt
+templates, which may not fully capture the LLMs’ abilities and can affect the
+reproducibility of results on leaderboards. Many recent works empirically verify
+prompt sensitivity and advocate for changes in LLM evaluation. In this paper,
+we consider the problem of estimating the performance distribution across many
+prompt variants instead of finding a single prompt to evaluate with. We introduce
+PromptEval, a method for estimating performance across a large set of prompts
+borrowing strength across prompts and examples to produce accurate estimates
+under practical evaluation budgets. The resulting distribution can be used to
+obtain performance quantiles to construct various robust performance metrics (e.g.,
+top 95% quantile or median). We prove that PromptEval consistently estimates
+the performance distribution and demonstrate its efficacy empirically on three
+prominent LLM benchmarks: MMLU, BIG-bench Hard, and LMentry; for example,
+PromptEval can accurately estimate performance quantiles across 100 prompt
+templates on MMLU with a budget equivalent to two single-prompt evaluations.
+Moreover, we show how PromptEval can be useful in LLM-as-a-judge and best
+prompt identification applications.2
+1 Introduction
+5 25 50 75 95
+Quantile
+0.00
+0.02
+0.04
+0.06
+0.08Estimation error
+MMLU
+Budget
+×1
+×2
+×3
+×4
+Figure 1: Average estimation error for performance
+quantiles across 100 templates given a limited budget
+(in multiples of one-template MMLU evaluations).
+In recent years, the rapid progress of large
+language models (LLMs) has significantly
+influenced various fields by enhancing au-
+tomated text generation and comprehen-
+sion. As these models advance in com-
+plexity and functionality, a key challenge
+that arises is their robust evaluation [Perlitz
+et al., 2023]. Common evaluation meth-
+ods, which often rely on a single or limited
+number of prompt templates, may not ad-
+equately reflect the typical model’s capa-
+bilities [Weber et al., 2023b]. Furthermore,
+this approach can lead to unreliable and in-
+consistent rankings on LLM leaderboards,
+as different models may perform better or
+worse depending on the specific prompt
+∗Corresponding author. E-mail: felipemaiapolo@gmail.com
+2Our code can be found in https://github.com/felipemaiapolo/prompteval and the MMLU data
+can be found in https://huggingface.co/PromptEval. PromptEval is also integrated into PromptBench
+[Zhu et al., 2024]; please check https://github.com/microsoft/promptbench.
+38th Conference on Neural Information Processing Systems (NeurIPS 2024).
+arXiv:2405.17202v3  [cs.CL]  31 Oct 2024
+template used. An ideal evaluation framework should minimize dependence on any single prompt
+template and instead provide a holistic summary of performance across a broad set of templates.
+Mizrahi et al. [2023], for example, suggests using summary statistics, such as the average performance
+across many templates, as a way to compare the abilities of different LLMs. However, the main
+drawback of this method is the high computational cost when dealing with numerous templates and
+examples.
+We introduce PromptEval, a method for efficient multi-prompt evaluation of LLMs. With a small
+number of evaluations, PromptEval estimates performance across a large and given pool of different
+prompt templates. Our approach is grounded in robust theoretical foundations and utilizes well-
+established models from the fields of educational assessment and psychometrics, such as Item
+Response Theory (IRT) [Cai et al., 2016, Van der Linden, 2018, Brzezi ´nska, 2020, Lord et al.,
+1968]. Our method is based on an IRT model that allows borrowing strength across examples and
+prompt templates to produce accurate estimates of all considered prompts with an evaluation budget
+comparable to evaluating a single prompt. In Figure 1, we demonstrate the ability of our method to
+jointly estimate various performance quantiles across 100 prompt templates with an evaluation budget
+ranging from one to four times of a conventional single-prompt evaluation on MMLU [Hendrycks
+et al., 2020].
+Performance distribution across prompts can be used to accommodate various contexts when compar-
+ing LLMs [Choshen et al., 2024]. For example, it can be used to compute the mean performance as
+suggested by Mizrahi et al. [2023]. One can also use performance distributions directly to compare
+LLMs via various notions of stochastic dominance for risk-sensitive scenarios [Nitsure et al., 2023].
+Here we primarily focus on the full distribution and its quantiles as they provide a flexible statistic
+that can inform decisions in varying contexts. For instance, a typical model performance corresponds
+to a median (50% quantile), 95% quantile can be interpreted as performance achievable by an expert
+prompt engineer, while 5% quantile is of interest in consumer-facing applications to quantify low-end
+performance for a user not familiar with prompt engineering. We also demonstrate (§6) how our
+method can be used to account for prompt sensitivity in the LLM-as-a-judge framework [Li et al.,
+2023] and to do best prompt identification [Shi et al., 2024].
+Our main contributions are:
+• We propose (§3) a novel method called PromptEval which permits efficient multi-prompt evaluation
+of LLMs for a given pool of prompt templates with a limited number of evaluations. Moreover,
+we theoretically show (§4) that PromptEval has desirable statistical properties such as consistency
+in estimating performance distribution and its quantiles.
+• We practically demonstrate (§5) efficacy of PromptEval in estimating performance across 100+
+prompts and finding the best-performing prompt for various LLMs using data derived from three
+popular benchmarks: MMLU [Hendrycks et al., 2020], BIG-bench Hard (BBH) [Suzgun et al.,
+2022], and LMentry [Efrat et al., 2022].
+• We show (§6) how PromptEval can be applied to account for prompt sensitivity in the LLM-as-a-
+judge framework and to identify the best prompt in a large pool of options.
+• We conduct the first large-scale study of prompt sensitivity of 15 popular open-source LLMs on
+MMLU. We present our findings based on evaluating 100 prompt templates in Section 7 and
+release the evaluation data.
+1.1 Related work
+LLMs’ sensitivity to prompt templates The sensitivity of Large Language Models (LLMs) to
+the prompts is well-documented. For example, Sclar et al. [2023] revealed that subtle variations
+in prompt templates in few-shot settings can lead to significant performance discrepancies among
+several open-source LLMs, with differences as large as 76 accuracy points in tasks from the SuperNat-
+uralInstructions dataset [Wang et al., 2022]. Additionally, they report that the performance of different
+prompt templates tends to correlate weakly between models. This finding challenges the reliability
+of evaluation methods that depend on a single prompt template. To measure LLMs sensitivity, the
+researchers suggested calculating a “performance spread,” which represents the difference between
+the best and worst performances observed. Mizrahi et al. [2023] conducted a complementary analysis
+using state-of-the-art models and subsets of BigBench and LMentry [Srivastava et al., 2022, Efrat
+et al., 2022]. The authors arrive at similar conclusions with respect to LLMs’ sensitivity to the used
+2

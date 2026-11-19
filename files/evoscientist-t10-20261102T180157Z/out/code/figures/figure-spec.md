@@ -1,0 +1,7 @@
+# Figure specification (data-driven plots)
+
+- Data: results/all_summary.csv, results/paired_comparisons.csv, results/oracle.csv. Literal null preserved.
+- Figure1 efficiency: two panels; x labeled n in{100,500,2000}, logarithmic; left CF-rich/PPI++ mean-width ratio, right exact-stratified/exact-labeled mean-width ratio; y linear. Seven distributions, tab10 distinct colors consistent across panels. Paired delta-method 95% MC intervals; horizontal1 reference; no smoothing. Core cells only, no omitted core distributions. Synthetic oracle ratios may be annotated in caption, not additional unlabelled curves.
+- Figure2 validity: three panels step, rare, forest; x n log; y marginal coverage linear .2..1.01 so all included values visible. Methods PPI++,CF-rich,exact labeled CP,exact2-stratum. Wilson95% MC intervals.95% horizontal line. Include synthetic n30 stress; core n100,500,2000. Legends complete.
+- Appendix figure3 coverage heatmap: all32 cells x all methods, coverage linear color scale0..1, columns fixed order and row labels scenario/n/Nratio; missing oracle for real data explicitly grey, not zero. Nominal .95 conveyed colorbar marker caption, no misleading axis truncation.
+- All plots save300dpi PNG and vector PDF. Script plot.py reproducible, no synthetic numbers. Figure-specific artifact folders contain plot.png/plot.pdf; source script shared root plot.py is the explicit multi-figure exception for this paper bundle.

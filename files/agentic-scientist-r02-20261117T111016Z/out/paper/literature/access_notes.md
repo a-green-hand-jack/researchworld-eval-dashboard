@@ -1,0 +1,11 @@
+# Literature access scope
+
+The 25 cited sources are exactly those listed in `references_provenance.json`. The visible literature discussion uses broad claims supported by the inspected abstracts or publisher excerpts, not uninspected detailed results. The ILR construction and experiment definitions are additionally supported by readable local code, and the calibration rank argument is stated explicitly rather than quoting an uninspected theorem number.
+
+The direct Springer pages for the conformal monograph, inductive regression chapter, conditional-validity article, and ILR article were consulted only for their overview/abstract and bibliographic identity. The Wiley book excerpt was read on its introductory pages. The PMLR density-estimator paper was checked against its official abstract and citation metadata. Other abstracts were read from their directly identified arXiv or metadata records.
+
+No citation links, related-article recommendations, or joint conformal/composition discovery searches were followed. No prohibited study was identified, discussed, or used. An initially mistyped arXiv identifier returned an unrelated metabolic-network abstract; it was rejected, and the correct conditional-validity source was subsequently checked directly. Exact-title search also produced unrelated DOI matches or reprint versions for some classical works; these were corrected or excluded rather than silently treated as the intended sources. Excluded Watson/Wilson lookup records are kept under `rejected/` solely as retrieval audit material and are not cited.
+
+## Targeted post-draft comparator enrichment
+
+One additional citation, Fan and Sesia (2025), was verified against its directly retrieved arXiv HTML. Section 2.3 allows absolute regression residuals, and Appendix A.1 Algorithms S1 and S2 explicitly specify coordinatewise Bonferroni and unscaled infinity-norm calibration. The relevant excerpts are retained in `FanSesia2025.json`. The manuscript cites only these comparator constructions, not the source's transductive method or its empirical claims. No simplex-specific implementation is attributed to the citation. The cited-source total is now 26; the preceding 25-source description documents the original draft. No citation-network expansion or prohibited-content encounter occurred.

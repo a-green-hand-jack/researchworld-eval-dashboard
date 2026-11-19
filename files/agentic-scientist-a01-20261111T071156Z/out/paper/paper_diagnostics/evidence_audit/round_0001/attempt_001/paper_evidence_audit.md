@@ -1,0 +1,14 @@
+# Agentic evidence audit
+
+- verdict: `fail`
+- finding_count: `1`
+
+## Summary
+Headline held-out and development numbers, qualification facts and planner implementation details trace to the evidence, but one control-efficiency interpretation overreads an aggregate mean.
+
+## Findings
+### 1. controls-matched-overread-1 — Results / Controls and diagnostics
+- claim: The retained control efficiency of 1.0002 indicates that, on permuted instances and on shuffled-null matrices, verified plan costs matched their own references on average to within about 2e-4.
+- issue: Control efficiency is a mean of capped per-episode cost ratios averaged over boards and conditions, so 1.0002 does not show that plan costs matched their references. Offsetting savings and losses could produce the same mean, which the paper itself says for main efficiency in "Reading an efficiency near 1". The development controls average 0.9967 for all three configurations, so control plans on those data were not simply matched to their references. The final control efficiency is a single aggregate with no per-case or per-condition breakdown.
+- evidence: paper.tex Section Controls and diagnostics, and paragraph "Reading an efficiency near 1" saying the decomposition is unknown; paper_data.json final_evaluation.metrics.control_efficiency=1.0001937677875696 with no per-case control records; source_evidence/evaluate_final.py header defining control_efficiency as a mean over boards of the mean of the permuted and shuffled-null efficiencies; source_evidence/search_metrics/config_0*_metrics.json control_efficiency=0.99671 to 0.99672; claims_grounding.json claim[4] supports only the value 1.0002.
+- requested_fix: Reword to say only that mean control efficiency is 1.0002, so on average the planner's control-case efficiency relative to the evaluator's references was close to 1. Add that the aggregate cannot show per-case cost agreement, because savings and losses may offset, and that the development controls averaged 0.9967.

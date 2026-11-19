@@ -1,0 +1,10 @@
+# Agentic evidence audit
+
+- verdict: `pass`
+- finding_count: `0`
+
+## Summary
+Visible claims in the main text and Supplementary Information match claims_grounding.json, paper_data.json, the derived headroom file, the search-metrics files and the source_evidence code. The qualified outcome, the coverage shortfall, the missing ablations and the unverified candidate diagnostics are all disclosed.
+
+## Findings
+- None.

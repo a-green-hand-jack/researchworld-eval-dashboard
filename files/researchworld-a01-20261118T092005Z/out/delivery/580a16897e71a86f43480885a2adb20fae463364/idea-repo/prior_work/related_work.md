@@ -1,0 +1,20 @@
+# Prior work and how the study relates to it
+
+Status: every entry was checked against its abstract/metadata (arXiv, OpenAlex, Crossref). Zhang & Hardt and Chen et al. were read (relevant sections of the arXiv PDFs, 2026-11-18); the others only by abstract, so claims about their internals are not yet allowed. `refs.bib` holds the BibTeX (from doi.org/Crossref); entries marked * were typed from Crossref metadata.
+
+| Work | What it does | Relation to this study |
+|---|---|---|
+| Zhang & Hardt 2024, Inherent trade-offs between diversity and stability in multi-task benchmarks (arXiv 2405.01719) | Social-choice view of benchmarks (cardinal vs ordinal); diversity and sensitivity-to-irrelevant-changes measures; 7 cardinal + 11 ordinal benchmarks | Closest on framing and data. Read: their cardinal-benchmark sensitivity is the worst-case Kendall-distance change in the ranking when label noise is injected into tasks (a task-equivalent, non-targeted perturbation, in the spirit of non-dictatorship); ordinal ones are analysed via Arrow-type arguments. Not a strategic actor's cost and not target-specific. Reuse their cardinal/ordinal taxonomy; their diversity measure is a candidate predictor of price. |
+| Chen et al. 2026, Leaderboard Incentives (arXiv 2603.08371) | Stackelberg game, benchmark designer vs developers; no Nash equilibrium for current benchmarks; tune-before-test gives unique equilibrium | Closest on motivation. Read: a single scalar benchmark-specific effort e per developer, post-effort score v(theta,e), rank rewards, equilibrium; one benchmark score, no aggregation across tasks, no real-data price. They motivate tune-before-test and 'training on the test task'. We give the multi-task, rule-by-rule, single-developer price on real boards. |
+| Lanctot et al. 2023, Evaluating agents using social choice theory (2312.03121) | Voting-as-evaluation | Source of rules (Copeland/Condorcet-type); no manipulation cost |
+| Rofin et al. 2023, Vote'n'Rank* (EACL) | Applies voting rules to benchmark ranking | Rule source; no manipulation cost |
+| Balduzzi et al. 2018, Re-evaluating evaluation (1806.02643) | Nash averaging, invariant to redundant tasks/agents | Alternative rule (optional); invariance, not cost |
+| Dehghani et al. 2021, The Benchmark Lottery (2107.07002) | Task selection changes relative rankings | Motivates task-resampling uncertainty (E5) |
+| Singh et al. 2025, The Leaderboard Illusion (2504.20879) | Gaming practices on Chatbot Arena | Evidence that such strategies occur |
+| Zhou et al. 2023 (2311.01964); Yang et al. 2023 (2311.04850) | Benchmark leakage/contamination effects | Evidence/mechanism of targeted training gains |
+| Bredereck et al. 2016, Combinatorial shift bribery* (JAIR 55); Handbook of COMSOC* | Bribery, margin of victory in elections | Formal vocabulary; ours is cardinal bribery with ceilings |
+| Broderick et al. 2020, Can dropping a little data change conclusions? (2011.14999) | Finite-sample robustness metric: how much data must change to flip a conclusion | Same spirit (minimal perturbation to flip a conclusion); different object |
+| Dominguez-Olmedo et al. 2024, Training on the test task confounds evaluation and emergence (2407.07890); Zhang et al. 2025, Train-before-test harmonizes language model rankings (2507.05195) | Training with knowledge of the evaluation tasks is not malpractice but confounds comparisons; giving every model the same benchmark-specific fine-tuning aligns rankings | Names and motivates the investment mechanism; known only through abstracts and Chen et al.'s description |
+| Hendrycks et al. 2020 (MMLU); Liang et al. 2022 (HELM); Open LLM Leaderboard / lm-eval-harness (Gao et al.) | The data sources and their aggregation rules | Data/provenance; each board's official rule is a studied rule |
+
+Owed (not yet read or found): robust-statistics sources for breakdown point/influence function (e.g. Hampel; Huber) to be located and verified; margin-of-victory papers (Xia; Magrino et al.) to be verified; adaptive-overfitting on leaderboards (Blum & Hardt, Ladder) to be verified. Nothing from this list goes into the paper unverified.

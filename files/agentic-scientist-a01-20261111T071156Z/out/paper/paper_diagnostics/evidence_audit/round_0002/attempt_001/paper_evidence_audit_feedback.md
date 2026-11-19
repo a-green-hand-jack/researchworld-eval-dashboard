@@ -1,0 +1,18 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T09:31:43.923784+00:00`
+- ok: `False`
+- verdict: `fail`
+- finding_count: `1`
+- audit_json_path: `work/results/a01/claude/20261111_071545/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/a01/claude/20261111_071545/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/a01/claude/20261111_071545/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+Numbers, qualification facts and development-comparison figures match the evidence trail. One claim credits the held-out advantage over naive baselines to the per-rule solvers, which the evidence does not isolate.
+
+## Findings
+- `h1-solver-attribution-1` (Results (Held-out evaluation, Status of the hypotheses Table tab:status) and Design rationale H1): The held-out comparison is between the whole frozen planner and the evaluator's naive baselines. The planner is the base solvers plus verification, pruning, boundary polish and the uniform-gain fallback. No held-out ablation separates the per-rule solvers from those other components. The development comparison shows polish alone changes main efficiency (1.0031 to 1.0051), so the 1.0032 vs 0.8166 gap cannot be assigned to per-rule solvers specifically. The claim is an isolated causal attribution that no controlled comparison supports.
+  - claim: H1 'Verified per-rule solvers have higher main efficiency than the better of uniform-gain and greedy marginal-cost baselines' is marked 'Supported', and the text says 'the comparison shows that the solvers matter for cost'
+  - evidence: claims_grounding.json claims[1-2] ground only the planner-vs-baseline metrics (final.metric.main_efficiency 1.0031855, final.metric.baseline_main_efficiency 0.8165814). paper_data.json final_evaluation covers one frozen candidate (program tree db5d072f). source_evidence/planner_boundary_polish_source.py is the base plus the polish stage. paper.tex states 'The held-out study evaluates one frozen planner: base solvers plus boundary polishing'. No held-out per-component metric exists.
+  - requested_fix: Restate H1 and the Table tab:status row as 'the frozen verified planner (base solvers, verification, pruning and polish) exceeds the better naive baseline on the two held-out boards'. Remove or qualify 'the comparison shows that the solvers matter for cost'. Add that no held-out ablation separates the per-rule solvers from verification, pruning, polish and the uniform fallback.

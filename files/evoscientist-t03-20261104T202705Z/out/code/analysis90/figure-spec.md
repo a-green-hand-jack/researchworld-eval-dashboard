@@ -1,0 +1,31 @@
+# Figure specification
+
+- chart_type: budget_accuracy = multi-panel lines with paired instance-bootstrap 95% bands; repeatability_accuracy = paired metric scatter with x/y intervals; gap_budget = lines with descriptive 95% intervals in oracle reference-gap strata.
+- data_sources: cell_summary.csv, gap_summary.csv, generated only from dimension-validated results/*.npz and metadata. Exact-only partial mode is explicitly labelled.
+- rows_in_scope: budget and repeatability: every dataset/model/method/budget summary in the selected analysis; gap: every exact dataset/model/method/budget/gap-bin summary. German, if available in full mode, is labelled APPROX reference agreement, never true accuracy. Empty gap strata remain missing, not zero.
+- data_columns: dataset, model, method, budget; top3_match and CI; pairwise_top3_match and CI; gap_bin and top3_match and CI.
+- x_axis:
+  - field: budget (budget/gap); pairwise_top3_match (repeatability)
+  - label: Antithetic-cycle budget P (controls use matched row allowance; Kernel uses fewer rows when fully enumerating); Pairwise exact top-3 repeatability
+  - unit: cycles; proportion
+  - scale: log base 4 (budget/gap); linear (repeatability)
+  - range: observed budgets 1,4,16,64; [0,1] repeatability with small margins
+- y_axis:
+  - field: top3_match
+  - label: Exact-target top-3 match, or APPROX-reference top-3 match for German
+  - unit: proportion
+  - scale: linear
+  - range: [-.025,1.025]
+- additional_axes: no twin axes; panels by dataset and model, gap panels by exact dataset and model.
+- series_or_categories: antithetic, iid_oneway, kernel; gaps <.002, .002-.01, >=.01; scatter colors methods and marker shapes budgets.
+- category_order: pima, acs, german; lr, rf, mlp; budgets 1,4,16,64; gaps <.002, .002-.01, >=.01.
+- color_mapping: tab10 method colors; tab10 gap colors with method line styles in gap figure.
+- size_mapping: none.
+- legend: figure-level legends outside panels; method plus budget markers for scatter; method plus gap legends for gap plot.
+- required_annotations: exact-only partial status if relevant; German APPROX-reference wording; gap bins oracle-dependent/descriptive; fixed seeds, run averaging, 2000 paired instance bootstrap replicates.
+- forbidden_elements: fabricated placeholders, smoothing, regression/diagonal reference lines, reliability certificates, German true-accuracy language, dropped methods/rows, clipped Nogueira values.
+- layout_constraints: publication full width 7 inches; 300 dpi, visible ticks, 8-10 pt text, white background; replay scripts and plot.png under separate per-figure directories plus requested named PNG copies at analysis root.
+- source_note: measured fixed empirical-interventional games from /work/results.
+- assumptions: top3 is unordered absolute-value subset with index tie-break. Average runs and fixed training seeds within instance, then instances. Pairwise metrics are computed within each seed's fixed game, not by pooling different models/seeds. Same 2000 cluster resamples across methods/budgets/models within each dataset; independent resampling across datasets. Gap-stratified means weight available seed-instance games equally; bootstrap resamples instances, never pairs/runs.
+
+- analyzed_n: 90; positional slice [30,120); stage: heldout_next90.

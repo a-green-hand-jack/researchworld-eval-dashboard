@@ -1,0 +1,22 @@
+# Final planning check of the complete report
+
+Checked paper-repo/final PR #24 at exact head `a71cdc607a6477ed8aa249ad218f456f141cc080`, also the inspected main revision. The frozen objective was reread. This is the study-plan owner's acceptance of scope/assignment/handoff integration; it is not the required independent final approval, venue acceptance or a statement that final merge has happened.
+
+The actual root `paper.pdf` was extracted from that commit and read via fresh `pdftotext`, avoiding reliance on a potentially older local rendered-text copy. Inspected the abstract, main result/interpretation text, design chronology, zero/pullback distinction, theoretical/method appendix, reproduction overview and checklist. Selected actual PDF pages 1,4–8,10,16,18,19,26,32 were rendered and inspected as a contact sheet; presentation's complete integrated layout check and the independent reviewer retain their own responsibilities. The paper is 32 pages, with main content ending at page 8, references starting on 9 and 16 answered checklist questions. No working-document disclaimer, TODO or result placeholder was found in extracted text.
+
+## Requirement alignment
+
+- Existing methods/evaluation and limitations: related work acknowledges the permitted vector/credal prior, source versions/read extents, nonexhaustive split-calibration scope and no first-simplex-region claim. Specific research questions and hypotheses are explicit.
+- Implemented justified study and uncertainty: RQ1 joint/coordinate controls; RQ2 marginal/group separation and negative scaled-group result; RQ3 common K=3 area with TV/KL, paired differences and unresolved-order limits; RQ4 controlled mixture shift, oracle information and rank/zero checks all appear in the result-bearing paper. Independent full-dataset replications and paired pointwise intervals are correctly distinguished from test-level pseudo-replication and simultaneous inference.
+- Allowed data: wholly synthetic logistic-normal and censored-response studies are explicitly documented, with fixed predictor/generator laws, seeds and scope. No real-data requirement is invented.
+- Theory included: rank/variance/union-bound/mixture reasoning has stated assumptions and numerical checks; weighted construction is attributed rather than claimed as new. Numerical validity and the independent review remain their owners' judgements.
+- Limits of conclusions: fixed well-specified clr predictor, one coefficient draw per dimension, known groups/ratios, preserved within-group shift laws, chosen Euclidean area, no K10 cross-geometry efficiency ranking, finite-test diagnostics and restricted literature search are explicit. Original direct-clr membership and inverse-image original-response coverage are correctly distinguished, with no unmeasured pullback-area claim.
+- Complete delivery interface: root PDF, LaTeX entrypoint, analysis/presentation reproduction entrypoints, environment, seeds, commands, measured resource timing, claim/input hashes and figure/table mappings are supplied. README and build record describe final integration. The 16-question checklist is filled, including honest asset-terms limitations and substantive agent-assistance disclosure.
+
+A read-only CODEOWNERS full-path check over all 197 tracked delivery files found exactly one functional owner for every path, with no unmatched or multiply owned path. All declared core entrypoints and `manuscript/checklist.tex` are present. No ownership revision is needed.
+
+## Chronology and final status
+
+Closed paper-repo#14 is satisfied: the main design paragraph identifies the plan owner's prior-work-driven request before that position inspected core outcomes and analysis's supplement freeze after seeing core/oracle outcomes but before TV/KL results. Original-core prespecification is not retroactively extended.
+
+Paper-repo#23 now supplies the completed result-bearing report and an actual direct-final PR #24. The request remains with its owner until its reviewed final-delivery action is complete. The plan, split, requested handoffs and built-report plan check have met story-repo#3's commitment. There is no unresolved planning requirement or requested extra experiment. Independent final scientific review, integrated rendering judgement and the final merge/system checks must proceed through their designated owners; this check does not replace them or change their reviewed head. This note stays outside delivered paths so it does not alter the proposed final version.

@@ -1,0 +1,3148 @@
+Rank Centrality: Ranking from Pair-wise
+Comparisons
+Sahand Negahban
+Statistics Department, Yale University, 24 Hillhouse Ave, New Haven, CT 06510 , sahand.negahban@yale.edu
+Sewoong Oh
+Department of Industrial and Enterprise Systems Engineering, University of Illinois at Urbana-Champaign, 104 S. Mathews
+Ave., Urbana, IL 61801, swoh@illinois.edu
+Devavrat Shah*
+Department of Electrical Engineering and Computer Science, Massachusetts Institute of Technology, Massachusetts Ave.,
+Cambridge, MA 02139, devavrat@mit.edu
+The question of aggregating pair-wise comparisons to obtain a global ranking over a collection of objects
+has been of interest for a very long time: be it ranking of online gamers (e.g. MSR’s TrueSkill system) and
+chess players, aggregating social opinions, or deciding which product to sell based on transactions. In most
+settings, in addition to obtaining a ranking, ﬁnding ‘scores’ for each object (e.g. player’s rating) is of interest
+for understanding the intensity of the preferences.
+In this paper, we propose Rank Centrality, an iterative rank aggregation algorithm† for discovering scores
+for objects (or items) from pair-wise comparisons. The algorithm has a natural random walk interpretation
+over the graph of objects with an edge present between a pair of objects if they are compared; the score,
+which we call Rank Centrality, of an object turns out to be its stationary probability under this random
+walk.
+To study the eﬃcacy of the algorithm, we consider the popular Bradley-Terry-Luce (BTL) model (equiv-
+alent to the Multinomial Logit (MNL) for pair-wise comparisons) in which each object has an associated
+score which determines the probabilistic outcomes of pair-wise comparisons between objects. In terms of the
+pair-wise marginal probabilities, which is the main subject of this paper, the MNL model and the BTL model
+are identical. We bound the ﬁnite sample error rates between the scores assumed by the BTL model and
+those estimated by our algorithm. In particular, the number of samples required to learn the score well with
+high probability depends on the structure of the comparison graph. When the Laplacian of the comparison
+graph has a strictly positive spectral gap, e.g. each item is compared to a subset of randomly chosen items,
+this leads to dependence on the number of samples that is nearly order-optimal.
+Experimental evaluations on synthetic datasets generated according to the BTL model show that our
+algorithm performs as well as the Maximum Likelihood estimator for that model and outperforms other
+popular ranking algorithms.
+Key words : Rank Aggregation, Rank Centrality, Markov Chain, Random Walk
+History : This paper was ﬁrst submitted on December 1st, 2013.
+1
+arXiv:1209.1688v4  [cs.LG]  12 Nov 2015
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+2
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+1. Introduction
+Rank aggregation is an important task in a wide range of learning and social contexts arising in
+recommendation systems, information retrieval, and sports and competitions. Given n items, we
+wish to infer relevancy scores or an ordering on the items based on partial orderings provided
+through many (possibly contradictory) samples. Frequently, the available data that is presented to
+us is in the form of a comparison: player A defeats player B; book A is purchased when books A
+and B are displayed (a bigger collection of books implies multiple pair-wise comparisons); movie
+A is liked more compared to movie B. From such partial preferences in the form of comparisons,
+we frequently wish to deduce not only the order of the underlying objects, but also the scores
+associated with the objects themselves so as to deduce the intensity of the resulting preference
+order.
+For example, the Microsoft TrueSkill engine assigns scores to online gamers based on the out-
+comes of (pair-wise) games between players. Indeed, it assumes that each player has inherent “skill”
+and the outcomes of the games are used to learn these skill parameters which in turn lead to scores
+associated with each player. In most such settings, similar model-based approaches are employed.
+In this paper, we have set out with the following goal: develop an algorithm for the above stated
+problem which (a) is computationally simple, (b) works with available (comparison) data only, and
+(c) when data is generated as per a reasonable model, then the algorithm should do as well as
+the best model aware algorithm. The main result of this paper is an aﬃrmative answer to these
+questions.
+Related work. Most rating based systems rely on users to provide explicit numeric scores for
+their interests. While these assumptions have led to a ﬂurry of theoretical research for item rec-
+ommendations based on matrix completion (cf. Cand`es and Recht (2009), Keshavan et al. (2010),
+Negahban and Wainwright (2012)), arguably numeric scores provided by individual users are gen-
+erally inconsistent. Furthermore, in a number of learning contexts as illustrated above, explicit
+scores are not available.
+These observations have led to the need to develop methods that can aggregate such forms of
+ordering information into relevance ratings. In general, however, designing consistent aggregation
+methods can be challenging due in part to possible contradictions between individual preferences.
+For example, if we consider items A, B, and C, one user might prefer A to B, while another prefers
+B to C, and a third user prefers C to A. Such problems have been well studied starting with
+∗This work was supported in parts by MURI W911NF-11-1-0036 and NSF CMMI-1462158.
+† Similar algorithms, based on the comparison data matrix have been proposed in the literature. As discussed in detail
+in Section 3.3, they are all diﬀerent from Rank Centrality.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+3
+(and potentially even before) Condorcet (1785). In the celebrated work by Arrow (1963), existence
+of a rank aggregation algorithm with reasonable sets of properties (or axioms) was shown to be
+impossible.
+In this paper, we are interested in a more restrictive setting: we have outcomes of pair-wise
+comparisons between pairs of items, rather than a complete ordering as considered in (Arrow 1963).
+Based on those pair-wise comparisons, we want to obtain a ranking of items along with a score
+for each item indicating the intensity of the preference. One reasonable way to think about our
+setting is to imagine that there is a distribution over orderings or rankings or permutations of
+items (also known as the discrete choice model in the literature on Social Choice) and every time a
+pair of items is compared, the outcome is generated as per this underlying distribution. Examples
+of popular distributions over permutations include the Plackett-Luce model (Luce 1959, Plackett
+1975) and the Mallows model (Mallows 1957). With this, our question becomes even harder than
+the setting considered by Arrow (1963) as, in that work, eﬀectively the entire distribution over
+permutations was already known!
+Indeed, such hurdles have not stopped the scientiﬁc community as well as practical designers
+from designing such systems. Chess rating systems and the more recent MSR TrueSkill Ranking
+system are prime examples. Our work falls precisely into this realm: design algorithms that work
+well in practice, makes sense in general, and perhaps more importantly, have attractive theoretical
+properties under common comparative judgment models.
+An important and landmark model in this class is called the Plackett-Luce model, which is also
+known as the Multinomial Logit (MNL) model (cf. McFadden (1973)) in the operations research and
+social science literature. A special case of the Plackett-Luce model applied to pair-wise comparisons
+is known as the Bradley-Terry-Luce (BTL) model (Bradley and Terry 1955, Luce 1959). It has
+been the backbone of many practical system designs including pricing in the airline industry,
+e.g. see Talluri and VanRyzin (2005). Adler et al. (1994) used such models to design adaptive
+algorithms that select the winner from small number of rounds. Interestingly enough, the (near-
+)optimal performance of their adaptive algorithm for winner selection is matched by our non-
+adaptive algorithm for assigning scores to obtain global rankings of all players.
+We propose a new rank aggregation algorithm, which we call Rank Centrality, that builds on
+a long line of research in using eigenvectors of certain matrices to ﬁnd global rankings of items,
+which dates back to Seeley (1949). This line of research is referred to as spectral ranking and for
+an extensive survey we refer to Vigna (2009). Given pair-wise comparisons of items from a single
+individual on all possible choices of pairs, Wei (1952) introduced a ranking algorithm based on the
+leading eigenvector of the matrix representing the comparisons outcome. A slight generalization
+accounting for data from multiple decision makers was proposed by Kendall (1955). Keener (1993),
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+4
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+and more recent work by Dwork et al. (2001a), proposed several variations of spectral algorithms
+for ranking from pair-wise comparisons. We propose Rank Centrality for ranking from pair-wise
+comparisons by using the leading eigenvector of a particular matrix formed by constructing a
+Markov chain corresponding to a random walk on a graph. Although it appears to be similar to
+the existing spectral ranking approaches, the precise form of the algorithm proposed is distinct
+and this precise form does matter: the empirical results using synthetic data presented in Section
+3.3 make this clear. In summary, building on the classical ﬁeld of spectral ranking, we propose a
+novel spectral ranking algorithm and provide a ﬁrm theoretical grounding by showing that it is a
+provably near-optimal estimator for a popular discrete choice model, i.e. the BTL model formally
+deﬁned in Section 2.1.
+Numerous spectral ranking algorithms have been proposed in the past, one of the most popular
+example being PageRank (Brin and Page 1998). However, almost invariably, the question of when
+one should choose to use a particular spectral ranking algorithm is left open. One notable exception
+is the work of Altman and Tennenholtz (2005), which provides a set of axioms satisﬁed by PageRank
+algorithm and prove that PageRank is the only rank aggregation algorithm that satisﬁes those
+particular axioms. Hence, it provides a guideline for deciding when PageRank should be used, i.e.
+in applications where the speciﬁc set of axioms make sense. In a similar spirit, Rank Centrality is
+a spectral ranking algorithm with a theoretical justiﬁcation suggesting that it should be used in
+applications where the BTL or MNL model makes sense (in the remainder of this manuscript, we
+shall use BTL model as representative for BTL and MNL model).
+There has been signiﬁcant work on rankings from pair-wise comparison in the last several years.
+A popular model is a distribution over permutations known as the Mallows model, which assigns
+probability to observed rankings according to the Kendall-τ distance to a true ranking. Since
+the maximum likelihood estimation is provably diﬃcult, Dwork et al. (2001b) studied this prob-
+lem (also known as the Kemeny optimization) when full rankings are observed and provided a
+2-approximation algorithm. This was later improved by Ailon et al. (2008) and also generalized
+to partial rankings (Ailon 2010). Recently, Lu and Boutilier (2011) proposed an expectation-
+maximization approach with novel sampling schemes to learn the Mallows model from pair-wise
+comparisons. These distance-based approaches aim to provide good approximation algorithms for
+the provably diﬃcult problem of minimizing the Kendall-τ distance and some variations of it (e.g.
+Farnoud et al. (2012)).
+Learning to rank from pair-wise comparisons has also been studied in applications where one
+might observe more than just the ordinal outcome of pair-wise comparisons. Additional data on
+cardinal preferences such as the margin of victory (the diﬀerence between the winning team’s score
+and the losing team’s score) in a football match has led to score-based methods for ranking, where
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+5
+the goal is to ﬁnd scores for each team such that the diﬀerence of the scores is consistent with
+the observed margins of victory (Hochbaum 2006, Gleich and Lim 2011, Jiang et al. 2011). More
+recently, Volkovs and Zemel (2012) proposed a uniﬁed model that generalizes both the BTL model
+and the cardinal preferences. These approaches add to the traditional approaches based on some
+notion of distance, such as the Kendall-τ distance, and probabilistic models, such as the BTL
+model.
+Another probabilistic model directly parameterizes the distribution of pair-wise comparisons for
+all the pairs and asks the question of whether existing pair-wise ranking algorithms are consistent
+or not (Duchi et al. 2010, Rajkumar and Agarwal 2014). It is shown that many existing algorithms
+do not meet the proposed ‘consistency’ criteria and new regret/optimization based algorithms are
+presented.
+The algorithm proposed by Ammar and Shah (2011) can be viewed as natural adaption of Borda
+count based on pair-wise comparison data. They establish it to be equivalent to Borda count based
+on entire distribution when perfect pair-wise marginals are available, i.e. large sample limit. In
+Braverman and Mossel (2008), the authors present an algorithm that produces an ordering based
+on O(nlog n) pair-wise comparisons on adaptively selected pairs. They assume that there is an
+underlying true ranking and one observes noisy comparison results. Each time a pair is queried,
+we are given the true ordering of the pair with probability 1/2 + γ for some γ > 0 which does not
+depend on the items being compared.
+Our contributions. In this paper, we introduce Rank Centrality, an iterative algorithm that takes
+the noisy comparison answers between a subset of all possible pairs of items as input and produces
+scores for each item as the output. The proposed algorithm has a nice intuitive explanation. Con-
+sider a graph with nodes/vertices corresponding to the items of interest (e.g. players). Construct
+a random walk on this graph where at each time, the random walk is likely to go from vertex i to
+vertex j if items i and j were ever compared; and if so, the likelihood of going from i to j depends
+on how often i lost to j. That is, the random walk is more likely to move to a neighbor who has
+more “wins”. How frequently this walk visits a particular node in the long run, or equivalently
+the stationary distribution, is the score of the corresponding item. Thus, eﬀectively this algorithm
+captures preference of the given item versus all of the others, not just immediate neighbors: the
+global eﬀect induced by transitivity of comparisons is captured through the stationary distribution.
+Such an interpretation of the stationary distribution of a Markov chain or a random walk has been
+an eﬀective measure of relative importance of a node in wide class of graph problems, popularly
+known as the Network Centrality cf. (Newman 2010). Notable examples of such network centralities
+include the random surfer model on the web graph for the version of the PageRank (Brin and Page
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+6
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+1998) which computes the relative importance of a web page, a model of a random crawler in a
+peer-to-peer ﬁle-sharing network to assign trust value to each peer in EigenTrust (Kamvar et al.
+2003) and a random walk interpretation of Rumor Centrality that assigns likelihood to each node
+for being source of information (or rumor) spread in a network graph based on the foot-print of
+infection under the Susceptible-Infected model Shah and Zaman (2011, 2015).
+The computation of the stationary distribution of the Markov chain boils down to ‘power itera-
+tion’ using transition matrix lending to a nice iterative algorithm. To establish rigorous properties
+of the algorithm, we analyze its performance under the BTL model described in Section 2.1.
+Formally, we establish the following result: given n items, when comparisons between randomly
+chosen ω(n log n) pairs of items are produced as per an (unknown) underlying BTL model, Rank
+Centrality learns the true score up to an arbitrary accuracy with high probability as n →∞. It
+should be noted that Ω(nlog n) is a necessary number of (random) comparisons for any algorithm
+to even produce a consistent ranking with high probability since with fewer edges (comparisons)
+the resulting random graph will be disconnected with positive probability. In that sense, Rank
+Centrality is nearly order-optimal.
+In general, the comparisons may not be available between randomly chosen pairs. Let G = ([n],E)
+denote the graph of comparisons between these n objects with an edge (i,j) ∈E if and only if objects
+i and j are compared. In this setting, we establish that with O(ξ−2 npoly(log n)) comparisons,
+Rank Centrality learns the true score of the underlying BTL model up to an arbitrarily small error
+with high probability. Here, ξ is the spectral gap for the Laplacian of G and this is how the graph
+structure of comparisons plays a role. Indeed, as a special case when comparisons are chosen at
+random, the induced graph is Erd¨os-R´enyi for which ξ is strictly positive, independent of n, with
+high probability, leading to the (order) optimal performance of the algorithm as stated earlier.
+To understand the performance of Rank Centrality compared to the other options, we perform
+an experimental study. It shows that the performance of Rank Centrality is identical to the ML
+estimation of the BTL model. Furthermore, it outperforms other popular choices. In summary,
+Rank Centrality (a) is computationally simple, (b) always produces a solution using available data,
+and (c) has near optimal performance with respect to a reasonable generative model.
+Some remarks about our analytic technique. Our analysis boils down to studying the induced
+stationary distribution of the random walk or Markov chain corresponding to the algorithm. Like
+most such scenarios, the only hope to obtain meaningful results for such ‘random noisy’ Markov
+chain is to relate it to stationary distribution of a known Markov chain. Through recent concen-
+tration of measure results for random matrices and comparison technique using Dirichlet forms for
+characterizing the spectrum of reversible/self-adjoint operators, along with the known expansion
+property of the random graph, we obtain the eventual result. Indeed, it is the consequence of such
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+7
+existing powerful results that lead to near-optimal analytic results for random comparison model
+and characterization of the algorithm’s performance for general setting.
+As an important comparison, we provide analysis of sample complexity required by the maximum
+likelihood estimator (MLE) using the state-of-art analytic techniques, cf. Negahban and Wainwright
+(2012). Subsequent to our work, Hajek et al. (2014) extended our analysis of MLE and established
+that MLE also achieves near-optimal performance guarantees (up to a logarithmic factor) as well.
+Our numerical experiments suggests something even stronger, the resulting error is eﬀectively
+identical for both MLE and Rank Centrality.
+Organization. The remainder of the paper is organized as follows. In Section 2, we describe the
+model, problem statement and the rank Centrality algorithm. Section 3 describes the main results
+– the key theoretical properties of rank Centrality as well as it’s empirical performance in the
+context of two real datasets from NASCAR and One Day International (ODI) cricket. We provide
+comparison of the Rank Centrality with the maximum likelihood estimator using the existing
+analytic techniques in the same section. We derive the Cramer-Rao lower bound on the square
+error for estimating parameters by any algorithm - across range of parameters, the performance of
+Rank Centrality and MLE matches the lower bound implied by Cramer-Rao bound as explained in
+Section 3 as well. Finally, Section 4 details proofs of all results. We discuss and conclude in Section
+5.
+Notation. In the remainder of this paper, we use C, C′, etc. to denote absolute constants, and their
+value might change from line to line. We use AT to denote the transpose of a matrix. The Euclidean
+norm of a vector is denoted by ∥x∥=
+pP
+i x2
+i , and the operator norm of a linear operator is denoted
+by ∥A∥2 = maxx xTAx/xTx. When we say with high probability, we mean that the probability of a
+sequence of events {An}∞
+n=1 goes to one as n grows: limn→∞P(An) = 1. Also deﬁne [n] = {1,2,...,n}
+to be the set of all integers from 1 to n.
+2. Model, Problem Statement and Algorithm
+2.1. Model
+In this section, we discuss a model of comparisons between various items. This model will be used
+to analyze the Rank Centrality algorithm.
+Bradley-Terry-Luce model for comparative judgment. When comparing pairs of items from
+n items of interest, represented as [n] = {1,...,n}, the Bradley-Terry-Luce model assumes that
+there is a weight or score wi ∈R+ ≡{x ∈R : x > 0} associated with each item i ∈[n]. The outcome
+of a comparison for pair of items i and j is determined only by the corresponding weights wi and
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+8
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+wj. Let Y l
+ij denote the outcome of the l-th comparison of the pair i and j, such that Y l
+ij = 1 if j is
+preferred over i and 0 otherwise. Then, according to the BTL model,
+Y l
+ij =
+ 1 with probability
+wj
+wi+wj ,
+0 otherwise .
+Furthermore, conditioned on the score vector w = (w1,...,wn)T, it is assumed that the random
+variables Y l
+ij’s are independent of one another for all i, j, and l.
+Since the BTL model is invariant under the scaling of the scores, an n-dimensional representation
+of the scores is not unique. Indeed, under the BTL model, a score vector w ∈Rn
++ is the equivalence
+class [w] = {w′ ∈Rn
++|w′ = aw, for some a > 0}. The outcome of a comparison only depends on the
+equivalence class of the score vector.
+To get a unique representation, we represent each equivalence class by its projection onto the
+standard orthogonal simplex such that P
+i wi = 1. This representation naturally deﬁnes a distance
+between two equivalent classes as the Euclidean distance between two projections:
+d(w,w′) ≡
+
+1
+⟨w,1⟩w −
+1
+⟨w′,1⟩w′ .
+Our main result provides an upper bound on the (normalized) distance between the estimated
+score vector and the true underlying score vector.
+Bradley-Terry-Luce is equal to pair-wise marginals of Multinomial Logit (MNL)/Plackett-Luce.
+We take a brief detour to remind the reader that the BTL model is identical to the MNL model
+in the sense that the pair-wise distributions between objects induced under BTL are identical to
+that under MNL. Consider an equivalent way to describe an MNL model. Each object i has an
+associated score wi > 0. A random ordering over all n objects is drawn as follows: iteratively ﬁll the
+ordered positions 1,...,n by choosing object i(k) for position k, amongst the remaining objects
+(not chosen in the ﬁrst 1,...,k −1 positions) with probability proportional to it’s weight wi(k). It
+can be easily veriﬁed that in the random ordering of n objects generated as per this process, i is
+ranked higher than j with probability wi/(wi + wj).
+Sampling model. We also assume that we perform a ﬁxed k number of comparisons for all pairs i
+and j that are considered (e.g. a best of k series). This assumption is mainly to simplify notations,
+and the analysis as well as the algorithm easily generalizes to the case when we might have a
+diﬀerent number of comparisons for diﬀerent pairs. Given observations of pair-wise comparisons
+among n items according to this sampling model, we deﬁne a comparisons graph G = ([n],E,A) as
+a graph of n items where two items are connected if we have comparisons data on that pair and A
+denotes the weights on each of the edges in E.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+9
+2.2. Rank Centrality
+In our setting, we will assume that aij represents the fraction of times object j has been preferred to
+object i, for example the fraction of times chess player j has defeated player i. Given the notation
+above, we have that aij = (1/k)Pk
+l=1 Y l
+ij. Consider a random walk on a weighted directed graph
+G = ([n],E,A), where a pair (i,j) ∈E if and only if the pair has been compared. The weight edges
+are deﬁned based on the outcome of the comparisons: Aij = aij/(aij +aji) and Aji = aji/(aij +aji)
+(note that aij + aji = 1 in our setting). We let Aij = 0 if the pair has not been compared. Note
+that by the Strong Law of Large Numbers, as the number k →∞the quantity Aij converges to
+wj/(wi + wj) almost surely.
+A random walk can be represented by a time-independent transition matrix P, where Pij =
+P(Xt+1 = j|Xt = i). By deﬁnition, the entries of a transition matrix are non-negative and satisfy
+P
+j Pij = 1. One way to deﬁne a valid transition matrix of a random walk on G is to scale all the
+edge weights by 1/dmax, where we deﬁne dmax as the maximum out-degree of a node. This rescaling
+ensures that each row-sum is at most one. Finally, to ensure that each row-sum is exactly one, we
+add a self-loop to each node. Concretely,
+Pij =
+
+1
+dmax Aij if i̸ = j ,
+1 −
+1
+dmax
+P
+k̸=i Aik if i = j .
+(1)
+The choice to construct our random walk as above is not arbitrary. In an ideal setting with inﬁnite
+samples (k →∞) per comparison the transition matrix P would deﬁne a reversible Markov chain
+under the BTL model. Recall that a Markov chain is reversible if it satisﬁes the detailed balance
+equation: there exists v ∈Rn
++ such that viPij = vjPji for all i,j; and in that case, π ∈Rn
++ deﬁned
+as πi = vi/(P
+j vj) is its unique stationary distribution. In the ideal setting (say k →∞), we will
+have Pij = ˜Pij ≡(1/dmax)wj/(wi + wj). That is, the random walk will move from state i to state j
+with probability proportional to the chance that item j is preferred to item i. In such a setting, it
+is clear that v = w satisﬁes the reversibility conditions. Therefore, under these ideal conditions it
+immediately follows that the vector w/P
+i wi acts as a valid stationary distribution for the Markov
+chain deﬁned by ˜P, the ideal matrix. Hence, as long as the graph G is connected and at least one
+node has a self loop then we are guaranteed that our graph has a unique stationary distribution
+proportional to w. If the Markov chain is reversible then we may apply the spectral analysis of
+self-adjoint operators, which is crucial in the analysis of the behavior of the method.
+In our setting, the matrix P is a noisy version (due to ﬁnite sample error) of the ideal matrix
+˜P discussed above. Therefore, it naturally suggests the following algorithm as a surrogate. We
+estimate the probability distribution obtained by applying matrix P repeated starting from any
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+10
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+initial condition. Precisely, let pt(i) = P(Xt = i) denote the distribution of the random walk at time
+t with p0 = (p0(i)) ∈Rn
++ be an arbitrary starting distribution on [n]. Then,
+pT
+t+1 = pT
+t P .
+(2)
+When the transition matrix has a unique left largest eigenvector, then starting from any initial
+distribution p0, the limiting distribution π is unique. This stationary distribution π is the top left
+eigenvector of P, which makes computing π a simple eigenvector computation. Formally, we state
+the algorithm, which assigns numerical scores to each node, which we shall call Rank Centrality:
+Rank Centrality
+Input: G = ([n],E,A)
+Output: rank {π(i)}i∈[n]
+1: Compute the transition matrix P according to (1);
+2: Compute the stationary distribution π (as the limit of (2)).
+The stationary distribution of the random walk is a ﬁxed point of the following equation:
+π(i) =
+X
+j
+π(j)
+Aji
+P
+ℓAiℓ
+.
+This suggests an alternative intuitive justiﬁcation: an object receives a high rank if it has been
+preferred to other high ranking objects or if it has been preferred to many objects.
+One key question remains: does P have a well deﬁned unique stationary distribution? Since the
+Markov chain has a ﬁnite state space, there is always a stationary distribution or solution of the
+above stated ﬁxed-point equations. However, it may not be unique if the Markov chain P is not
+irreducible. The irreducibility follows easily when the graph is connected and for all edges (i,j) ∈E,
+aij > 0, aji > 0. Interestingly enough, we show that the iterative algorithm produces a meaningful
+solution with near optimal sample complexity as stated in Theorem 2 when the pairs of objects
+that are compared are chosen at random.
+3. Main Results
+The main result of this paper derives suﬃcient conditions under which the proposed iterative
+algorithm ﬁnds a solution that is close to the true solution (under the BTL model) for general
+model with arbitrary connected comparison graph G. This result is stated as Theorem 1 below. In
+words, the result implies that to learn the true score correctly as per our algorithm, it is suﬃcient
+to have number of comparisons scaling as O(ξ−2 npoly(log n)) where ξ is the spectral gap of the
+Laplacian of the graph G. This result explicitly identiﬁes the role played by the graph structure in
+the ability of the algorithm to learn the true scores.
+In the special case, when the pairs of objects to be compared are chosen at random, that is
+the induced G is an Erd¨os-R´enyi random graph, the spectral gap ξ can be lower-bounded by a
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+11
+constant with high probability and hence the resulting number of comparisons required scales as
+O(npoly(log n)). This is eﬀectively the optimal sample complexity.
+The bounds are presented as the rescaled Euclidean norm between our estimate π and the
+underlying stationary distribution of ˜P. This error metric provides us with a means to quantify
+the relative certainty in guessing if one item is preferred over another.
+After presenting our main theoretical result, we describe illustrative simulation results. We also
+present application of the algorithm in the context of two real data-sets: results of NASCAR race
+for ranking drivers, and results of One Day International (ODI) Cricket for ranking teams. We shall
+discuss relation between Rank Centrality, the maximum likelihood estimator and the information
+theoretic lower bound to conclude that both MLE and Rank Centrality are near-optimal when the
+pairs are chosen according to the Erd¨os-Renyi random graph.
+3.1. Rank Centrality: Error bound for general graphs
+Recall that in the general setting, each pair of objects or items are chosen for comparisons as per
+the comparisons graph G([n],E). For each such pair, we have k comparisons available. The result
+below characterizes the performance of Rank Centrality for such a general setting.
+Before we state the result, we present a few necessary notations. Let di denote the degree of
+node i in G; let the max-degree be denoted by dmax ≡maxi di and min-degree be denoted by
+dmin ≡mini di; let κ ≡dmax/dmin. The random walk normalized Laplacian matrix of the graph G is
+deﬁned as L = D−1B where D is the diagonal matrix with Dii = di and B is the adjacency matrix
+with Bij = Bji = 1 if (i,j) ∈E and 0 otherwise. This normalized Laplacian, deﬁned thus, can be
+thought of as a transition matrix of a reversible random walk on graph G: from each node i, jump
+to one of its neighbors j with equal probability. Given this, it is well known that the random walk
+normalized Laplacian of the graph has real eigenvalues denoted as
+−1 ≤λn(L) ≤... ≤λ1(L) = 1.
+(3)
+We shall denote the spectral gap of the Laplacian as
+ξ ≡1 −λmax(L) ,
+where
+λmax(L) ≡max{λ2(L),−λn(L)} .
+(4)
+There is one-to-one correspondence between the eigenvalues of the random walk normalized Lapla-
+cian L and the standard (symmetric) normalized Laplacian I −D−1/2BD−1/2. Now we state the
+result establishing the performance of Rank Centrality.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+12
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+Theorem 1. Given n objects and a connected comparison graph G = ([n],E), let each pair (i,j) ∈
+E be compared for k times with outcomes produced as per a BTL model with parameters w1,...,wn.
+Then, for some positive constant C ≥8 and when k ≥4C2(b5κ2/dmaxξ2)log n, the following bound
+on the normalized error holds with probability at least 1 −4n−C/8:
+π −˜π
+
+∥˜π∥
+≤Cb5/2κ
+ξ
+r
+log n
+k dmax
+,
+where ˜π(i) = wi/P
+ℓwℓ, b ≡maxi,j wi/wj, and κ ≡dmax/dmin.
+3.2. Rank Centrality: Error bound for random graphs
+Now we consider the special case when the comparison graph G is an Erd¨os-R´enyi random graph
+with pair (i,j) being compared with probability d/n. When d is poly-logarithmic in n, we pro-
+vide a strong performance guarantee. Speciﬁcally, the result stated below suggests that with
+O(npoly(log n)) comparisons, Rank Centrality manages to learn the true scores with high proba-
+bility.
+Theorem 2. Given n objects, let the comparison graph G = ([n],E) be generated by selecting each
+pair (i,j) to be in E with probability d/n independently of everything else. Each such chosen pair
+of objects is compared k times with the outcomes of comparisons produced as per a BTL model with
+parameters w1,...,wn. Then, if d ≥10C2 log n and k d ≥128C2b5 log n, the following bound on the
+error rate holds with probability at least 1 −10n−C/8:
+π −˜π
+
+∥˜π∥
+≤8Cb5/2
+r
+log n
+k d ,
+where ˜π(i) = wi/P
+ℓwℓand b ≡maxi,j wi/wj.
+Remarks. Some remarks are in order. First, Theorem 2 immediately implies that as long as kd
+grows super-linear in log n, then the error goes to 0. Furthermore, in the context that the number
+of items n goes to ∞as long as we choose d = Ω(log n) and kd = ω(log n), the relative error goes
+to 0 as n →∞with high probability. That is, with ω(nlog n) total samples, the relative error goes
+to 0 with high probability. It is well-known that for Erd¨os-Renyi graphs, the induced graph G is
+connected with high probability only when d = Ω(log n), i.e. when total number of pairs sampled
+scales as Ω(nlog n). Thus, Rank Centrality is nearly order-optimal in this setting.
+Second, the b parameter should be treated as constant. It is the dynamic range in which we are
+trying to resolve the uncertainty between scores. We are considering a regime that there exists
+some uncertainty in the samples. Otherwise, if the weight of a single item where an order n greater
+than the weights of other items, then it would eﬀectively be preferred with certainty. Hence, we
+would remove it from the items under consideration.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+13
+Third, for a general graph, Theorem 1 implies that by choice of kdmax = O(κ2ξ−2 log n), Rank
+Centrality learns a score vector close to the true scores with high probability. That is, eﬀectively the
+Rank Centrality algorithm requires O(nκ2ξ−2poly(log n)) comparisons to learn scores well. Ignoring
+κ, the graph structure plays a role through ξ−2, the squared inverse of the spectral gap of Laplacian
+of G, in dictating the performance of Rank Centrality. A reversible natural random walk on G,
+whose transition matrix is the Laplacian, has its mixing time scaling as ξ−2 (precisely, relaxation
+time). In that sense, the mixing time of natural random walk on G ends up playing an important
+role in the ability of Rank Centrality to learn the true scores. Hence, if one has the option to
+choose which pairs to compare, our analysis in Theorem 1 suggests that one should choose pairs
+such that the resulting graph has large spectral gap. Spectral gap of the comparisons graph also
+plays an important role in Osting et al. (2013), where the goal is to choose pairs to compare under
+a diﬀerent model where cardinal preferences (as opposed to ordinal preferences) are observed.
+Finally, if we wish to obtain a relative accuracy of ϵ with probability at least 1 −
+δ
+for a ﬁxed number of items n, then our results also show that we require k d ≥
+512b5/ϵ2 max(log2(10/δ)/log n,log n).
+3.3. Experimental Results
+Under the BTL model, deﬁne an error metric of an estimated ordering σ as the weighted sum of
+pairs (i,j) whose ordering is incorrect:
+Dw(σ) =
+n
+1
+2n∥w∥2
+X
+i<j
+(wi −wj)2 I
+ (wi −wj)(σi −σj) > 0
+o1/2
+,
+where I(·) is an indicator function. This is a more natural error metric compared to the Kemeny
+distance, which is an unweighted version of the above sum, since Dw(·) is less sensitive to errors
+between pairs with similar weights. Further, assuming without loss of generality that w is normal-
+ized such that P
+i wi = 1, the next lemma connects the error in Dw(·) to the bound provided in
+Theorem 2. Hence, the same upper bound holds for Dw error. A proof of this lemma is provided
+in the Appendix.
+Lemma 1. Let σ be an ordering of n items induced by a scoring π. Then,
+Dw(σ) ≤∥w −π∥
+∥w∥
+.
+Synthetic data. To begin with, we generate data synthetically as per a BTL model for a speciﬁc
+choices of scores. For a given n and b, the scores are chosen such that the ratio between two
+consecutive scores are ﬁxed to be b1/n, i.e. w1 = b(1−n)/2n, w2 = b(3−n)/2n, w3 = b(5−n)/2n etc.
+A
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+14
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+representative result is depicted in Figure. 1: for ﬁxed n = 400 and a ﬁxed b = 10, it shows how
+the error scales when varying two key parameters – varying the number of comparisons per pair
+with ﬁxed d = 10log n (on left), and varying the sampling probability with ﬁxed k = 32 (on right).
+This ﬁgure compares performance of Rank Centrality with variety of other algorithms. Next, we
+provide a brief description of various algorithms that we shall compare with.
+Regularized Rank Centrality. When there are items that have been compared only a few times, the
+scores to those items might be sensitive to the randomness in the outcome of the comparisons, or
+even worse the resulting comparisons graph might not be connected. To make the random walk
+irreducible and get a ranking that is more robust against comparisons noise in those edges with
+only a few comparisons, one can add regularization to Rank Centrality. A reasonable way to add
+regularization is to consider the transition probability Pij as the prediction of the event that j
+beats i, given data (aij,aji). The Rank Centrality, in non regularized setting, uses the Haldane
+prior of Beta(0,0), which gives Pij ∝aij/(aij + aji). To add regularization, one can use diﬀerent
+priors, for example Beta(ε,ε), which gives
+Pij =
+1
+dmax
+aij + ε
+aij + aji + 2ε .
+(5)
+When the prior is unknown, a reasonable choice in practice is ε = 1.
+Maximum Likelihood Estimator (MLE). The ML estimator directly maximizes the likelihood
+assuming the BTL model (L. R. Ford 1957). If we reparameterize the problem so that θi = log(wi)
+then we obtain our estimates bθ by solving the convex program
+bθ ∈arg min
+θ
+X
+(i,j)∈E
+k
+X
+l=1
+log(1 + exp(θj −θi)) −Y l
+ij(θj −θi),
+(6)
+which is pair-wise logistic regression. The MLE is known to be consistent (L. R. Ford 1957). The
+ﬁnite sample analysis of MLE is provided in Section 3.5.
+For comparison with Regularized Rank Centrality, we provide regularized MLE or regularized
+Logistic Regression:
+arg min
+θ
+X
+(i,j)∈E
+X
+l
+n
+log(1 + exp(θj −θi)) −Y l
+ij(θj −θi)
+o
++ 1
+2λ∥θ∥2
+(7)
+Borda Count. The (generalized) Borda Count method, analyzed recently by Ammar and Shah
+(2011), scores an item by counting the number of wins divided by the total number of comparisons:
+s(i) =
+# of times item i has won
+# of times item i has been compared .
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+15
+This can be thought of as an extension of the standard Borda Count for aggregating full rankings (de
+Borda 1781), which is widely used in psychology (David 1963, Kendall and Smith 1940, Mosteller
+1951). If we break the full rankings into pair-wise comparisons and apply the pair-wise version of
+the Borda Count from (Ammar and Shah 2011), then it produces the same ranking as the standard
+Borda Count applied to the original full rankings. This is diﬀerent from how HodgeRank from
+Jiang et al. (2011) generalizes Borda count, which does not normalize the scores by the number of
+comparisons.
+Spectral Ranking Algorithms. Rank Centrality can be classiﬁed as part of the spectral ranking
+algorithms, which assign scores to the items according to the leading eigenvector of a matrix that
+represents the data. Diﬀerent choices of the matrix based on data can lead to diﬀerent algorithms.
+Few prominent examples are Ratio matrix in (Saaty 2003) and those in Dwork et al. (2001a). In
+Ratio matrix algorithm, a matrix M ∈Rn×n with Mij = aij/aji is constructed (and Mii = 1), and
+the scores for the times are assigned as per the top eigenvector of this ratio matrix. Dwork et al.
+(2001a) introduced four spectral ranking algorithms called MC1, MC2, MC3 and MC4. They are
+all based on a random walk very similar (but distinct) to that of Rank Centrality. These algorithms
+use the stationary distributions of the following Markov chains respectively, translated to account
+for the pair-wise comparisons data: P (MC1)
+ij
+= 1/|{ℓ: aiℓ> 0}|, P (MC2)
+ij
+= aij/P
+ℓ̸=i aiℓ,
+P (MC3)
+ij
+=
+
+aij/deg(i) if i̸ = j .
+1 −P
+ℓ̸=i aiℓ/deg(i) if i = j . , P (MC4)
+ij
+=
+
+
+
+1/n if aij ≥aji ,
+0 if aij < aji ,
+1 −P
+ℓ̸=i |{ℓ: aiℓ≥aℓi}|/n if i = j ,
+where deg(i) is the number of items that item i has been compared to.
+ 0.0001
+ 0.001
+ 0.01
+ 0.1
+ 1
+ 1
+ 10
+ 100
+Ratio Matrix
+Borda Count
+RankCentrality
+ML estimate
+MC1
+MC2
+MC3
+MC4
+ 0.001
+ 0.01
+ 0.1
+ 1
+ 0.01
+ 0.1
+ 1
+Ratio Matrix
+Borda Count
+Rank Centrality
+ML estimate
+MC1
+MC2
+MC3
+MC4
+Dw(σ)
+k
+d/n
+Figure 1
+Average error Dw(σ) of various rank aggregation algorithms averaged over 20 instances. In the
+ﬁgure on the left, d and n are ﬁxed while k is increased. The ﬁgure on the right, keeps k = 32
+ﬁxed, and lets d increase.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+16
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+We make note of the following observations from Figure 1. First, the error achieved by our Rank
+Centrality is comparable to that of ML estimator, and vanishes at the rate of 1/
+√
+k as predicted
+by our main result. Moreover, as predicted by our bounds, the error scales as 1/
+√
+d. Second, for
+ﬁxed d, both the Borda Count and Ratio Matrix algorithms have strictly positive error even if we
+take k →∞. This exhibits that these are inherently ineﬃcient algorithms. Third, despite strong
+similarity between Rank Centrality and the Markov chain based algorithms of Dwork et al. (2001a),
+the careful choice of the transition matrix of Rank Centrality makes a noticeable diﬀerence as
+shown in the ﬁgure - like Borda count and Ratio matrix, for ﬁxed d,n, despite k increasing the
+error remains ﬁnite (and at times gets worse!).
+Real data-sets. Next we show that Rank Centrality is more robust to randomly missing data
+compared to existing spectral ranking approaches on real datasets, which are not necessarily derived
+from the BTL model.
+Dataset 1: Washington Post. This is the public dataset collected from an online polling on Washing-
+ton Post1 from December 2010 to January 2011. Using allourideas2 platform developed by Salganik
+and Levy (2012), they asked who had the worst year in Washington, where each user was asked
+to compare a series of randomly selected pairs of political entities. There are 67 political entities
+in the dataset, and the resulting graph is a complete graph on these 67 nodes. We used Rank
+Centrality and other algorithms to aggregate this data. We use this data-set primarily to check
+the ’robustness’ of algorithms rather than understanding their ability to identify ground truth as
+by design it is not available.
+Now each algorithm gives diﬀerent ground truth rankings given the full set of data. This ground
+truth is compared to a ranking we get from only a subset of the data, which is generated by
+sampling each edge with a given sampling rate and revealing only the data on those sampled edges.
+We want to measure how much each algorithm is aﬀected by eliminating edges from the complete
+graph. Let σGT be the ranking we get by applying our choice of rank aggregation algorithm to
+the complete dataset, and σSample be the ranking we get from sampled dataset. To measure the
+resulting error in the ranking, we use the following metric:
+DL1(σGT,σSample) = 1
+n
+X
+i
+|σGT(i) −σSample(i)| .
+Figure 2 illustrates that Rank Centrality, ML estimator and MC2 are less sensitive to sampling
+the dataset, compared to Borda Count, MC1, MC3, and MC4. Hence they are more robust when
+available comparisons data is limited.
+1 http://www.washingtonpost.com/wp-srv/interactivity/worst-year-voting.html
+2 http://www.allourideas.org
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+17
+ 0
+ 5
+ 10
+ 15
+ 20
+ 25
+ 0.1
+ 0.2
+ 0.3
+ 0.4
+ 0.5
+ 0.6
+ 0.7
+ 0.8
+ 0.9
+ 1
+Ratio Matrix
+Borda Count
+ML estimate
+Rank Centrality
+MC1
+MC2
+MC3
+MC4
+edge sampling rate
+DL1(σGT,σSample)
+Figure 2
+Experimental results on a real dataset shows that Rank Centrality, ML estimator and MC2 are
+less sensitive to having limited data.
+Dataset 2: NASCAR 2002. Table 1 shows ranking of drivers from NASCAR 2002 season racing
+results. Hunter (2004) used this dataset for studying rank-aggregation algorithms, and we use the
+dataset, publicly available at (Guiver and Snelson 2009):
+http://sites.stat.psu.edu/∼dhunter/code/btmatlab/.
+The dataset has 87 diﬀerent drivers who competed in total 36 races in which 43 drivers were racing
+at each race. Some of the drivers raced in all 36 races, whereas some drivers only participated in
+one. To break the racing results into parities comparisons and to be able to run the comparison
+based algorithm, like Hunter (2004), Guiver and Snelson (2009), we eliminated four drivers who
+ﬁnished last in every race they participated. Therefore, the dataset we used, there are total 83
+drivers.
+Table 1 shows top ten and bottom ten drivers according to their average place, and their ranking
+from Rank Centrality and ML estimator. The unregularized Rank Centrality can over ﬁt the data
+by placing P. J. Jones and Scott Pruett in the ﬁrst and second places. They have high average
+place, but they only participated in one race. In contrast, the regularized version places them lower
+and gives the top ranking to those players with more races. Similarly, Morgan Shepherd is placed
+last in the regularized version, because he had consistently low performance in 5 races. Similarly,
+the ML estimator with regularization gives the top (and bottom) rankings to those players with
+more races.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+18
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+Driver
+Races
+Av. place
+Rank Centrality
+ML estimator
+ε = 0
+ε = 3
+λ = 0.01
+π
+rank
+π
+rank
+eθ
+rank
+P. J. Jones
+1
+4.00
+0.1837
+1
+0.0181
+11
+0.0124
+23
+Scott Pruett
+1
+4.00
+0.0877
+2
+0.0176
+12
+0.0124
+24
+Mark Martin
+36
+12.17
+0.0302
+5
+0.0220
+2
+0.0203
+1
+Tony Stewart
+36
+12.61
+0.0485
+3
+0.0219
+1
+0.0199
+2
+Rusty Wallace
+36
+13.17
+0.0271
+6
+0.0209
+3
+0.0193
+3
+Jimmie Johnson
+36
+13.50
+0.0211
+12
+0.0199
+5
+0.0189
+4
+Sterling Marlin
+29
+13.86
+0.0187
+14
+0.0189
+10
+0.0177
+8
+Mike Bliss
+1
+14.00
+0.0225
+10
+0.0148
+18
+0.0121
+27
+JeﬀGordon
+36
+14.06
+0.0196
+13
+0.0193
+8
+0.0184
+5
+Kurt Busch
+36
+14.06
+0.0253
+7
+0.0200
+4
+0.0184
+6
+...
+Carl Long
+2
+40.50
+0.0004
+77
+0.0087
+68
+0.0106
+59
+Christian Fittipaldi
+1
+41.00
+0.0001
+83
+0.0105
+49
+0.0111
+40
+Hideo Fukuyama
+2
+41.00
+0.0004
+76
+0.0088
+67
+0.0106
+60
+Jason Small
+1
+41.00
+0.0002
+80
+0.0105
+48
+0.0111
+41
+Morgan Shepherd
+5
+41.20
+0.0002
+78
+0.0059
+83
+0.0092
+75
+Kirk Shelmerdine
+2
+41.50
+0.0002
+81
+0.0084
+70
+0.0105
+61
+Austin Cameron
+1
+42.00
+0.0005
+75
+0.0107
+44
+0.0111
+43
+Dave Marcis
+1
+42.00
+0.0012
+71
+0.0105
+47
+0.0111
+44
+Dick Trickle
+3
+42.00
+0.0001
+82
+0.0071
+77
+0.0100
+65
+Joe Varde
+1
+42.00
+0.0002
+79
+0.0110
+43
+0.0111
+42
+Table 1
+ε-regularized Rank Centrality for top ten and bottom ten 2002 NASCAR drivers, as ranked by average
+place.
+Dataset 3: ODI Cricket. Table 2 shows ranking of international cricket teams from the 2012 season
+of the One Day International (ODI) cricket match, where 16 teams played total of 362 games.
+Like NASCAR dataset, in Table 2, teams with smaller number of matches, such as Scotland and
+Ireland, are moved towards the middle with regularization, and New Zealand is moved towards
+the end. Notice that regularized or not, the ranking from Rank Centrality is diﬀerent from the
+simple ranking from average place or winning ratio, because we give more score for winning
+against stronger opponents. The regularized ML estimator produces similar ranking as the regu-
+larized Rank Centrality. This data on ODI cricket match is publicly available, for example from
+http://www.cricmetric.com/blog/.
+3.4. Information-theoretic lower bound
+In previous sections, we presented the achievable error rate based on a particular low-complexity
+algorithm. In this section, we ask how this bound compares to the fundamental limit under BTL
+model.
+Our result in Theorem 2 provides an upper bound on the achievable error rate between estimated
+scores and the true underlying scores. We provide a constructive argument to lower bound the
+minimax error rate over a class of BTL models. Concretely, we consider the scores coming from a
+simplex with bounded dynamic range deﬁned as
+Sb ≡
+n
+˜π ∈Rn 
+X
+i∈[n]
+˜πi = 1 , max
+i,j
+˜πi
+˜πj
+≤b
+o
+.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+19
+Team
+matches
+Win ratio
+deg
+Rank Centrality
+ML estimator
+ε = 0
+ε = 1
+λ = 0.01
+π
+rank
+π
+rank
+eθ
+rank
+South Africa
+43
+0.6744
+11
+0.1794
+2
+0.0943
+2
+0.0924
+2
+India
+76
+0.6382
+11
+0.1317
+4
+0.0911
+3
+0.0923
+3
+Australia
+72
+0.6319
+13
+0.1798
+1
+0.0900
+4
+0.0881
+4
+England
+60
+0.6000
+10
+0.1526
+3
+0.0957
+1
+0.0927
+1
+Scotland
+15
+0.6000
+7
+0.0029
+12
+0.0620
+7
+0.0627
+7
+Sri Lanka
+78
+0.5577
+12
+0.1243
+5
+0.0801
+5
+0.0768
+5
+Parkistan
+65
+0.5385
+13
+0.0762
+6
+0.0715
+6
+0.0755
+6
+Ireland
+32
+0.5316
+13
+0.0124
+11
+0.0561
+8
+0.0539
+9
+Afghanistan
+20
+0.5000
+7
+0.0005
+15
+0.0435
+13
+0.0472
+12
+West Indies
+55
+0.4091
+12
+0.0396
+7
+0.0546
+9
+0.0592
+8
+New Zealand
+50
+0.3800
+10
+0.0354
+8
+0.0466
+12
+0.0514
+10
+Bangladesh
+51
+0.3333
+11
+0.0320
+9
+0.0500
+10
+0.0492
+11
+Netherlands
+24
+0.3333
+10
+0.0017
+13
+0.0432
+14
+0.0427
+14
+Zimbabwe
+40
+0.3250
+11
+0.0307
+10
+0.0481
+11
+0.0439
+13
+Canada
+22
+0.2273
+11
+0.0003
+16
+0.0365
+16
+0.0364
+15
+Kenya
+21
+0.1905
+10
+0.0007
+14
+0.0367
+15
+0.0356
+16
+Table 2
+Applying ε-regularized Rank Centrality to One Day International (ODI) cricket match results from
+2012. The degree of a team in the comparisons graph is the number of teams it has played against.
+We constrain the scores to be on the simplex, because we represent the scores by its projection onto
+the standard simplex as explained in Section 2.1. Then, we can prove the following lower bound
+on the minimax error rate.
+Theorem 3. Consider a minimax scenario where we ﬁrst choose an algorithm A that estimates
+the BTL weights, say πA, from given observations and for this particular algorithm A, nature
+chooses the worst-case true BTL weights ˜π. Let Sb denote the space of all BTL score vectors ˜π with
+dynamic range at most b as deﬁned above. Then
+inf
+A sup
+˜π∈Sb
+E
+
+∥πA −˜π∥
+
+∥˜π∥
+≥
+b −1
+240
+√
+10(b + 1)
+1
+√
+kd
+,
+(8)
+where the inﬁmum ranges over all estimation algorithms A that are measurable functions over the
+observations. Here a pair of items is chosen to be compared with probability d/n, and for thus
+chosen pair k comparison observations are generated as per the underlying BTL model.
+By deﬁnition the dynamic range is always at least one. When b = 1, we can trivially achieve a
+minimax rate of zero. Since the inﬁmum ranges over all measurable functions, it includes a trivial
+estimator which always outputs (1/n)1 regardless of the observations, and this estimator achieves
+zero error when b = 1. In the regime where the dynamic range b is bounded away from one and
+bounded above by a constant, Theorem 3 establishes that the upper bound obtained in Theorem 2
+is minimax-optimal up to factors logarithmic in the number of items n.
+3.5. MLE: Error bounds using state-of-art method
+It is well known that the maximum-likelihood estimate of a set of parameters is asymptotically
+normal with mean 0 and covariance equal to the inverse Fisher information of the set of parameters.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+20
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+In this section we wish to show the behavior of the estimates obtained through the logistic regression
+based approach for estimating the parameters θ∗
+i = log wi in a ﬁnite sample setting.
+Model. Recall that the logistic regression based method reparameterizes the model so that given
+items i and j the probability that i defeats j is
+P(i defeats j) =
+exp(θ∗
+i −θ∗
+j)
+1 + exp(θ∗
+i −θ∗
+j).
+In order to ensure identiﬁability we also assume that P
+i θ∗
+i = 0, so that we also enforce the con-
+straint P bθi = 0. We also recall that we let b = wmax/wmin. Similarly, we let eb := θ∗
+max −θ∗
+min and
+enforce the constraint that bθmax −bθmin ≤eb
+′ where eb ≤eb
+′. For simplicity we assume that eb
+′ =eb.
+Finally, recall that we are given m i.i.d. observations. We take l ∈{1,2,...,n} and let vl to be the
+outcome of the lth comparison. Furthermore, if during the lth competition item i competed against
+item j we take xl = ei −ej where ei is the standard basis vector with entries that are all zero except
+for the ith entry, which equals one. Note that in this context the ordering of the competition does
+matter. Finally, we deﬁne the inner-product between two vectors x,y ∈Rn to be ⟨x,y⟩= Pn
+i=1 xiyi.
+Therefore, under the BTL model with parameters θ∗we have that
+vl =
+(
+1
+with probability exp⟨xl,θ∗⟩/(1 + exp⟨xl,θ∗⟩)
+0
+otherwise.
+Now the estimation procedure is of the form
+bθ = arg min
+θ
+Lm(θ,v,x)
+where
+Lm(θ,v,x) = 1
+m
+n
+X
+l=1
+log(1 + exp⟨xl,θ⟩) −vl⟨xl,θ⟩
+(9)
+Results. Before proceeding we recall that ∥θ∗∥2 ≤eb√n. With that in mind we have the following
+theorem.
+Theorem 4. Suppose that we have m > 12nlog n observations of the form (i,j,y) where i and
+j are drawn uniformly at random from [n] and y is Bernoulli with parameter exp(θ∗
+i −θ∗
+j)/(1 +
+exp(θ∗
+i −θ∗
+j)). Then, we have with probability at least 1 −2/n
+∥bθ −θ∗∥≤6(1 + b)2
+b
+r
+n2 log n
+m
+.
+With the assumption that ∥θ∗∥∞≤eb, we have ∥θ∗∥≤eb√n.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+21
+3.6. Cram´er-Rao lower bound
+The Fisher information matrix (FIM) encodes the amount of information that the observed mea-
+surements carry about the parameter of interest. The Cram´er-Rao bounds we derive in this section
+provides a lower bound on the expected squared Euclidean norm E[∥˜π −π∥2] of any unbiased
+estimator and is directly related to the (inverse of) Fisher information matrix.
+Denote the log-likelihood function as
+ℓ(˜π|a) =
+X
+(i,j)∈E
+log f(aij,aji|˜π) , where
+f(aij,aji|˜π) =
+
+˜πj
+˜πi + ˜πj
+kijaij
+˜πi
+˜πi + ˜πj
+kijaji ,
+and kij is the number of times the pair (i,j) was compared. The Fisher information matrix with
+the BTL weights ˜π is deﬁned as F(˜π) ∈Rn×n with
+F(˜π)ij = Ea
+h
+−∂2ℓ(˜π|a)
+∂˜πi∂˜πj
+i
+=
+
+
+
+
+
+P
+i′∈∂i
+kii′
+(˜πi+˜πi′)2
+˜πi′
+˜πi
+if i = j ,
+−
+kij
+(˜πi+˜πj)2
+if (i,j) ∈E ,
+0 otherwise .
+This follows from the fact that
+∂ℓ(˜π|a)
+∂˜πi
+=
+X
+i′∈∂i
+−kii′(aii′ + ai′i)
+˜πi + ˜πi′
++ kii′ai′i
+˜πi
+, and
+∂2ℓ(˜π|a)
+∂˜πi∂˜πj
+=
+
+
+
+
+
+P
+i′∈∂i kii′
+
+1
+(˜πi+˜πi′)2 −
+ai′i
+(˜πi)2
+
+if i = j ,
+kij
+(˜πi+˜πj)2
+if (i,j) ∈E ,
+0 otherwise .
+Let π denote our estimate of the weights. Applying the Cram´er-Rao bound (Rao 1945), we get the
+following lower bound for all unbiased estimators π:
+E[∥π −˜π∥2] ≥Trace(F(˜π)−1)
+This bound depends on ˜π and the graph structure. Although a closed form expression is diﬃcult
+to get and Rank Centrality as well as the ML estimate is biased, we compare our numerical
+experiments with a numerically computed Cram´er-Rao bound on the same graph and the same
+weights ˜π.
+3.6.1. Numerical comparisons
+In Figure 3, the average normalized root mean squared error
+(RMSE) is shown as a function of various model parameters. We ﬁxed the control parameters as
+k = 32, n = 400, d = 60 and b = 10 with pairs assigned according to Erd¨os-Renyi graph G(n,d/n).
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+22
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+ 0.01
+ 0.1
+ 1
+ 1
+ 10
+ 100
+Rank Centrality
+ML estimate
+Cramer-Rao bound
+RMSE
+k
+ 0.01
+ 0.1
+ 1
+ 0.01
+ 0.1
+ 1
+Rank Centrality
+ML estimate
+Cramer-Rao bound
+d/n
+ 0.01
+ 0.1
+ 1
+ 10
+ 100
+ 1000
+ 10000
+ 100000
+Rank Centrality
+ML estimate
+Cramer-Rao bound
+b
+Figure 3
+Comparisons of Rank Centrality, the ML estimator, and the Cram´er-Rao bound. All three lines are
+almost indistinguishable for all ranges of model parameters.
+Each point in the ﬁgure is averaged over 20 random instances S. Let ˜π(i) be the resulting estimate
+at i-th experiment, then
+RMSE =
+1
+|S|
+X
+i∈S
+∥π(i) −˜π∥
+∥˜π∥
+(10)
+For all ranges of model parameters k, d, and b, RMSE achieved using Rank Centrality is almost
+indistinguishable from that of the ML estimate and also the Cram´er-Rao bound (CRB).
+CRB provides a lower bound on the expected mean squared error for unbiased estimators.
+Although we are plotting average root mean squared error, as opposed to average mean squared
+error, we do not expect any estimator to achieve RMSE better than the CRB as long as there is a
+concentration.
+The ML estimator in (7) with λ = 0 ﬁnds an estimate π = e
+ˆθ that maximizes the log-likelihood,
+and in general ML estimate does not coincide with the minimum mean squared error estimator.
+From the ﬁgure we see that it intact achieves the minimum mean squared error and matches the
+CRB.
+What is perhaps surprising is that for all the parameters that we experimented with, the RMSE
+achieved by Rank Centrality is almost indistinguishable with that of ML estimate and the CRB.
+Thus, coupled with the minimax lower-bounds, one cannot do better than Rank Centrality under
+the BTL model.
+3.7. Discussion of Results
+In this section we review the results that we have established above. In Theorem 1 we establish
+upper bounds on the error when samples are drawn from an arbitrary graph and when each edge is
+compared k times. This bound depends on the spectral gap of the underlying graph, which shows
+that graphs with a larger spectral gap achieve smaller estimation error. For the case of Erd¨os-Renyi
+graphs, Theorem 2 provides an upper bound on the error achieved by Rank Centrality. In Theorem 3
+we prove that the bound is near-optimal, up to logarithmic factors, in an information theoretic
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+23
+sense. That is, no method, regardless of computational power can achieve better performance on
+the same statistical model. For a tighter analysis of the optimality of Rank Centrality, we provide
+numerical experiments under the BTL model and compare it to the Cramer Rao lower-bound
+established in Section 3.6. Comparisons with the Cramer-Rao bound in Figure 3 suggests that the
+error achieved by Rank Centrality is indistinguishable from the fundamental Cramer-Rao lower
+bound, and hence exactly optimal for a certain class of estimators.
+For completeness, we further provide an analysis of the error achieved by the MLE in Theorem 4.
+Building upon our analysis, Hajek et al. (2014) shows that MLE is near order-optimal, just like
+Rank Centrality.
+Finally, we compare the computational cost of Rank Centrality versus the MLE. While it is dif-
+ﬁcult to make an exact, theoretical, comparison, we nevertheless compare their computational cost
+by means of popular implementations on a common computation platform. For Rank Centrality,
+the implementation is based on using eigs function MATLAB. For MLE, the implementation is
+based on the basic ﬁrst-order method. In a collection of experiments (with varying problem param-
+eters), Rank Centrality converges an order of magnitude faster than the MLE. It should be noted
+that the ﬁrst-order method has tunable step-size and our implementation did not attempt to opti-
+mize this selection when varying problem parameters. Finally, MLE can be viewed as a standard
+logistic regression. Therefore, the lm function of R-package can be used to solve for MLE. Again,
+in the same computation environment, the resulting MLE is order of magnitude slower compared
+to the MATLAB implementation of Rank Centrality, but faster than the ﬁrst-order method.
+4. Proofs
+We may now present proofs of Theorems 1 and 2. We ﬁrst present a proof of convergence for general
+graphs in Theorem 1. This result follows from Lemma 2 that we state below, which shows that our
+algorithm enjoys convergence properties that result in useful upper bounds. The lemma is made
+general and uses standard techniques of spectral theory. The main diﬃculty arises in establishing
+that the Markov chain P satisﬁes certain properties that we will discuss subsequently. Given the
+proof for the general graph, Theorem 2 follows by showing that in the case of Erd¨os-Renyi graphs,
+certain spectral properties are satisﬁed with high probability.
+The next set of proofs involve the information-theoretic lower bound stated in Theorem 3 and
+the proof of Theorem 4 establishing the ﬁnite sample error analysis of MLE.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+24
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+4.1. Proof of Theorem 1: General graph
+In this section, we characterize the error rate achieved by our ranking algorithm. Given the random
+Markov chain P, where the randomness comes from the outcome of the comparisons, we will show
+that it does not deviate too much from its expectation ˜P, where we recall that ˜P is deﬁned as
+˜Pij =
+(
+1
+dmax
+wj
+wi+wj
+if i̸ = j ,
+1 −
+1
+dmax
+P
+ℓ̸=i
+wℓ
+wi+wℓ
+if i = j
+for all (i,j) ∈E and ˜Pij = 0 otherwise.
+Recall from the discussion following equation (1) that the transition matrix P used in our ranking
+algorithm has been carefully chosen such that the corresponding expected transition matrix ˜P
+has two important properties. First, the stationary distribution of ˜P, which we denote with ˜π is
+proportional to the weight vectors w. Furthermore, when the graph is connected and has self loops
+(which at least one exists), this Markov chain is irreducible and aperiodic so that the stationary
+distribution is unique. The next important property of ˜P is that it is reversible–˜π(i) ˜Pij = ˜π(j) ˜Pji.
+This observation implies that the operator ˜P is symmetric in an appropriately deﬁned inner product
+space. The symmetry of the operator ˜P will be crucial in applying ideas from spectral analysis to
+prove our main results.
+Let ∆denote the ﬂuctuation of the transition matrix around its mean, such that ∆≡P −˜P. The
+following lemma bounds the deviation of the Markov chain after t steps in terms of two important
+quantities: the spectral radius of the ﬂuctuation ∥∆∥2 and the spectral gap 1 −λmax( ˜P), where
+λmax( ˜P) ≡max{λ2( ˜P),−λn( ˜P)} .
+Since λ( ˜P)’s are sorted, λmax( ˜P) is the second largest eigenvalue in absolute value.
+Lemma 2. For any Markov chain P = ˜P + ∆with a reversible Markov chain ˜P, let pt be the
+distribution of the Markov chain P when started with initial distribution p0. Then,
+pt −˜π
+
+∥˜π∥
+≤ρt ∥p0 −˜π∥
+∥˜π∥
+r
+˜πmax
+˜πmin
++
+1
+1 −ρ∥∆∥2
+r
+˜πmax
+˜πmin
+.
+(11)
+where ˜π is the stationary distribution of ˜P, ˜πmin = mini ˜π(i), ˜πmax = maxi ˜π(i), and ρ = λmax( ˜P) +
+∥∆∥2
+p
+˜πmax/˜πmin.
+The above result provides a general mechanism for establishing error bounds between an estimated
+stationary distribution π and the desired stationary distribution ˜π. It is worth noting that the
+result only requires control on the quantities ∥∆∥2 and 1 −ρ. We may now state two technical
+lemmas that provide control on the quantities ∥∆∥2 and 1 −ρ, respectively.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+25
+Lemma 3. For some constant C ≥8, the error matrix ∆= P −˜P satisﬁes
+∥∆∥2 ≤C
+r
+log n
+k dmax
+with probability at least 1 −4n−C/8.
+The next lemma provides our desired bound on 1 −ρ.
+Lemma 4. If ∥∆∥2 ≤C
+p
+log n/(kdmax) and k ≥4C2b5dmax log n(1/dminξ)2, then
+1 −ρ ≥ξdmin
+b2dmax
+.
+Proof of Theorem 1. With the above stated Lemmas, we shall proceed with the proof of Theorem 1.
+When there is a positive spectral gap such that ρ < 1, the ﬁrst term in (11) vanishes as t grows.
+The rest of the ﬁrst term is bounded and independent of t. Formally, we have
+˜πmax/˜πmin ≤b , ∥˜π∥≥1/√n ,
+and ∥p0 −˜π∥≤2 ,
+by the assumption that maxi,j wi/wj ≤b and the fact that ˜π(i) = wi/(P
+j wj). Hence, the error
+between the distribution at the tth iteration pt and the true stationary distribution ˜π is dominated
+by the second term in equation (11). Substituting the bounds in Lemma 3 and Lemma 4, the
+dominant second term in equation (11) is bounded by
+lim
+t→∞
+pt −˜π
+
+∥˜π∥
+≤C b5/2
+ξdmin
+r
+dmax log n
+k
+with
+probability
+at
+least
+1 −4n−C/8.
+In
+fact,
+we
+only
+need
+t = Ω(log n + log b +
+log(dmax log n/(d2
+minkξ2))) to ensure that the above bound holds up to a constant factor. This
+ﬁnishes the proof of Theorem 1. Notice that in order for this result to hold, we need k ≥
+4C2b5dmax log n(1/dminξ)2 for Lemma 4.
+4.1.1. Proof of Lemma 2.
+Due to the reversibility of ˜P, we can view it as a self-adjoint
+operator on an appropriately deﬁned inner product space. This observation allows us to apply the
+well-understood spectral analysis of self-adjoint operators. To that end, deﬁne an inner product
+space L2(˜π) as a space of n-dimensional vectors, Rn, endowed with
+⟨a,b⟩˜π =
+n
+X
+i=1
+ai˜πibi .
+Similarly, we deﬁne ∥a∥˜π =
+p
+⟨a,a⟩˜π as the 2-norm in L2(˜π). An operator (matrix) A is self-adjoint
+with respect to L2(π) if ⟨u,Av⟩˜π = ⟨Au,v⟩˜π for all u,v ∈Rn. For a self-adjoint operator A in
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+26
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+L2(˜π), we deﬁne ∥A∥˜π,2 = maxa ∥Aa∥˜π/∥a∥˜π as the operator norm. These norms are related to the
+corresponding norms in the Euclidean space through the following inequalities.
+p
+˜πmin ∥a∥≤∥a∥˜π ≤
+p
+˜πmax ∥a∥,
+(12)
+r
+˜πmin
+˜πmax
+∥A∥2 ≤∥A∥˜π,2 ≤
+r
+˜πmax
+˜πmin
+∥A∥2 .
+(13)
+It is easy to check that, a reversible Markov chain ˜P is self-adjoint in L2(˜π) due to the detailed-
+balanced condition, where ˜π is the unique stationary distribution of ˜P.
+Consider symmetrized version of ˜P, deﬁned as S = ˜Π1/2 ˜P ˜Π−1/2, where ˜Π is a diagonal matrix
+with ˜Πii = ˜π(i). Again, reversibility of ˜P makes S symmetric. It can be veriﬁed that ˜P and S have
+the same set of eigenvalues. By Perron-Frobenius theorem, the eigenvalues are in [−1,1] with largest
+being equal to 1. Let they be denoted as 1 = λ1 ≥λ2 ≥... ≥λn ≥−1, and let λmax = max{|λn|,λ2}.
+Let ui be the left eigenvector of S corresponding to λi for 1 ≤i ≤n. Then the ith left eigenvector
+of ˜P is given by vi = ˜Π1/2ui. Since the ﬁrst left eigenvector of ˜P is the stationary distribution,
+i.e. v1 = ˜π, we have that u1(i) = ˜π(i)1/2 or ˜Π−1/2u1 = 1. Finally, deﬁne rank-1 projection of S as
+S1 = λ1u1uT
+1 = u1uT
+1 and let ˜P1 = ˜Π−1/2S1 ˜Π1/2.
+Our interest is in Markov chain P = ˜P + ∆and iterates obtained from it pT
+t = pT
+t−1P. Then,
+pT
+t −˜πT = (pt−1 −˜π)T( ˜P + ∆) + ˜πT∆.
+(14)
+Using the fact that (pℓ−˜π)T ˜Π−1/2u1 = (pℓ−˜π)T1 = 0 for any probability distribution pℓ, we get
+(pℓ−˜π)T ˜P1 = (pℓ−˜π)T ˜Π−1/2u1λ1uT
+1 ˜Π1/2 = 0. Then, from (14) we get
+pT
+t −˜πT = (pt−1 −˜π)T( ˜P −˜P1 + ∆) + ˜πT∆.
+By deﬁnition of ˜P1, it follows that ∥˜P −˜P1∥˜π,2 = ∥S −S1∥2 = λmax. Let ρ = λmax + ∥∆∥˜π,2, then
+∥pt −˜π∥˜π ≤∥pt−1 −˜π∥˜π(∥˜P −˜P1∥˜π,2 + ∥∆∥˜π,2) + ∥˜πT∆∥˜π
+≤ρt∥p0 −˜π∥˜π +
+t−1
+X
+ℓ=0
+ρt−1−ℓ∥˜πT∆∥˜π .
+Dividing each side by ∥˜π∥and applying the bounds in (12) and (13), we get
+∥pt −˜π∥
+∥˜π∥
+≤ρt
+r
+˜πmax
+˜πmin
+∥p0 −˜π∥
+∥˜π∥
++
+t−1
+X
+ℓ=0
+ρt−1−ℓ
+r
+˜πmax
+˜πmin
+∥˜πT∆∥
+∥˜π∥
+.
+This ﬁnishes the proof of the desired claim.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+27
+4.1.2. Proof of Lemma 3.
+Our interest is in bounding ∥∆∥2. Now ∆= P −˜P so that for
+1 ≤i,j ≤n,
+∆ij =
+1
+kdmax
+Cij,
+(15)
+where Cij is distributed as per B(k,pij)−kpij if (i,j) ∈E and Cij = 0 otherwise. Here B(k,pij) is a
+Binomial random variable with parameter k and pij ≡
+wj
+wi+wj . It should be noted that Cij +Cji = 0
+and Cij are independent across all the pairs with i < j. For 1 ≤i ≤n
+∆ii = Pii −˜Pii =
+ 1 −
+X
+j̸=i
+Pij
+
+−
+ 1 −
+X
+j̸=i
+˜Pij
+
+=
+X
+j̸=i
+˜Pij −Pij = −
+X
+j̸=i
+∆ij.
+(16)
+Given the above dependence between diagonal and oﬀ-diagonal entries, we shall bound ∥∆∥2 as
+follows: let D be the diagonal matrix with Dii = ∆ii for 1 ≤i ≤n and ¯∆= ∆−D. Then,
+∥∆∥2 = ∥D + ¯∆∥2 ≤∥D∥2 + ∥¯∆∥2.
+(17)
+We shall establish the bound of O
+ q
+log n
+kdmax
+
+for both ∥D∥2 and ∥¯∆∥2 to establish the Lemma 3.
+Bounding ∥D∥2. Since D is a diagonal matrix, ∥D∥2 = maxi |Dii| = maxi |∆ii|. For a given ﬁxed
+i, as per (15)-(16), kdmax∆ii can be expressed as summation of at most kdmax independent, zero-
+mean random variables taking values in the range of at most 1. Therefore, by an application of
+Azuma-Hoeﬀding’s inequality, it follows that
+P
+ kdmax|∆ii| > t
+
+≤2exp
+ −
+t2
+2kdmax
+
+.
+(18)
+By selection of t = C√kdmax log n for appropriately large constant, it follows from above display
+that
+P
+ 
+∥D∥2 ≥C
+r
+log n
+kdmax
+!
+≤
+n
+X
+i=1
+P
+
+|∆ii| > C
+r
+log n
+kdmax
+
+(19)
+≤2n−C2/2+1
+(20)
+Bounding ∥¯∆∥2 when dmax ≤log n. Towards this goal, we shall make use of the following standard
+inequality: for any square matrix M,
+∥M∥2 ≤
+p
+∥M∥1∥M∥∞,
+(21)
+where ∥M∥1 = maxi
+P
+j |Mij| and ∥M∥∞= ∥M T∥1. In words, ∥M∥2
+2 is bounded above by product
+of the maximal row-sum and column-sum of absolute values of M. Since ∆ij and ∆ji are identically
+distributed and entries along each row (and hence each column) are independent, it is suﬃcient
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+28
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+to obtain a high probability bound (≥1 −1/poly(n)) for maximal row-sum of absolute values of
+¯∆; exactly the same bound will apply for column-sum using; and using union bound the desired
+result will follow.
+To that end, consider the sum of the absolute values of the ith row-sum of ¯∆and for simplicity
+let us denote it by Ri. Then,
+Ri =
+1
+kdmax
+X
+j̸=i
+|Cij|,
+(22)
+where recall that Cij = Xij −kpij with Xij an independent Binomial random variable with param-
+eters k,pij. Therefore, for any s > 0,
+P
+ Ri > s
+
+= P
+  X
+j∈∂i
+|Cij| > kdmaxs
+
+≤
+X
+j∈∂i
+X
+ξj∈{−1,+1}
+P
+ X
+j
+ξjCi,j > kdmaxs
+
+by the union bound
+≤
+X
+j∈∂i
+X
+ξj∈{−1,+1}
+exp
+−2k2d2
+maxs2
+dik
+
+where the last inequality follows from Hoeﬀding’s bound and the fact that Xij = Pk
+j=1(yij −pij)
+where yij are Bernoulli random variables with mean pij. Now, the number of terms in the sum is
+2di, the summand is constant, and di ≤dmax. Thus, the last inequality is upper-bounded by
+X
+j∈∂i
+X
+ξj∈{−1,+1}
+exp
+−2k2d2
+maxs2
+dik2
+
+≤exp
+ −2kdmaxs2 + di ln2
+
+By an application of the union bound
+P
+ ∥¯∆∥2 ≥s
+
+≤2nP(Ri ≥s)
+≤2nexp
+ −2kdmaxs2 + dmax ln2
+
+.
+Now, if we set s = C
+2
+q
+log n+dmax ln 2
+kdmax
+we have that
+P
+ 
+∥¯∆∥2 ≥C/2
+r
+log n + dmax ln2
+kdmax
+!
+≤2n−(C2/2−1)
+Finally, using the assumption that dmax ≤log n yields
+∥¯∆∥2 ≤C
+r
+log n
+kdmax
+with probability at least 1 −2n−C2/2+1.
+Bounding ∥¯∆∥2 when dmax ≥log n. Towards this goal, we shall make use of the recent results on
+the concentration of the sum of independent random matrices. For completeness, we recall the
+following result (Tropp 2011).
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+29
+Lemma 5 (Theorem 6.2 (Tropp 2011)). Consider a ﬁnite sequence { ˜Zij}i<j of independent
+random self-adjoint matrices with dimensions n × n. Assume that
+E[ ˜Zij] = 0
+and
+E( ˜Zij)p ⪯p!
+2 Rp−2( ˜Aij)2
+, for p = 2,3,4,...
+Deﬁne ˜σ2 ≡∥P
+i>j( ˜Aij)2∥2. Then, for all t ≥0,
+P
+
+X
+i<j
+˜Zij
+2 ≥t
+
+≤2nexp
+n −t2/2
+˜σ2 + Rt
+o
+.
+We wish to prove concentration results on ¯∆= ∆−D = P
+i<j Zij where
+Zij = (eieT
+j −ejeT
+i )(Pij −˜Pij)
+for (i,j) ∈E ,
+and Zij = 0 if i and j are not connected. The Zij’s as deﬁned are zero-mean and independent,
+however, they are not self-adjoint. Nevertheless, we can symmetrize it by applying the dilation
+ideas presented in the paper (Tropp 2011):
+˜Zij ≡
+
+0
+Zij
+(Zij)T
+0
+
+.
+Now we can apply the above lemma to these self-adjoint, independent and zero-mean random
+matrices.
+To ﬁnd R and ˜Aij’s that satisfy the conditions of the lemma, ﬁrst consider a set of matrices
+{Aij}i<j such that ˜Zij = ∆ijAij and
+Aij =
+
+0
+eieT
+j −ejeT
+i
+ejeT
+i −eieT
+j
+0
+
+,
+if (i,j) ∈E and zero otherwise. In the following, we show that the condition on p-th moment is
+satisﬁed with R = 1/
+p
+kd2
+max and ( ˜Aij)2 = (1/(kd2
+max))(Aij)2 such that
+E
+
+( ˜Zij)p
+⪯p!
+2
+
+1
+p
+kd2
+max
+p−2
+1
+kd2
+max
+(Aij)2 .
+(23)
+We can also show that ˜σ2 ≡∥P
+i<j( ˜Aij)2∥2 = 1/(kdmax), since
+X
+i<j
+( ˜Aij)2 =
+X
+i<j
+1
+kd2
+max
+I((i,j)∈E)
+eieT
+i + ejeT
+j
+0
+0
+eieT
+i + ejeT
+j
+
+=
+1
+kd2
+max
+n
+X
+i=1
+di
+
+eieT
+i
+0
+0
+eieT
+i
+
+,
+where I(·) is the indicator function. Using di ≤dmax and structure of matrices in the summation in
+the last term, it can be easily veriﬁed that the ∥·∥2 norm of the resulting matrix is at most 1/kdmax.
+Now we can apply the results of Lemma 5 to obtain a bound on
+P
+i<j Zij
+2 =
+P
+i<j ˜Zij
+2:
+P
+ 
+X
+i<j
+Zij
+ ≥t
+!
+≤2nexp
+ 
+−t2/2
+(1/kdmax) + (t/
+p
+kd2
+max)
+!
+.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+30
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+Under our assumption that dmax ≥log n and choosing t = C
+p
+log n/(kdmax), the tail probability is
+bounded by 2nexp{−(C2 log n/2)(1/(1 + C))}. Hence, we get the desired bound that ∥∆−D∥2 ≤
+C
+p
+log n/(kdmax) with probability at least 1 −2n−C/4+1, where we have used the fact that C ≥8.
+Now we are left to prove that the condition (23) holds. A quick calculation shows that
+(Aij)p =
+(
+(Aij)2
+for p even ,
+Aij
+for p odd .
+(24)
+Furthermore, we can verify that the eigenvalues of Aij are either 1 or −1. Hence, (Aij)p ⪯(Aij)2
+for all p ≥1. Thus, given the fact that ˜Zij = ∆ijAij we have that E[( ˜Zij)p] = E[∆p
+ij(Aij)p] ⪯
+|E[∆p
+ij]|(Aij)2 for all p. This fact follows since for any constant c ∈R, cAij ⪯|c|(Aij)2 and c(Aij)2 ⪯
+|c|(Aij)2. Hence, coupling these observation with the identities presented in equation (24) we have
+E
+
+( ˜Zij)p
+⪯E
+
+|∆ij|p
+(Aij)2 ,
+where we used Jensen’s inequality for |E[∆p
+ij]| ≤E[|∆ij|p].
+Next, it remains to construct a bound on E|∆p
+ij|:
+E
+
+|∆ij|p
+≤p!
+2
+
+1
+p
+kd2
+max
+p
+.
+(25)
+From (15), we have ∆ij = Pij −˜Pij =
+1
+kdmax Cij. Therefore,
+E
+
+|∆ij|p
+= (1/kdmax)p E
+
+|Cij|p
+.
+Applying Azuma-Hoeﬀding’s inequality to Cij, we have that
+P
+
+1
+kdmax
+|Cij| ≥t
+
+≤2exp(−2t2d2
+maxk) .
+That is,
+1
+kdmax Cij is a sub-Gaussian random variable. And therefore, it follows that for p ≥2,
+E
+h
+1
+kdmax
+Cij
+pi
+≤p!
+2
+
+1
+p
+kd2
+max
+p
+.
+This proves the desired bound in (25).
+4.1.3. Proof of Lemma 4
+By Lemma 3, we have for some C ≥8 that
+1 −ρ = 1 −λmax( ˜P) −∥∆∥2
+√
+b
+≥1 −λmax( ˜P) −C
+p
+blog n/(kdmax)
+with probability at least 1 −4n−C/8. In this section we prove that there is a positive gap:
+(dmin/2b2 dmax)ξ. We will ﬁrst prove that
+1 −λmax( ˜P) ≥ξ dmin
+b2 dmax
+.
+(26)
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+31
+This implies that we have the desired eigengap for k ≥4C2b5dmax log n(1/dminξ)2 such that
+C
+p
+blog n/(kdmax) ≤(dmin/2b2 dmax)ξ.
+To prove (26), we use comparison theorems (Diaconis and Saloﬀ-Coste 1993), which bound the
+spectral gap of the Markov chain ˜P of interest using a few comparison inequalities related to a more
+tractable Markov chain, which is the simple random walk on the graph. We deﬁne the transition
+matrix of the simple random walk on the graph G as
+Qij = 1
+di
+for (i,j) ∈E ,
+and the stationary distribution of this Markov chain is µ(i) = di/P
+j dj. Further, since the detailed
+balance equation is satisﬁed, Q is a reversible Markov chain. Formally, µ(i)Qij = 1/P
+ℓdℓ= µ(j)Qji
+for all (i,j) ∈E.
+The following key lemma is a special case of a more general result (Diaconis and Saloﬀ-Coste
+1993) proved for two arbitrary reversible Markov chains, which are not necessarily deﬁned on the
+same graph. For completeness, we provide a proof of this lemma later in this section, following a
+technique similar to the one in (Boyd et al. 2005) used to prove a similar result for a special case
+when the stationary distribution is uniform.
+Lemma 6. Let Q,µ and ˜P, ˜π be reversible Markov chains on a ﬁnite set [n] representing ran-
+dom walks on a graph G = ([n],E), i.e.
+˜P(i,j) = 0 and Q(i,j) = 0 if (i,j) /∈E. For α ≡
+min(i,j)∈E{˜π(i) ˜Pij/µ(i)Qij} and β ≡maxi{˜π(i)/µ(i)},
+1 −λmax( ˜P)
+1 −λmax(Q) ≥α
+β .
+(27)
+By assumption, we have ξ ≡1−λmax(Q). To prove that there is a positive spectral gap for the ran-
+dom walk of interest as in (26), we are left to bound α and β. We have µ(i)Qij = 1/P
+ℓdℓ≤1/|E|
+and µ(i) ≥(di/|E|). Also, by assumption that maxi,j wi/wj ≤b, we have ˜π(i) ˜Pij = wiwj/(dmax(wi +
+wj)P
+ℓwℓ) ≥1/(bndmax) and ˜π(i) = wi/P
+ℓwℓ≤b/n. Then, α = min(i,j)∈E{˜π(i) ˜Pij/µ(i)Qij} ≥
+|E|/(nbdmax) and β = maxi{˜π(i)/µ(i)} ≤b|E|/ndmin. Hence, α/β ≥dmin/(dmaxb2) and this ﬁnishes
+the proof of the bound in (26).
+4.1.4. Proof of Lemma 6
+Since 1 −λmax = min{1 −λ2,1 + λn}, we will ﬁrst show that
+1−λ2(Q) ≤(β/α)(1−λ2( ˜P)) and 1+λn(Q) ≤(β/α)(1+λn( ˜P)). The desired bound in (27) imme-
+diately follows from the fact that min{a,b} ≤min{a′,b′} if a ≤b and a′ ≤b′.
+A reversible Markov chain Q is self-adjoint in L2(µ). Then, the second largest eigenvalue λ2(Q)
+can be represented by the Dirichlet form E deﬁned as
+EQ(φ,φ) ≡
+
+(I −Q)φ,φ
+
+µ = 1
+2
+X
+i,j
+(φ(i) −φ(j))2µ(i)Q(i,j) .
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+32
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+For λn(Q), we use
+F Q(φ,φ) ≡
+
+(I + Q)φ,φ
+
+µ = 1
+2
+X
+i,j
+(φ(i) + φ(j))2µ(i)Q(i,j) .
+Following the usual variational characterization of the eigenvalues (see, for instance, (Horn and
+Johnson 1985), p. 176) gives
+1 −λ2(Q) = min
+φ⊥1
+EQ(φ,φ)
+⟨φ,φ⟩µ
+,
+(28)
+1 + λn(Q) = min
+φ
+F Q(φ,φ)
+⟨φ,φ⟩µ
+.
+(29)
+By the deﬁnitions of α and β, we have ˜π(i,) ˜P(i,j) ≥αµ(i)Q(i,j) and ˜π(i) ≤βµ(i) for all i and
+j, which implies
+E
+˜
+P(φ,φ) ≥αEQ(φ,φ) ,
+F
+˜
+P(φ,φ) ≥αF Q(φ,φ) ,
+⟨φ,φ⟩˜π ≤β⟨φ,φ⟩µ .
+Together with (28), this implies 1 −λ2(Q) ≤(β/α)(1 −λ2( ˜P)) and 1 + λn(Q) ≤(β/α)(1 + λn( ˜P)).
+This ﬁnishes the proof of the desired bound.
+4.2. Proof of Theorem 2: Random sampling
+Given the proof of Theorem 1 in the previous section, we only need to prove that for an Erd¨os-Renyi
+graph with average degree d ≥C′ log n the following are true:
+(1/2)d ≤di ≤(3/2)d ,
+(30)
+1/2 ≤ξ .
+(31)
+Then, it follows that κ ≤3 and (1/2)d ≤dmin ≤dmax ≤(3/2)d. By Theorem 1, it follows that
+∥π −˜π∥
+∥˜π∥
+≤6Cb5/2
+r
+log n
+k d ,
+with probability at least 1 −4n−C/8 for some positive constant C ≥8 and for kd ≥288C2b5 log n
+We can apply standard concentration inequalities to establish equation (30). Apply Chernoﬀ’s
+inequality, we get P
+ |di −d| > (1/2)d
+
+≤2e−d/16. Hence, for d ≥C′ log n, equation (30) is true with
+probability at least 1 −2n−C′/16.
+Finally, we ﬁnish the proof with a result on the lower bound of the spectral gap ξ = 1 −
+λmax(D−1B).
+Lemma 7. Consider a random graph G drawn from the Er¨dos-Renyi distribution G(n,d/n). Then
+if d ≥10C2 log n, we have ξ ≥1/2 with probability at least 1 −n−Cn/(n−d)/8
+The proof of this result can be found in Appendix B.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+33
+4.3. Proof of Theorem 3: Information-theoretic lower bound
+In this section, we prove Theorem 3 using an information-theoretic method that allows us to reduce
+the stochastic inference problem into a multi-way hypothesis testing problem.
+This estimation problem can be reduced to the following hypothesis testing problem. Consider a
+set {˜π(1),..., ˜π(M(δ))} of M(δ) vectors on the standard orthogonal simplex which are separated by
+δ, such that ∥˜π(ℓ1) −˜π(ℓ2)∥≥δ for all ℓ1̸ = ℓ2. To simplify the notations, we are going to use M as a
+shorthand for M(δ). Suppose we choose an index L ∈{1,...,M} uniformly at random. Then, we
+are given noisy outcomes of pair-wise comparisons with w = ˜π(L) from the BTL model. We use X to
+denote this set of observations. Let π be the estimation produced by an algorithm using the noisy
+observations. Given this, the best estimation of the “index” is ˆL, where ˆL = arg minℓ∈[M] ∥π −˜π(ℓ)∥.
+By construction of our packing set, when we make a mistake in the hypothesis testing, our
+estimate is at least δ/2 away from the true weight ˜π(L). Precisely, ˆL̸ = L implies that ∥π −˜π(L)∥≥
+δ/2. Then,
+E
+
+∥π −˜π(L)∥
+
+≥δ
+2P
+ ˆL̸ = L
+
+≥δ
+2
+n
+1 −I(ˆL;L) + log 2
+log M
+o
+,
+(32)
+where I(·;·) denotes the mutual information between two random variables and the second inequal-
+ity follows from Fano’s inequality.
+These random vectors form a Markov chain L— ˜π(L) —X —π — ˆL, where X —Y —Z indicates
+that X and Z are conditionally independent given Y . Let PL,X(ℓ,x) denote the joint probability
+function, and PX|L(x|ℓ), PL(ℓ) and PX(x) denote the conditional and marginal probability functions.
+Then, by data processing inequality for a Markov chain, we get
+I(L; ˆL) ≤I(L;X)
+= EL,X
+h
+log
+ PL,X(L,X)
+PL(L)PX(X)
+i
+= 1
+M
+X
+ℓ∈[M]
+EX
+h
+log
+PX|L(X|ℓ)
+PX(X)
+i
+= 1
+M
+X
+ℓ∈[M]
+EX
+h
+log
+
+PX|L(X|ℓ)
+P
+ℓ2∈[M] PX|L(X|ℓ2)P(ℓ2)
+i
+≤1
+M
+X
+ℓ∈[M]
+X
+ℓ2∈[M]
+P(ℓ2)EX
+h
+log
+ PX|L(X|ℓ)
+PX|L(X|ℓ2)
+i
+=
+1
+M 2
+X
+ℓ1,ℓ2
+DKL
+
+PX|L(X|ℓ1)
+PX|L(X|ℓ2)
+
+,
+(33)
+where DKL(·∥·) is the Kullback-Leibler (KL) divergence and the inequality follows from the con-
+cavity of logarithm and Jensen’s inequality.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+34
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+The KL divergence between the observations coming from two diﬀerent BTL models depend on
+how we sample the comparisons. We are sampling each pair of items for comparison with probability
+d/n, and we are comparing each of these sampled pairs k times. Let Xij denote the outcome of k
+comparisons for a sampled pair of items (i,j). To simplify notations, we drop the subscript X|L
+whenever it is clear from the context. Then,
+DKL
+ P(X|ℓ1)
+P(X|ℓ2)
+
+= d
+n
+X
+1≤i<j≤n
+DKL
+ P(Xij|ℓ1)
+P(Xij|ℓ2)
+
+≤2n2 k d
+(˜π(ℓ1) −˜π(ℓ2)2 ,
+(34)
+where in the last inequality we used the fact that
+DKL
+ P(Xij|ℓ1)∥P(Xij|ℓ2)
+
+≤k
+ ˜π(ℓ2)
+j
+(˜π(ℓ1)
+i
+−˜π(ℓ2)
+i
+)2 + ˜π(ℓ2)
+i
+(˜π(ℓ1)
+j
+−˜π(ℓ2)
+j
+)2
+˜π(ℓ2)
+i
+˜π(ℓ2)
+j
+ ˜π(ℓ1)
+i
++ ˜π(ℓ1)
+j
+
+≤2kn2
+(˜π(ℓ1)
+i
+−˜π(ℓ2)
+i
+)2 + (˜π(ℓ1)
+j
+−˜π(ℓ2)
+j
+)2
+,
+for k independent trials of Bernoulli random variables, and ˜π(ℓ)
+i
+≥1/(2n) for all i and ℓwhich
+follows from our construction of the packing set in Lemma 8 and our choice of δ.
+The remainder of the proof relies on the following key technical lemma, on the construction of
+a suitable packing set that has enough number of entries which are reasonably separated. This is
+proved in Section 4.3.1.
+Lemma 8. For n ≥90 and for any positive δ ≤1/2
+√
+10n, there exists a set of n-dimensional vectors
+{˜π(1),..., ˜π(M)} with cardinality M = en/128 such that P
+i ˜π(ℓ)
+i
+= 1 and
+1 −2δ
+√
+10n
+n
+≤˜π(ℓ)
+i
+≤1 + 2δ
+√
+10n
+n
+,
+for all i ∈[n] and ℓ∈[M], and
+δ ≤∥˜π(ℓ1) −˜π(ℓ2)∥≤
+√
+13δ ,
+for all ℓ1̸ = ℓ2.
+Substituting this bound in Eqs. (34), (33), and (32), we get
+max
+ℓ∈[M]E[∥π −˜π(ℓ)∥] ≥E[∥π −˜π(L)∥]
+≥δ
+2
+n
+1 −3328n2kdδ2 + 128log 2
+n
+o
+.
+Choosing δ = (b −1)/(30
+√
+10(b + 1)
+√
+kdn), we know that 3328n2kdδ2 + 128log 2 ≤(1/2)n for all b
+and all n ≥682. This implies that
+max
+ℓ∈[M]E
+
+∥π −˜π(ℓ)∥
+
+≥
+(b −1)
+120(b + 1)
+√
+10kdn
+.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+35
+From Lemma 8, it follows that ∥˜π(ℓ)∥≤2/√n for all ℓ. Then, scaling the bound by 1/∥˜π(ℓ)∥, the
+normalized minimax rate is lower bounded by (b −1)/(240(b + 1)
+√
+10kd). Also, for this choice of
+δ, the dynamic range is at most b. From Lemma 8, the dynamic range is upper bounded by
+max
+ℓ,i,j
+˜π(ℓ)
+i
+˜π(ℓ)
+j
+≤1 + 2δ
+√
+10n
+1 −2δ
+√
+10n .
+This is monotonically increasing in δ for δ < 1/(2
+√
+10n). Hence, for δ ≤(b −1)/((b + 1)2
+√
+10n),
+which is always true for our choice of δ, the dynamic range is upper bounded by b. This ﬁnishes
+the proof of the desired bound on normalized minimax error rate for general b.
+4.3.1. Proof of Lemma 8
+We show that a random construction succeeds in generating a set
+of M vectors on the standard orthogonal simplex satisfying the conditions with a strictly positive
+probability. Let M = en/128 and for each ℓ∈[M], we construct independent random vectors ˜π(ℓ)
+according to the following procedure. For a positive α to be speciﬁed later, we ﬁrst draw n random
+variables uniformly from [(1 −αδ√n)/n,(1 + αδ√n))/n]. Let Y (ℓ) = [Y (ℓ)
+1 ,...,Y (ℓ)
+n ] denote this
+random vector in n dimensions. Then we project this onto the n-dimensional simplex by setting
+˜π(ℓ) = Y (ℓ) + (1/n −¯Y (ℓ))1 ,
+where ¯Y (ℓ) = (1/n)P
+i Y (ℓ)
+i
+. By construction, the resulting vector is on the standard orthogonal
+simplex: P
+i ˜π(ℓ)
+i
+= 1. Also, applying Hoeﬀding’s inequality for ¯Y (ℓ), we get that
+P
+ ¯Y (ℓ) −1
+n
+ > αδ
+√n
+
+≤2e−n/2 .
+By union bound, this holds uniformly for all ℓwith probability at least 1−2e−63n/128. In particular,
+this implies that
+1 −2αδ√n
+n
+≤˜π(ℓ)
+i
+≤1 + 2αδ√n
+n
+,
+(35)
+for all i ∈[n] and ℓ∈[M].
+Next, we use standard concentration results to bound the distance between two vectors:
+˜π(ℓ1) −˜π(ℓ2)2 =
+Y (ℓ1) −Y (ℓ2)2 −n( ¯Y (ℓ1) −¯Y (ℓ2))2
+Applying Hoeﬀding’s inequality for the ﬁrst term, we get P
+ |P
+i(Y (ℓ1)
+i
+−Y (ℓ2)
+i
+)2 −(2/3)α2δ2| ≥
+(1/2)α2δ2
+≤2e−n/32. Similarly for the second term, we can show that P
+ |P
+i(Y (ℓ1)
+i
+−Y (ℓ2)
+i
+)| ≥
+(1/4)αδ√n
+
+≤2e−n/32. Substituting these bounds, we get
+1
+10α2δ2 ≤∥˜π(ℓ1) −˜π(ℓ2)∥2 ≤13
+10α2δ2 ,
+(36)
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+36
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+with probability at least 1 −4e−n/32. Applying union bound over
+ M
+2
+
+≤en/64 pairs of vectors, we
+get that the lower and upper bound holds for all pairs ℓ1̸ = ℓ2 with probability at least 1−4e−n/64.
+The probability that both conditions (35) and (36) are satisﬁed is at least 1−4e−n/64−2e−63n/128.
+For n ≥90, the probability of success is strictly positive. Hence, we know that there exists at least
+one set of vectors that satisfy the conditions. Setting α =
+√
+10, we have constructed a set that
+satisfy all the conditions.
+4.4. Proof of Theorem 4: Finite sample analysis of MLE
+The proof of this theorem will follow in two parts. First we will show that if the gradient of the
+loss ∇Lm evaluated at θ∗is small, then the error between θ∗and bθ is also small. To that end we
+begin with a simple inequality:
+Lm(bθ) ≤Lm(θ∗).
+Let ∆= bθ −θ∗. We can add and subtract ⟨∇Lm(θ∗),∆⟩from the above equation to obtain
+Lm(θ∗+ ∆) −Lm(θ∗) −⟨∇Lm(θ∗),∆⟩≤⟨∇Lm(θ∗),∆⟩.
+Now assume ∥∇Lm(θ∗)∥2 ≤c. By the Cauchy-Schwartz inequality we have that
+Lm(θ∗+ ∆) −Lm(θ∗) −⟨∇Lm(θ∗),∆⟩≤c∥∆∥2.
+Therefore, we if we prove that
+Lm(θ∗+ ∆) −Lm(θ∗) −⟨∇Lm(θ∗),∆⟩≥µ
+2 ∥∆∥2
+2,
+(37)
+then we immediately have that ∥∆∥2 ≤2c/µ. We now proceed to establish the above inequality.
+4.4.1. Proof of Equation 37
+By Taylor’s theorem and the deﬁnition of Lm from equation 9
+for some v ∈[0,1] we have
+Lm(θ∗+ ∆) −Lm(θ∗) −⟨∇Lm(θ∗),∆⟩= 1
+2m
+m
+X
+l=1
+exp(⟨θ∗,xl⟩+ v⟨θ∗,xl⟩)
+(1 + exp(⟨θ∗,xl⟩+ v⟨θ∗,xl⟩))2 (⟨∆,xl⟩)2.
+Now, by assumption P
+i θ∗
+i = P
+i bθi = 0; and θ∗
+max −θ∗
+min and bθmax −bθmin ≤log(b) so that |⟨θ∗,xl⟩+
+v⟨θ∗,xl⟩| ≤log(b). Therefore,
+Lm(θ∗+ ∆) −Lm(θ∗) −⟨∇Lm(θ∗),∆⟩≥1
+2m
+m
+X
+l=1
+b
+(1 + b)2 (⟨∆,xl⟩)2.
+Thus, what remains is to establish a lower-bound on
+1
+m
+m
+X
+l=1
+(⟨∆,xl⟩)2.
+We appeal to the following lemma for the lower-bound.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+37
+Lemma 9. Given m > 12nlog n i.i.d. samples yl,xl we have that
+1
+m
+m
+X
+l=1
+(⟨∆,xl⟩)2 ≥1
+3n∥∆∥2
+2
+with probability at least 1 −1/n.
+Finally, we present the following lemma that establishes an upper-bound on ∥∇Lm(θ∗)∥2.
+Lemma 10. Given m observations (vl,xl) we have that
+∥∇Lm(θ∗)∥2 ≤2
+r
+log n
+m
+with probability at least 1 −1/n.
+Therefore, putting everything together we have that
+∥∆∥2 ≤6(1 + b)2/b
+r
+n2 log n
+m
+,
+which establishes the desired result.
+4.4.2. Proof of Lemma 9
+To prove this lemma we note that
+1
+m
+m
+X
+l=1
+(⟨∆,xl⟩)2 = 1
+m
+m
+X
+l=1
+∆TxlxT
+l ∆.
+Thus, it is suﬃcient to prove a lower-bound on λmin( 1
+m
+Pm
+l=1 xlxT
+l ). In order to do so we may again
+appeal to recent results on random matrix theory Tropp (2011).
+Lemma 11 (Theorem 1.4 (Tropp 2011)). Consider a ﬁnite sequence {Xk} of independent,
+random, self-adjoint matrices with dimensions d. Assume that each random matrix satisﬁes EXk =
+0 and λmax(Xk) ≤R almost surely. Then, for all t ≥0,
+P
+(
+λmax
+ X
+k
+Xk
+!
+≥t
+)
+≤d · exp
+
+−t2/2
+σ2 + Rt/3
+
+where σ2 := ∥
+X
+k
+E(X2
+k)∥,
+(38)
+and ∥X∥for a matrix X represents the operator norm of X or its larges singular value.
+In order to apply the above lemma we let Xl = xlxT
+l −2/n(I −11T/n). Therefore, the Xl are zero-
+mean, i.i.d., and symmetric. Furthermore, ∥Xl∥≤2 and EX2
+l = 4/n(I −11T/n)−4/n2(I −11T/n).
+Therefore, applying the above lemma to both Xl and −Xl yields the inequality
+P
+(
+∥
+X
+l
+Xl/m∥≥t
+)
+≤2nexp
+
+−t2/2
+4
+nm + 2t/(3m)
+
+.
+Thus, with probability at least 1 −1/n,
+∥1
+m
+X
+l
+Xl∥≤max(4
+r
+2log n
+nm ,8/3log n
+m ).
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+38
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+Hence, as long as 12nlog n < m, then
+∥1
+m
+X
+l
+Xl∥≤4
+r
+2log n
+nm ,
+with probability at least 1 −1/n.
+With the above result in hand we now have that
+∥1
+m
+m
+X
+l=1
+xlxT
+l −2
+n(I −11T/n)∥≤4
+r
+2log n
+nm .
+Therefore,
+1
+m
+m
+X
+l=1
+∆TxlxT
+l ∆≥2
+n∥∆∥2
+2(1 −2
+r
+2nlog n
+m
+),
+where we have used the fact that ∆= bθ −θ∗and P
+i bθi = P
+i θ∗
+i = 0. Recalling that, m > 12nlog n
+the above inequality can be lower bounded by
+1
+3n∥∆∥2
+2, establishing the desired result.
+4.4.3. Proof of Lemma 10
+To establish this result we will proceed by showing each individ-
+ual element of ∇Lm is upper bounded by 2
+p
+log n/(nm) with high probability. Recall that
+∇Lm = 1
+m
+m
+X
+l=1
+xl(E[Xl|xl] −Xl).
+Consequently, focusing on a single component ∇Lmk we have that
+∇Lmk = 1
+m
+m
+X
+l=1
+(xl)k(E[Xl|xl] −Xl).
+Thus, the kth component of ∇Lm is the average over m independent mean zero random variables
+that are upper-bounded by 1 and that each have variance upper-bounded by 1/n. Therefore, an
+application of Bernstein’s inequality yields
+P(|∇Lmk| ≥t) ≤2exp
+
+−t2
+2
+nm + 2t
+3m
+
+.
+Therefore,
+P(∥∇Lm∥∞≥t) ≤nP(|∇Lmk| ≥t)
+≤2nexp
+
+−t2
+2
+nm + 2t
+3m
+
+.
+Using arguments similar to those to establish the results in Section 4.4.1 we have that with prob-
+ability at least 1 −2/n
+∥∇Lm∥∞≤2
+r
+log n
+nm ,
+as desired.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+39
+5. Discussion
+The main contribution of this paper is the design and analysis of Rank Centrality: an iterative
+algorithm for rank aggregation using pair-wise comparisons. We established the eﬃcacy of the
+algorithm by analyzing its performance when data is generated as per the popular Bradley-Terry-
+Luce (BTL) or Multinomial Logit (MNL) model. We have obtained an analytic bound on the ﬁnite
+sample error rates between the scores assumed by the BTL model and those estimated by our
+algorithm. As shown, these lead to near-optimal dependence on the number of samples required
+to learn the scores well by our algorithm under random selection of pairs for comparison. More
+generally, the comparison graph structure plays a crucial role in the performance of the algorithm.
+For a tighter analysis of the optimality of Rank Centrality, we provide numerical experiments
+under the BTL model and compare it to the Cramer Rao lower-bound. Comparisons with the
+Cramer-Rao bound in Figure 3 suggests that the error achieved by Rank Centrality is indistinguish-
+able from the fundamental Cramer-Rao lower bound, and thus suggesting it’s stronger optimality
+properties compared to what we can establish.
+For completeness, we further provided an analysis of the error achieved by the MLE. Build-
+ing upon our analysis, Hajek et al. (2014) shows that MLE is near order-optimal, just like Rank
+Centrality. It is worth noting, however, that empirically the computational cost of Rank Central-
+ity seems much better than that of ﬁnding the MLE.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+40
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+Appendix. Proof of Lemma 1
+A. Proof of Lemma 1
+Without loss of generality, let us consider two items i and j such that wi > wj. When we estimate
+a higher score for item j then we make a mistake in the ranking of these two items. When this
+happens, such that πj −πi > 0, it naturally follows that wi −wj ≤wi −wj + πj −πi ≤|wi −πi| +
+|πj −wj|. For a general pair i and j, we have (wi −wj)(σi −σj) > 0 implies that |wi −wj| ≤
+|wi −πi|+|wj −πj|. Substituting this into the deﬁnition of the weighted distance Dw(·), and using
+the fact that (a + b)2 ≤2a2 + 2b2, we get
+Dw(σ) =
+n
+1
+2n∥w∥2
+X
+i<j
+(wi −wj)2 I
+ (wi −wj)(σi −σj) > 0
+o1/2
+≤
+n
+1
+n∥w∥2
+X
+i<j
+
+(wi −πi)2 + (wj −πj)2	o1/2
+≤
+1
+∥w∥
+( n
+X
+i=1
+(wi −πi)2
+)1/2
+.
+This proves that the distance Dw(σ) is upper bounded by the normalized Euclidean distance
+∥w −π∥/∥w∥.
+Lemma 12. For any 0 ≤θ ≤ln4/3,
+E[exp(θ|Cij|)] ≤2exp
+ 2kpijθ2/3
+
+.
+(39)
+Proof.
+Note that Cij is zero-mean shifted binomial random variable B(ki,pij). Therefore, by
+Hoeﬀding’s bound and the fact that Cij is the sum of k terms where each term is upper-bounded
+by max(pij,1 −pij) and lower-bounded by min(pij,1 −pij)
+E[exp(θ|Cij|)] = E[exp(θCij)ICij ≥0] + E[exp(−θCij)ICij < 0]
+≤E[exp(θCij)] + E[exp(−θCij)]
+= E[exp(θCij)] + E[exp(−θCij)]
+≤2exp(θ2k/8)
+Observe that for any x ∈R and θ > 0,
+exp(θ|x|) ≤exp(θx) + exp(−θx).
+From this, it follows that
+E[exp(θ|Cij|)] ≤E[exp(θCij)] + E[exp(−θCij)].
+(40)
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+41
+Now for any θ ∈R, using the fact that Xij is Binomial distribution and 1 + x ≤exp(x) for any
+x ∈R, we have
+E[exp(θCij)] = exp(−θkpij)
+ 1 + pij(exp(θ) −1)
+k
+≤exp(−θkpij)exp
+ kpij(exp(θ) −1)
+
+.
+(41)
+Using second-order Taylor’s expansion, for any θ ∈[−ln4/3,ln4/3], we obtain that
+|exp(θ) −1 −θ| ≤2
+3θ2.
+(42)
+Using above display in (41), we can obtain the claimed result.
+B. Proof of Lemma 7
+Since we are interested in the eigenvalues of L = D−1B, we deﬁne a more tractable matrix with the
+same set of eigenvalues: ˜L = D−1/2BD−1/2. Because ˜L is a symmetric matrix, the eigenvalues are
+the same as the singular values up to a sign. Let σ1(˜L) ≥σ2(˜L) ≥... denote the ordered singular
+values of ˜L. Note that the matrix D−1/2BD−1/2 has largest singular value equal to 1. Therefore,
+σ2(˜L) ≤∥D−1/2BD−1/2 −11T/n∥2
+because the vector 1/√n has unit norm. Decomposing the above we have that
+∥D−1/2BD−1/2 −11T/n∥2 ≤∥B/d −11T/n∥2 + ∥B/d −D−1/2BD−1/2∥2
+We now appeal to the following lemma:
+Lemma 13. If the matrix B ∈Rn×n is the adjacency matrix of a random Graph drawn from the
+Erd¨os-Renyi ensemble G(n,d/n) with d ≥C log n and D is the corresponding diagonal matrix whose
+entry dii is equal to the degree of node i, then we have that
+∥B/d −11T/n∥2 ≤C
+r
+log n
+d
+and
+∥B/d −D−1/2BD−1/2∥2 ≤C
+r
+log n
+d
+with probability at least 1 −2n−Cn/(n−d)/8.
+At this point, applying the above bound yields the result. It remains to prove the above bound.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+42
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+B.1. Proof of Lemma 13
+We prove the result in two parts. We ﬁrst focus on establishing that
+∥B/d −11T/n∥2 ≤C
+r
+log n
+d
+with probability at least 1 −n−Cn/(n−d)8. To prove this result, we appeal to the following
+Lemma 14 (Theorem 1.4 (Tropp 2011)). Consider a ﬁnite sequence {Xk} of independent,
+random, self-adjoint matrices with dimension d. Assume that each random matrix satisﬁes
+EXk = 0
+and
+λmax(Xk) ≤R
+almost surely.
+Then, for all t ≥0,
+P
+ 
+λmax
+ X
+k
+Xk
+!
+≥t
+!
+≤d · exp
+
+−t2/2
+σ2 + Rt/3
+
+where σ2 = ∥
+X
+k
+EX2
+k∥2.
+In our setting we are interested in the random matrix B where we can write B as
+B −11Td/n =
+X
+i>j
+(Aij −d/n)(eieT
+j + ejeT
+i ) +
+X
+i
+(Aii −d/n)eieT
+i
+where Aij is a Bernoulli random variable with parameter d/n. Therefore, in applying the above
+Lemma we have that R = 1 almost surely and σ2 = d(1 −d/n). Setting t = C√dlog n we have that
+∥B/d −11T/n∥2 ≤C
+r
+log n
+d
+with probability at least 1 −n−Cn/(n−d)/8.
+Next we show that
+∥B/d −D−1/2BD−1/2∥2 ≤C
+r
+log n
+d
+with the same probability as above. To prove this result we will let E = D1/2 −d1/2I and ﬁrst note
+that
+∥B/d −D−1/2BD−1/2∥2 ≤
+1
+d · dmin
+∥D1/2BD1/2 −dB∥2
+because ∥D1/2∥2 =
+1
+dmin . Some simple calculations show that
+∥D1/2BD1/2 −dB∥2 ≤∥B∥2 ·
+
+∥E∥2
+2 + 2d1/2∥E∥2
+
+by above we know that ∥B∥2 ≤2d with high probability. Therefore,
+∥B/d −D−1/2BD−1/2∥2 ≤
+2
+dmin
+
+∥E∥2
+2 + 2d1/2∥E∥2
+
+An application of Bernstein’s inequality shows that with probability at least 1 −2n−Cn/(n−d)/8 we
+have ∥E∥2 ≤10C√log n. Finally, using the fact that with high probability dmin ≥1
+2d
+∥B/d −D−1/2BD−1/2∥2 ≤12C
+r
+log n
+d
+with probability at least 1 −2n−Cn/(n−d)/8.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+43
+References
+Adler, M., P. Gemmell, M. Harchol-Balter, R. M. Karp, C. Kenyon. 1994.
+Selection in the presence of
+noise: the design of playoﬀsystems. Proceedings of the ﬁfth annual ACM-SIAM symposium on Discrete
+algorithms. SODA ’94, Society for Industrial and Applied Mathematics, 564–572.
+Ailon, N. 2010. Aggregation of partial rankings, p-ratings and top-m lists. Algorithmica 57(2) 284–300.
+Ailon, N., M. Charikar, A. Newman. 2008. Aggregating inconsistent information: ranking and clustering.
+Journal of the ACM (JACM) 55(5) 23.
+Altman, A., M. Tennenholtz. 2005. Ranking systems: the pagerank axioms. Proceedings of the 6th ACM
+conference on Electronic commerce. ACM, 1–8.
+Ammar, A., D. Shah. 2011.
+Ranking: Compare, don’t score.
+Communication, Control, and Computing
+(Allerton), 2011 49th Annual Allerton Conference on. 776–783.
+Arrow, K. J. 1963. Social Choice and Individual Values. Yale University Press.
+Boyd, S., A. Ghosh, B. Prabhakar, D. Shah. 2005. Mixing times for random walks on geometric random
+graphs. SIAM ANALCO .
+Bradley, R. A., M. E. Terry. 1955.
+Rank analysis of incomplete block designs: I. the method of paired
+comparisons. Biometrika 39(3/4) 324–345.
+Braverman, M., E. Mossel. 2008. Noisy sorting without resampling. Proceedings of the nineteenth annual
+ACM-SIAM symposium on Discrete algorithms. SODA ’08, Society for Industrial and Applied Mathe-
+matics, 268–276.
+Brin, S., L. Page. 1998. The anatomy of a large-scale hypertextual web search engine. Seventh International
+World-Wide Web Conference (WWW 1998).
+Cand`es, E. J., B. Recht. 2009. Exact matrix completion via convex optimization. Foundations of Computa-
+tional Mathematics 9(6) 717–772.
+Condorcet, M. 1785. Essai sur l’application de l’analyse `a la probabilit´e des d´ecisions rendues `a la pluralit´e
+des voix. l’Imprimerie Royale.
+David, H. A. 1963. The method of paired comparisons, vol. 12. DTIC Document.
+de Borda, J. C. 1781. M´emoire sur les ´elections au scrutin .
+Diaconis, P., L. Saloﬀ-Coste. 1993. Comparison theorems for reversible markov chains. The Annals of Applied
+Probability 3(3) 696–730.
+Duchi, J. C., L. Mackey, M. I. Jordan. 2010. On the consistency of ranking algorithms. Proceedings of the
+ICML Conference. Haifa, Israel.
+Dwork, C., R. Kumar, M. Naor, D. Sivakumar. 2001a. Rank aggregation methods for the web. Proceedings
+of the Tenth International World Wide Web Conference, 2001.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+44
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+Dwork, Cynthia, Ravi Kumar, Moni Naor, Dandapani Sivakumar. 2001b. Rank aggregation methods for the
+web. Proceedings of the 10th international conference on World Wide Web. ACM, 613–622.
+Farnoud, F., B. Touri, O. Milenkovic. 2012. Novel distance measures for vote aggregation. arXiv preprint
+arXiv:1203.6371 .
+Gleich, D. F., L. Lim. 2011. Rank aggregation via nuclear norm minimization. Proceedings of the 17th ACM
+SIGKDD international conference on Knowledge discovery and data mining. ACM, 60–68.
+Guiver, J., E. Snelson. 2009. Bayesian inference for plackett-luce ranking models. Proceedings of the 26th
+Annual International Conference on Machine Learning. ACM, 377–384.
+Hajek, Bruce, Sewoong Oh, Jiaming Xu. 2014. Minimax-optimal inference from partial rankings. Advances
+in neural information processing systems (NIPS).
+Hochbaum, D. S. 2006. Ranking sports teams and the inverse equal paths problem. Internet and Network
+Economics. Springer, 307–318.
+Horn, R. A., C. R. Johnson. 1985. Matrix Analysis. Cambridge University Press.
+Hunter, David R. 2004. Mm algorithms for generalized bradley-terry models. Annals of Statistics 384–406.
+Jiang, X., L. Lim, Y. Yao, Y. Ye. 2011. Statistical ranking and combinatorial hodge theory. Mathematical
+Programming 127(1) 203–244.
+Kamvar, S. D., M. T. Schlosser, H. Garcia-Molina. 2003. The eigentrust algorithm for reputation management
+in p2p networks. Proceedings of the 12th international conference on World Wide Web. WWW ’03,
+ACM, New York, NY, USA, 640–651.
+Keener, J. P. 1993. The perron-frobenius theorem and the ranking of football teams. SIAM review 35(1)
+80–93.
+Kendall, M. G. 1955. Further contributions to the theory of paired comparisons. Biometrics 11(1) 43–62.
+Kendall, M. G., B. B. Smith. 1940. On the method of paired comparisons. Biometrika 324–345.
+Keshavan, R. H., A. Montanari, S. Oh. 2010. Matrix completion from noisy entries. Journal of Machine
+Learning Research 11 2057–2078.
+L. R. Ford, Jr. 1957. Solution of a ranking problem from binary comparisons. The American Mathematical
+Monthly 64(8) 28–33.
+Lu, T., C. Boutilier. 2011. Learning mallows models with pairwise preferences. Proceedings of the 28th
+International Conference on Machine Learning (ICML-11). 145–152.
+Luce, D. R. 1959. Individual Choice Behavior. Wiley, New York.
+Mallows, C. L. 1957. Non-null ranking models. i. Biometrika 114–130.
+McFadden, D. 1973. Conditional logit analysis of qualitative choice behavior. Frontiers in Econometrics
+105–142.
+
+Author: Rank Centrality: Ranking from Pair-wise Comparisons
+Article submitted to Operations Research; manuscript no. (Please, provide the mansucript number!)
+45
+Mosteller, F. 1951. Remarks on the method of paired comparisons: I. the least squares solution assuming
+equal standard deviations and equal correlations. Psychometrika 16(1) 3–9.
+Negahban, S., M. J. Wainwright. 2012.
+Restricted strong convexity and (weighted) matrix completion:
+Optimal bounds with noise. Journal of Machine Learning Research 1665–1697.
+Newman, M. E. J. 2010. Networks: An Introduction. Oxford University Press.
+Osting, B., C. Brune, S. Osher. 2013. Enhanced statistical rankings via targeted data collection. Proceedings
+of the 30th International Conference on Machine Learning. 489–497.
+Plackett, R. L. 1975. The analysis of permutations. Applied Statistics 193–202.
+Rajkumar, A., S. Agarwal. 2014. A statistical convergence perspective of algorithms for rank aggregation
+from pairwise data. Proceedings of The 31st International Conference on Machine Learning. 118–126.
+Rao, C. R. 1945. Information and accuracy attainable in the estimation of statistical parameters. Bulletin
+of the Calcutta Mathematical Society 37(3) 81–91.
+Saaty, T. L. 2003. Decision-making with the ahp: Why is the principal eigenvector necessary. European
+Journal of Operational Research 145 pp. 85–91.
+Salganik, M. J., K. E.C. Levy. 2012. Wiki surveys: Open and quantiﬁable social data collection. Tech.
+Rep. arXiv:1202.0500.
+Seeley, J. R. 1949. The net of reciprocal inﬂuence. Canadian Journal of Psychology 3(4) 234–240.
+Shah, D., T. Zaman. 2011. Rumors in a network: who?s the culprit? IEEE Transactions on Information
+Theory 57(8) 5163–5181.
+Shah, D., T. Zaman. 2015. Finding rumor sources on random trees. Operations Research .
+Talluri, K. T., G. VanRyzin. 2005. The Theory and Practice of Revenue Management. springer.
+Tropp, J. 2011.
+User-friendly tail bounds for sums of random matrices.
+Foundations of Computational
+Mathematics .
+Vigna, S. 2009. Spectral ranking. arXiv preprint arXiv:0912.0238 .
+Volkovs, M. N., R. S. Zemel. 2012. A ﬂexible generative model for preference aggregation. Proceedings of
+the 21st international conference on World Wide Web. ACM, 479–488.
+Wei, T. H. 1952. The algebraic foundations of ranking theory. Ph.D. thesis, University of Cambridge.

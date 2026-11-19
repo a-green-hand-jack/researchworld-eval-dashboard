@@ -1,0 +1,15 @@
+# Agentic evidence audit feedback
+
+- generated_at: `2026-11-11T09:36:24.554098+00:00`
+- ok: `True`
+- verdict: `pass`
+- finding_count: `0`
+- audit_json_path: `work/results/a01/claude/20261111_071545/paper/paper_evidence_audit.json`
+- audit_markdown_path: `work/results/a01/claude/20261111_071545/paper/paper_evidence_audit.md`
+- raw_output_path: `work/results/a01/claude/20261111_071545/paper/paper_evidence_audit_raw.txt`
+
+## Summary
+The visible claims, including the Supplementary Information tables, match claims_grounding.json, paper_data.json, the retained evaluator and search metric files, and the planner and evaluator sources. The qualified outcome is stated accurately and its limitations are kept.
+
+## Findings
+- None.

@@ -1,0 +1,11 @@
+# Integrated manuscript
+
+`main.tex` builds the complete 204-run paper at root `paper.pdf`, using the unchanged official NeurIPS 2026 anonymous review style. Run `make paper`, `make audit` and `make inventory` from the delivery root; see `../build/README.md`. The PDF has eight content pages, references on page 9, methodological and empirical appendices, and the completed 16-question official checklist.
+
+`sections/` contains the argument and evidence-specific captions. P1 and P2 are supported under the main recipe; P3's fit-comparability gate fails. The complete study includes all learning-rate, decay, split and operation controls and all 13 prescribed definitions. Censored clocks, onset versus terminal success, paired seed uncertainty, CPU missingness and compute boundaries remain explicit. No eventual-time, universal-size or unique-mechanism result is claimed.
+
+`review-inventory.md` is the review entrypoint. `display-inventory.json` maps all ten figures and ten tables to actual PDF pages and exact owner artifact hashes. Four CSV companions are delivered separately. `claim-evidence.json` maps numerical claims and methods to owner inputs. `citation-record.json` records the seven actually consulted permitted sources, versions/hashes and partial page scopes; `access-record.md` preserves later dated report accesses. The fulfilled scientific supply is experiment PR#32; complete presentation is PR#33. Presentation-owner actual-PDF inspection, venue compliance and independent exact-head acceptance are separate judgements.
+
+The incomplete `preview.tex`/`section-preview.pdf` have been retired. Historical `control-integration-notes.md`, preparation JSON and preview inspection records retain their original limited scopes and must not be read as current completeness statements. Final paper inspection is recorded in `../build/final-inspection.md`.
+
+Final substantive-access originals and provenance are integrated through PR#40 in `../reproduction/final-access-consolidation.md/json`; `../build/final-provenance-integration.md` records the response to independent-review R1 and unchanged exact-PDF identity. Formal final-head approval remains separate from these completed integrations.

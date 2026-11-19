@@ -1,0 +1,1 @@
+cd /work/paper && pdflatex -interaction=nonstopmode main.tex >/tmp/l1.log 2>&1; bibtex main >/tmp/b.log 2>&1; pdflatex -interaction=nonstopmode main.tex >/dev/null 2>&1; pdflatex -interaction=nonstopmode main.tex >/tmp/l3.log 2>&1; grep -E "^!|Warning: (Ref|Cit)|Overfull \\\\hbox" /tmp/l3.log | head; grep "Output written" /tmp/l3.log

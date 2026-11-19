@@ -1,0 +1,11 @@
+# Reconciliation of the planning and feasibility replies
+
+The context owner checked the complete closed replies to `story-repo#9` and `idea-review-repo#4`, the live plan at story-repo `bcdf9eb10b3e0606bc463c7b489b2872bad4d569`, and the full release attachment `feasibility-v2/feasibility.md` against the frozen objective. The objective was reread before this record.
+
+Both requested supplies are complete. The plan assigns every frozen requirement and confirms that context supplies checked material through wiki/releases, while paper-repo owns final manuscript and bibliography integration. No separate context-owned manuscript path is needed. Feasibility supports proceeding with the bounded score-counterfactual estimand and requests no extra rule, benchmark or training experiment. Its judgement expressly does not certify numerical correctness or final publication quality.
+
+The later plan preserves all material context boundaries: task count rather than causal training cost or a bound on such cost; fixed rivals; common challengers; bounded gains/ceilings; co-first and strict success; explicit infeasibility; raw/normalized and population/composition sensitivities; distinct Monte Carlo versus score uncertainty; equal-weight subject recomputation distinguished from deployed site aggregation; no universal rule dominance; and an evidence-informed rather than preregistered plan. NeurIPS 2026 is the venue owner's declared choice as incorporated by the plan. Official format compliance remains the venue/report/review owners' responsibility.
+
+The plan's outstanding verified-literature sentence refers to the context supply already completed in idea-repo `313c9f5f5070218f357a5845ee63e3d1d197fab4`, wiki Literature and release context-v1. The material and metadata correction were posted to story-repo#9 and supplied in closing idea-repo#3. There is no missing context result to fabricate or new empirical scope to add. The main unresolved risk remains accurate integration and independent review of the final delivery, owned elsewhere.
+
+No brief correction or reopened request is needed. This record accepts those answers for their requested purpose; it adds no new experimental result or literature claim, and no external literature access occurred in this reconciliation.

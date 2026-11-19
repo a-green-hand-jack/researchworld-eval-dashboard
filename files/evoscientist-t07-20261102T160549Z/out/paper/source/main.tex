@@ -1,0 +1,164 @@
+\documentclass{article}
+\usepackage{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{microtype}
+\newtheorem{proposition}{Proposition}
+\newcommand{\E}{\mathbb E}
+\newcommand{\Var}{\operatorname{Var}}
+\input{tables/numbers}
+\title{Honest Residual Audits for Predicting LLM Benchmark Scores\\from Few Binary Responses}
+\author{Anonymous Authors}
+\begin{document}
+\maketitle
+\begin{abstract}
+Historical item-level responses can reduce the cost of evaluating a new language model, but a good score predictor need not remain reliable beyond its source models. We study a simple design-based alternative: source-difficulty stratification followed by cross-fitted difference estimation (SCFD). Each queried half fits a target-specific response regression; the other half audits its residuals, with the correct finite-population weights. The resulting estimate is unbiased under the stated random sampling design, without requiring a correct response model. On thirteen public binary response matrices, with duplicate-group-disjoint splits and five seeds, fifty-item SCFD achieves macro mean absolute errors of \IIDSCFD{} and \FrontierSCFD{} percentage points under random and capability-frontier holdouts, compared with \IIDUniform{} and \FrontierUniform{} for uniform sampling. These are not universal gains: learned score regression is better under random holdout, simple stratification explains much of the improvement, and the honest estimator does not consistently improve rankings. Repeated-mask diagnostics and matched ablations expose the cost of residual honesty rather than establishing a new state of the art. All results, including unsuccessful optimization attempts, are reproducible on CPU.
+\end{abstract}
+
+\section{Introduction}
+Repeatedly scoring model checkpoints, prompts, and inference settings on every item of a benchmark can dominate evaluation cost. A historical matrix of model-by-item correctness provides a tempting shortcut: ask a new model a small number of questions and infer its full score. Item selection and score reconstruction are distinct decisions. A representative subset may estimate an average directly; a response model may instead fill in the unobserved items or decode a full score from the observed signature.
+
+These approaches exploit different assumptions. A score decoder learns relationships across historical model rows, whereas a target-specific item regression learns relationships across queried items. The former can interpolate well yet underestimate models beyond the source score range. An observed-sample residual correction does not automatically repair that problem if its predictor was fitted on the very residuals being averaged. In particular, an unpenalized regression intercept forces training residuals to sum to zero. The empirical questions are therefore not just which method has lower error, but which information is responsible for the gain, and what a claim of unbiasedness actually guarantees.
+
+This paper applies a standard difference-estimation identity to this setting. Source responses define difficulty strata and fixed item covariates. Within each stratum, the query budget is split between a pilot and an audit. A pilot-trained response regression predicts the unobserved bank; a disjoint random audit corrects its residual total. Swapping the two roles uses all queried responses without evaluating residuals on their own training set. We call the resulting procedure \emph{stratified cross-fitted difference estimation} (SCFD). Its justification is finite-population randomization, not exchangeability between source and target model families.
+
+The contribution is deliberately narrow: (i) an explicit honest estimator and information-boundary audit; (ii) a distinction between paper-level difference-estimator algebra and a pinned public implementation; and (iii) a controlled study of acquisition, reconstruction, bias, and ranking on thirteen real matrices. We do not claim to invent difference estimation, to exhaust the literature, or to improve all sparse-evaluation methods. Indeed, score ridge performs better in the interpolation setting, and honest auditing can lose to biased imputation. The target throughout is the \emph{flat mean of the supplied binary matrix}, not necessarily a benchmark's official scenario-weighted leaderboard score.
+
+\section{Related work and positioning}
+\paragraph{Representative questions and response models.}
+\citet{vivek2023anchorpoints} select correlated anchor points using model confidence responses, and also identify nearest-source prediction as an important control. Binary correctness alone does not reproduce that confidence-based procedure. \citet{polo2024tinybenchmarks} provide binary correctness clustering, multidimensional item response theory (IRT), and generalized combinations of anchor and imputation estimates. \citet{kipnis2025metabench} combine IRT, information filtering, and generalized additive score reconstruction. These systems motivate separating the selector, predictor, and aggregate estimator. Our binary clustering and point-estimate IRT controls are labeled adaptations rather than exact reproductions of those full pipelines.
+
+\paragraph{Learned assessment and acquisition.}
+\citet{pacchiardi2024hundredinstances} predict success from a model's reference-response signature and item features, including genuinely unseen items. \citet{li2024activeevaluation} couple neural-process prediction with learned adaptive acquisition. Our matrix-only setting has historically observed item columns, no item-text embeddings, and nonadaptive queries. It cannot support a new-item prediction claim, nor does an inexpensive entropy or IRT heuristic stand in for their learned acquisition policy. \citet{balkir2026confidentrankings} address adaptive rankings with continuous scores and selective ties; ordinary Spearman correlation in our binary fixed-budget study is not their confidence guarantee.
+
+\paragraph{Interpolation, extrapolation, and corrections.}
+\citet{zhang2025missesthemark} compare benchmark predictors, including random-sampling score regression and a target-specific AIPW-style regression, and emphasize capability extrapolation. We use their explicitly permitted fixed data/code snapshot, not their reported numbers as our results. Our split groups exact duplicate rows, retains zero-score models, and uses different source fractions and query seeds. The proposed audit is a finite-sample sampling-theoretic adaptation. The principal empirical distinction is that a smaller signed bias can coexist with worse MAE, RMSE, or ranking. Restricted primary-source reading was used to respect an independent-research constraint; consequently no exhaustive priority claim is made.
+
+\section{Setting and honest residual estimation}\label{sec:method}
+Let $X\in\{0,1\}^{M\times N}$ contain fully observed source responses and let $y\in\{0,1\}^N$ be one fixed target row. Only queried entries of $y$ are available to an estimator. The estimand is
+\begin{equation}\label{eq:target}
+\mu=N^{-1}\sum_{i=1}^N y_i.
+\end{equation}
+All items retain their original multiplicities. We treat the historical response vector $x_i=X_{:,i}$ as an item covariate; no hidden target response is a feature.
+
+\subsection{Why a same-sample correction is not an audit}
+For a uniform query set $S$ of size $b$, write $U=S^c$ and let $q_i$ be predicted target correctness. A difference estimator has the algebraic form
+\begin{equation}\label{eq:diff}
+D=\bar q_{[N]}+\overline{(y-q)}_S
+ =\bar y_S+\frac{N-b}{N}(\bar q_U-\bar q_S).
+\end{equation}
+When $q$ is fixed independently of the uniform draw, $D$ is design-unbiased. Fitting $q$ on $S$ does not meet that condition. Our target-specific nuisance regression, matching the pinned implementation's objective, is
+\begin{equation}\label{eq:ridge}
+(\hat c,\hat w)=\arg\min_{c,w}\sum_{i\in S}(y_i-c-x_i^\top w)^2+10\|w\|_2^2.
+\end{equation}
+The intercept is unpenalized; covariates are centered using the fitting items only. Thus $\overline{(y-q)}_S=0$ up to numerical precision. With this fit, Eq.~\eqref{eq:diff} becomes population-weighted imputation, not an independent residual check.
+
+A separate implementation issue matters. The pinned public AIPW code computes
+\begin{equation}\label{eq:pinned}
+D_{\mathrm{pin}}=\bar q_U+\frac{N-b}{N}\overline{(y-q)}_S,
+\end{equation}
+which differs from Eq.~\eqref{eq:diff}. With an intercept it reduces to the mean prediction on $U$, omitting the observed-population contribution. We retain both \emph{AIPW--pinned} and \emph{AIPW--population}, the latter using Eq.~\eqref{eq:diff}. This discrepancy is not attributed to a new statistical principle. Unit tests compare our vectorized implementation with the actual pinned classes.
+
+\subsection{Source-defined selection and disjoint audits}
+Sort items by their source mean $d_i=M^{-1}\sum_m X_{mi}$, breaking ties by item index, and divide the ordered list into $H=5$ nearly equal-sized strata $U_h$. Let $N_h=|U_h|$. Allocate $\lfloor b/H\rfloor$ queries to each stratum and distribute any remainder by a seeded label-independent permutation. Within each stratum, draw ordered items uniformly without replacement. The first $p_h=\lfloor b_h/2\rfloor$ form $P_h$ and the remaining $a_h=b_h-p_h$ form $A_h$. Every studied budget has $p_h,a_h\geq1$.
+
+Fit Eq.~\eqref{eq:ridge} using $P=\cup_hP_h$ alone, giving $q^P$. Define the directional estimator
+\begin{equation}\label{eq:honest}
+T(P\!\to\!A)=\frac1N\left[\sum_{i\in P}y_i+\sum_{i\notin P}q_i^P
++\sum_h(N_h-p_h)\overline{(y-q^P)}_{A_h}\right].
+\end{equation}
+The correction uses the complement of the \emph{pilot}, including the audit, not just the unqueried items. Independently fitting the swapped role gives $T(A\!\to\!P)$; SCFD is their fixed half-average. This remains valid for unequal fold sizes, although at odd budgets it need not reduce to the raw sample mean for a constant nuisance. The query cost is $|P\cup A|=b$, not two evaluations per item. Uniform CFD is the same estimator with a single stratum.
+
+\begin{proposition}[Design unbiasedness]\label{prop:unbiased}
+Fix the source matrix, strata, and target row. Draw the disjoint sets with the fixed, feasible sizes above. Let each fitted prediction vector be a finite deterministic function of sources, its own pilot membership and labels only, or a randomized function independent of audit membership with integrable predictions. Then $\E[T(P\to A)]=\mu$, and the fixed half-average SCFD is unbiased. This statement concerns ideal random sampling, not a guarantee that a finite list of pseudorandom seeds has zero empirical bias.
+\end{proposition}
+\paragraph{Proof sketch.}
+Conditional on the pilot and any independent learner randomness, $q^P$ is fixed and $A_h$ is uniform over $U_h\setminus P_h$. Its residual mean therefore estimates that complement's residual mean. Multiplying by $N_h-p_h$ cancels the predicted complement total in Eq.~\eqref{eq:honest}. The remaining total is exactly $\sum_i y_i$. Apply the same argument to the swapped direction and use linearity. Appendix~\ref{app:proof} gives the full proof, variance, and boundary cases.
+
+The estimator is not necessarily unbiased conditional on the realized union $S$, does not require source/target distributional agreement, and is not clipped to $[0,1]$. Source-only preprocessing of full item covariates is legal; any dependence of $q^P$ on audit membership, even without audit labels, is not covered. The two directions share queried responses and are dependent. Their individual variance formulas cannot be averaged as independent error estimates, and no calibrated score or rank interval is claimed here.
+
+\section{Experimental protocol}\label{sec:protocol}
+\paragraph{Data and split integrity.}
+We use all thirteen specified LLM matrices in repository commit \texttt{55faff496947789f94e6b5908c77cbc3e84f81ad}: seven Open LLM Leaderboard banks and six HELM-derived banks (Appendix~\ref{app:data}). They have 79--448 model rows and 437--12,032 item columns. Every entry is finite and binary. Exact duplicate response rows are grouped before splitting, preventing an identical full response signature from appearing in both source and target sets. Grouping is an oracle split-only operation, not a deployable feature or evidence of family independence. All rows, constant items, and duplicate columns remain. In particular, all 53 all-zero OpenLLM-MATH rows remain rather than censoring observed failures.
+
+For \emph{random group holdout} (IID shorthand), randomly assign 70\% of unique groups to sources, rounded down. For \emph{frontier holdout}, order groups by their flat full score and choose the score-tie-block boundary nearest 70\%; the higher-scoring groups are targets. Full scores enter only this retrospective split construction and final evaluation, never acquisition or prediction. A stronger \emph{gap} sensitivity uses the bottom 50\% as sources and top 30\% as targets, leaving an unused middle region. These are oracle capability stress tests, not temporal or family-held-out evaluation.
+
+\paragraph{Budgets, seeds, and controls.}
+The primary budget is $b=50$; secondary budgets are $10,25,100$. Seeds 0--4 control reproducible source and query streams. Frontier membership is unchanged across seeds: these are five query designs, not five independent frontier populations. Query masks are shared across target models and across methods within the uniform or stratified track. Uniform masks are nested across budgets; stratified masks need not be. Anchor methods form a separate acquisition track. Both tracks use the same number of queried labels. A $2b$ uniform reference is explicitly higher-cost.
+
+Controls include uniform and source-stratified means; fixed source-item difference estimators; score ridge fitted across source \emph{model rows} with RidgeCV penalties $\{0.1,1,10\}$; the two target-item AIPW variants; regularized Rasch 1PL; binary correctness MiniBatchKMeans anchors with actual-item representatives and cluster weights; and anchors with the same Rasch decoder. SCFD ablations remove stratification, symmetrization, audit correction, or residual honesty while retaining the pilot fits. Penalties and five strata are fixed, not target-tuned. The stronger multidimensional comparator in Appendix~\ref{app:mirt} was added after the primary analysis, with source-only fitting and calibration. No proposed setting or primary contrast was revised. After self-review, an inexpensive nearest-source control was also added on the saved uniform queries (Appendix~\ref{app:settings}).
+
+\paragraph{Metrics and uncertainty.}
+Within a bank, primary metrics weight each target duplicate group equally; original-row weighting is a sensitivity. We macro-average bank MAEs and signed errors, and define macro RMSE as the square root of the mean bank MSE. Spearman $\rho$, Kendall $\tau_b$, and pair agreement are computed within each bank, never across unrelated tasks; true ties are excluded from pair agreement and prediction ties receive half credit. For ordering metrics only, truth and predictions are rounded to ten fractional decimal places to restore numerical ties; raw scores are retained for error metrics. This policy repaired a self-review finding in which machine-precision residual sums broke common-offset rank invariance (Appendix~\ref{app:uncertainty}). Correlations are averaged over banks and seeds.
+
+We report five-seed variability and percentile 95\% bootstrap intervals from 10,000 resamples of the thirteen \emph{seed-averaged bank means}. Shared model pools, related tasks, shared masks, and repeated targets make these \emph{descriptive bank-resampling intervals}, not population-valid independent-benchmark inference or per-model score intervals. Four prespecified SCFD contrasts (two regimes, uniform and stratified means) have paired bank sign-flip tests with Holm correction; their independence/symmetry assumptions are doubtful here, so they are sensitivity summaries, not claims of confirmatory significance (Appendix~\ref{app:uncertainty}). To examine bias separately, a fixed-source diagnostic uses 200 new query masks at budgets 10 and 100 on the largest and median-sized banks, MMLU-Pro and GSM, and six target groups selected independently of method error. Monte Carlo standard errors are computed over masks, preserving shared-target error dependence.
+
+\section{Results}\label{sec:results}
+\begin{table}[t]
+\caption{Budget-50 group-weighted performance. Errors are percentage points; lower is better, higher $\rho$ is better. Brackets are descriptive 95\% bank-bootstrap intervals after averaging five seeds. Approximate binary anchors and Rasch are adaptations, not full published systems.}\label{tab:main}
+\centering\scriptsize\setlength{\tabcolsep}{3pt}\input{tables/main}
+\end{table}
+
+\paragraph{The best reconstruction depends on the split.}
+Table~\ref{tab:main} shows that score ridge achieves \IIDRidge{} pp random-holdout MAE but degrades to \FrontierRidge{} pp on frontier targets. It learns a source-population score mapping, whereas target-item regressions can change with each target's observed responses. SCFD improves uniform sampling from \IIDUniform{} to \IIDSCFD{} pp in random holdout and from \FrontierUniform{} to \FrontierSCFD{} pp on the frontier. Yet it is not the best overall estimator: score ridge is better in random holdout, and Rasch and AIPW--population are close frontier competitors. The coefficient repair changes pinned AIPW only modestly in these data; the implementation discrepancy is real, but it is not the dominant empirical effect. The added source-calibrated multidimensional IRT mixture has MAE \IIDMIRTMix{} pp in random holdout and \FrontierMIRTMix{} pp on the frontier; its extra expressivity does not remove this stress-test failure.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figures/budget_curves.pdf}
+\caption{MAE versus query budget for five original methods (all configurations are tabulated in the appendix). Shading shows the same descriptive bank-resampling intervals as Table~\ref{tab:main}; it does not represent uncertainty in an individual predicted score. Source score regression improves interpolation but remains less accurate on frontier targets over the studied budgets.}\label{fig:budgets}
+\end{figure}
+
+\paragraph{Simple selection accounts for much of the improvement.}
+Figure~\ref{fig:budgets} shows the finite-budget trends. Stratified means achieve \IIDStrat{} and \FrontierStrat{} pp MAE. Relative to them, SCFD's absolute reductions are substantially smaller than its reductions over uniform. The paired frontier SCFD-minus-uniform difference is $-0.60$ pp with descriptive interval $[-1.00,-0.19]$; against stratified means it is $-0.13$ pp with interval $[-0.23,-0.02]$. The latter contrast has Holm-adjusted sign-flip $p=0.0515$, illustrating that favorable bootstrap endpoints should not be turned into a strong inferential claim. These summaries also ignore between-family deployment uncertainty. The complete seed deltas, assumptions, and four comparisons are in Appendix~\ref{app:uncertainty}. Fixed stratified difference is an even stronger simple honest control: its frontier MAE is 3.83 pp versus 3.80 for SCFD, only a 0.03 pp increment from target-specific fitting; the corresponding random-holdout increment is 0.15 pp. This near-equivalence is a central negative result, not evidence that the learned pilot is practically necessary.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figures/paired_effects.pdf}
+\caption{Budget-50 frontier effects after averaging five query seeds. Negative differences favor SCFD. Gains over uniform are heterogeneous, and several banks lose to simple stratification. There is no cross-task universal improvement.}\label{fig:effects}
+\end{figure}
+
+\paragraph{There are observable failures, not just a favorable macro-average.}
+SCFD beats uniform in eleven of thirteen frontier banks but loses on BBH and GSM (Figure~\ref{fig:effects}, full values in Appendix~\ref{app:full}). Under frontier holdout, stratified mean has higher macro Spearman correlation (\FrontierStratRho{}) than SCFD (\FrontierSCFDRho{}), despite its slightly higher MAE. Aggregate score accuracy therefore does not imply better ordering. Larger uniform samples are also competitive: the $2b$ reference uses twice as many responses and must not be presented as a budget-matched win. The sharp frontier losses of binary weighted anchors show that source-space representativeness alone is not sufficient; decoding the same anchors with Rasch changes the result substantially (Appendix~\ref{app:full}).
+
+\begin{table}[t]
+\caption{Matched mechanism ablations at budget 50. All errors are pp; signed frontier error is not a bias estimate over all item designs. The no-audit variant uses both pilot fits and therefore the same total $b$ labels; each fit uses only its own half, and their population-imputation estimates are averaged without residual auditing. The contaminated diagnostic reuses pilot residuals and has no honesty guarantee.}\label{tab:ablation}
+\centering\small\setlength{\tabcolsep}{4pt}\input{tables/ablation}
+\end{table}
+
+\paragraph{Honesty is not an MAE-optimality guarantee.}
+Removing one audit direction markedly worsens error (Table~\ref{tab:ablation}); swapping the roles recovers much of that loss. However, contaminated residual correction and unaudited imputation are better than SCFD in some conditions. They share the same pilot nuisance fits, isolating the estimator's bias--variance trade-off rather than comparing unrelated models. Likewise uniform CFD versus stratified SCFD isolates the selection design. None of these comparisons supports a claim that every proposed component is indispensable for optimal prediction. Honest correction is valuable when protection against model misspecification is the objective, but its smaller pilot sets and residual noise carry a cost.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{figures/bias_diagnostics.pdf}
+\caption{Fixed-source frontier diagnostics: mean signed error across six fixed target groups and 200 fresh masks, with $\pm2$ Monte Carlo standard errors. Errors shared by targets under the same mask are retained when computing these bars. These are not confidence intervals for unseen model populations.}\label{fig:bias}
+\end{figure}
+
+\paragraph{Repeated masks distinguish a theorem from a five-seed average.}
+The repeated-mask panel in Figure~\ref{fig:bias} conditions on fixed source and target rows. Honest estimators fluctuate around the full score; the full-query target regression can retain directional error. The plotted quantity averages signed errors, so opposite target biases can cancel. We therefore also release targetwise diagnostics, within-target variance, and the exact empirical MSE decomposition (Appendix~\ref{app:diagnostics}). The squared empirical bias includes finite-mask Monte Carlo noise; it is not an unbiased estimate of squared design bias. We do not infer exact unbiasedness from a small plotted error bar: the proposition supplies the guarantee, whereas the experiment measures its practical cost. No score-interval coverage study or adaptive stopping experiment was completed.
+
+\paragraph{Sensitivity and compute.}
+Original-row weighting and the stronger bottom-50/top-30 gap split are reported alongside the group-weighted results. The latter yields SCFD MAE \GapSCFD{} pp, uniform \GapUniform{} pp, and score ridge \GapRidge{} pp. Changing the source population alters learned estimators; it does not strengthen a randomization theorem into a model-generalization theorem. The original main grid contains 130 source-split/seed cells and 8,840 method-budget outputs, including ablation configurations and the explicitly extra-cost reference. It used \CoreCellMinutes{} summed cell-minutes on CPU; wall time, stronger IRT cost, optimizer repairs, and reproduction commands are in Appendix~\ref{app:repro}. No LLM was rerun and no paid API was called.
+
+\section{Discussion, limitations, and broader impact}\label{sec:limitations}
+The practical choice depends on the intended safeguard. If new models resemble the source population and point accuracy is paramount, a source-trained score decoder can be preferable. If capability shift is plausible, uniform or difficulty-stratified sampling supplies a transparent fallback; SCFD provides a valid mean estimator under its random item design without promising lower error on every bank. Increasing the query budget can be more useful than replacing a simple estimator with a complex one. Ranking-sensitive deployments require rank-specific checks: our frontier results explicitly contradict a monotone relationship between MAE and ranking quality.
+
+Our study has important limits. Exact-response grouping is not family independence, contamination detection, or a chronological deployment simulation. The thirteen banks reuse model pools and are not independent samples from a benchmark universe. Five seeds provide coarse query variability, and the diagnostic banks and six targets do not establish population-wide calibration. Flat binary means may differ from official subject-weighted scores. The matrices contain repeated columns and endpoint rows whose upstream causes cannot be resolved from correctness alone; retaining them is a transparent choice, not a quality certification. The source-specific ridge penalty and pilot split may be suboptimal; no target-driven optimization was attempted. Anchor and IRT adaptations do not reproduce confidence-based anchors, Bayesian tinyBenchmarks, metabench, or neural RL acquisition. Accordingly this is a protocol and estimator study, not a comprehensive state-of-the-art comparison. Ideal design unbiasedness also presumes proper random sampling and audit isolation; deterministic finite PRNG seed lists are a reproducibility device, not an exact sampling distribution.
+
+Sparse evaluation can save compute and broaden access to model assessment. It can also miss rare failures, enable public-subset overfitting, or present small score differences with unjustified precision. Reduced average-score error is not a safety, fairness, robustness, or construct-validity guarantee. Randomized refresh, full evaluations before consequential decisions, and explicit disclosure of uncertainty are appropriate safeguards. This artifact releases correctness-derived summaries and code, not model weights, private records, or new scraped content.
+
+\section{Conclusion}
+Source history helps, but acquisition, decoding, and estimator honesty should be evaluated separately. SCFD applies a finite-population residual audit to sparse binary LLM evaluation and improves uniform sampling in the studied macro-averages. Much of the gain is already available from simple stratification, learned interpolation can be more accurate, and the ranking result is not uniformly favorable. The main recommendation is a controlled, source-only comparison with a strong random-sampling fallback, not unconditional adoption of the proposed estimator.
+
+\clearpage
+\bibliographystyle{plainnat}
+\bibliography{references}
+\clearpage
+\appendix
+\input{appendix}
+\clearpage
+\input{checklist_filled}
+\end{document}

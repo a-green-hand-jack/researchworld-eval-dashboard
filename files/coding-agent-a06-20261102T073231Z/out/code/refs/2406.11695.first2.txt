@@ -1,0 +1,203 @@
+Optimizing Instructions and Demonstrations
+for Multi-Stage Language Model Programs
+Krista Opsahl-Ong1*, Michael J Ryan 1*, Josh Purtell 2,
+David Broman3, Christopher Potts1, Matei Zaharia4, Omar Khattab1
+1Stanford University, 2Basis, 3KTH Royal Institute of Technology 4UC Berkeley
+Abstract
+Language Model Programs, i.e. sophisticated
+pipelines of modular language model (LM)
+calls, are increasingly advancing NLP tasks.
+However, building these pipelines requires
+crafting prompts that are jointly effective for
+all modules. We study prompt optimization
+for LM programs, i.e. how to update these
+prompts to maximize a downstream metric
+without access to module-level labels or gra-
+dients. To make this tractable, we factorize
+our problem into optimizing the free-form in-
+structions and few-shot demonstrations of ev-
+ery module and introduce several strategies to
+craft task-grounded instructions and navigate
+credit assignment across modules. Our strate-
+gies include (i) program-and-data-aware tech-
+niques for proposing effective instructions, (ii)
+a stochastic mini-batch evaluation function for
+learning a surrogate model of our objective, and
+(iii) a meta-optimization procedure in which
+we refine how LMs construct proposals over
+time. Using these insights we develop MIPRO,
+a novel optimizer that outperforms baselines
+on five of seven diverse LM programs using a
+best-in-class open-source model (Llama3-8B),
+by as much as 13% accuracy. We have released
+our new optimizers and benchmark in DSPy at
+http://dspy.ai.
+1 Introduction
+Solving complex tasks with Language Mod-
+els (LMs) often requires applying sophisticated
+prompting techniques (Wei et al., 2022; Chen et al.,
+2022) and chaining them together into multi-stage
+pipelines (Wu et al., 2022; Dohan et al., 2022;
+Khattab et al., 2022; Beurer-Kellner et al., 2023;
+Yao et al., 2023; Schlag et al., 2023). Such Lan-
+guage Model (LM) Programs continue to advance
+NLP tasks (Pourreza and Rafiei, 2023; Khattab
+et al., 2024; Ridnik et al., 2024) through system-
+atic composition (Khattab et al., 2021; Creswell
+*Equal contribution.
+for i in range(2):
+“context, question-> 
+search_query”query =
+context.append(retrieve “search_query”
+)
+“context, question-> 
+answer”answer =
+for i in range(2):
+“Given the context and question produce a 
+succinct search query.  Here’s an example …”
+query =
+context.append(retrieve “search_query”
+)
+“Consider the whole context to correctly 
+answer to the question.  Here’s an example …”
+answer =
+Metric: Exact Match Answer
+Train Set: Question/Answer Pairs
+Optimized LM Program:
+LM Program:
+Quality:40%
+Quality:21%
+Figure 1: An example of the optimization problem we
+explore, shown for a multi-hop retrieval LM program.
+Given some question–answer pairs and a metric, the
+optimizer proposes new instructions and bootstraps new
+demonstrations (not pictured) for each stage.
+and Shanahan, 2022; Pan et al., 2024) and tool
+use (Qin et al., 2023). However, LM programs
+today are commonly designed via “prompt engi-
+neering”: crafting prompts via manual trial and
+error to coerce a specific LM to operate each step
+in a specific pipeline. Recent work such as APE
+(Zhou et al., 2023), OPRO (Yang et al., 2024), and
+EvoPrompt (Guo et al., 2024) presents prompt op-
+timizers, i.e., algorithms that search over strings to
+identify high-performing prompts. Unfortunately,
+the majority of this work does not directly apply to
+multi-stage LM programs in which we lack gold
+labels or evaluation metrics for the individual LM
+calls. Khattab et al. (2024) study how to express
+arbitrary LM pipelines such that the instructions,
+demonstrations (input/output examples), and LM
+weights of each LM call are treated as parameters
+that can be optimized toward any metric. While the
+authors present optimizers that can create demon-
+strations of multi-stage pipelines and use them to
+optimize prompts, weights, or even both together
+arXiv:2406.11695v2  [cs.CL]  6 Oct 2024
+(Soylu et al., 2024), their proposed optimizers can-
+not tune instructions for multi-prompt pipelines.
+We seek to efficiently optimize prompts in ar-
+bitrary LM programs, especially those with mul-
+tiple stages (Figure 1) and explore approaches
+that hold under weak assumptions, consistent with
+the abstractions from the DSPy programming
+model (Khattab et al., 2024). In particular, we
+assume no access to LM weights, log-probabilites,
+or handwritten metrics or labels for intermediate
+stages in a chain of LM calls. We require only
+the LM program itself, a metric to optimize, and a
+training set of inputs (and, depending on the metric,
+final outputs).
+We formally define the problem of prompt opti-
+mization for LM programs and outline the design
+space by identifying two key challenges. First, the
+proposal challenge: the space of possible prompts
+is intractably large, and this is exacerbated as the
+number of modules increase. Proposing a few high-
+quality instructions is thus essential. Second, the
+credit assignment challenge: our problem requires
+jointly optimizing over many distinct variables that
+parameterize the prompts of all modules. To allo-
+cate search effort, we must infer the impact of our
+configurations for each variable effectively.
+We define several strategies to tackle each of
+these challenges and systematically explore the
+tradeoffs they present. We find that optimizing
+bootstrapped few-shot examples is often essential
+for realizing the greatest performance gains, but
+that optimizing instructions becomes more essen-
+tial for tasks with conditional rules. We also find
+that optimizing both instructions and few-shot ex-
+amples together generally leads to the best results.
+We make three contributions. First, we present
+a formalization of the problem of optimizing lan-
+guage model programs (§2) and propose an algo-
+rithm design space with three strategies to address
+the challenge of prompt proposal and three strate-
+gies to resolve the issue of credit assignment (§3).
+Second, we release a benchmark suite for LM pro-
+gram optimizers spanning seven tasks (§5). Third,
+we construct and evaluate a rich subset of possible
+algorithms for prompt optimization (§4). High-
+lighted amongst these algorithms is MIPRO (Multi-
+prompt Instruction PRoposal Optimizer) which out-
+performs baseline optimizers on five of seven tasks
+in our benchmark, by as much as 13% accuracy
+improvement. Using our algorithms, we derive five
+key lessons for practitioners looking to optimize
+LM programs (§6).
+2 Problem Statement
+Algorithm 1 Optimize Φ with optimizer M
+1: Input: Optimizer M, Initial Program Φ, Metric µ
+2: Input: Max Iterations I, Training Data D
+3: Input: Minibatch size B, Proposer Hyperparameters θ
+4: Output: Optimized version of Φ
+5:
+6: M.Initialize(D, θ) ▷ Initialize optimizer using the data
+7: for k ← 1 to I do
+8: (V 7→ Sk) ← M.Propose(θ) ▷ Generate proposal
+9: Dk ← {(xj, x′j) ∼ D}Bj=1 ▷ Sample size-B batch
+10: σ ← 1B P(x,x′)∈Dk µ(ΦV7→Sk (x), x′) ▷ Validateupdated program
+11: M.Update(V 7→ Sk, σ) ▷ Update optimizer based
+on the observed validation score
+12: end for
+13: (V 7→ Sk) ← M.ExtractOptimizedSets()
+14: return ΦV7→S
+Consider an LM program Φ consisting of m
+modules, each using some LM. Each module i
+is defined by a prompt template pi that contains
+a set of variables (open slots) v. For example,
+a prompt template for few-shot QA might have
+variables for instructions, demonstrations, and the
+target question.
+Let V be the set of all variables used by prompt
+templates for Φ, and let V 7→ S be a total assign-
+ment of variables V to strings S. We use ΦV7→S
+to specify the program Φ run under such an as-
+signment. Our high-level goal is to find a total
+assignment that optimizes Φ’s performance with
+respect to metric µ on a trainset D that has inputs
+X and optional metadata X ′ (such as labels):
+Φ∗ = arg max
+V7→S
+1
+|D|
+X
+(x,x′)∈D
+µ(ΦV7→S(x), x′)
+This is the problem faced by people designing LM
+programs. It is intractable, as (i) each string s ∈ S
+can take on any value, (ii) the metric µ provides
+supervision only at the level of the entire task, so
+every variable inV is latent, and (iii) we assume no
+access to the gradients or embeddings of the LMs
+involved, which rules out many RL and prompt-
+tuning algorithms (Zhang et al., 2022; Li and Liang,
+2021; Shin et al., 2020). In addition, (iv) system
+designers generally have small datasets D and (v)
+small budgets of LM calls for evaluating Φ.
+In many cases, we want to optimize just a subset
+of the variables used by Φ. In the present work, for
+example, we assume each prompt p has a variable i
+over free-form instructions and a set ofK variables
+{di1, . . . , dik} over demonstrations. In these set-

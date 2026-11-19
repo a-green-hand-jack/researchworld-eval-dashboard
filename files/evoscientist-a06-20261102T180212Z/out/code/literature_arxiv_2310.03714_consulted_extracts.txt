@@ -1,0 +1,616 @@
+SOURCE: https://arxiv.org/pdf/2310.03714
+RESOLVED VERSION: 2310.03714v1
+EXTRACTION: pypdf 6.21.4; PDF page markers are retained. Line references are to literature_arxiv_2310.03714.txt.
+These are the tool-returned reading windows, not a claim to have read every page of the saved PDF. Internal citations/related-work discussion are not independent evidence and were not followed.
+
+===== CONSULTED SOURCE LINES 1-610 =====
+
+===== PDF PAGE 1 =====
+Preprint
+DSP Y: C OMPILING DECLARATIVE LANGUAGE
+MODEL CALLS INTO SELF -I MPROVING PIPELINES
+Omar Khattab,1 Arnav Singhvi,2
+Paridhi Maheshwari,4 Zhiyuan Zhang,1
+Keshav Santhanam,1 Sri Vardhamanan,6 Saiful Haq,6
+Ashutosh Sharma,6 Thomas T. Joshi,7 Hanna Moazam,8
+Heather Miller,3,9 Matei Zaharia,2 Christopher Potts1
+1Stanford University, 2UC Berkeley, 3Carnegie Mellon University,
+4Amazon Alexa AI, 5Dashworks Technologies, Inc.,
+6IIT Bombay, 7Calera Capital, 8Microsoft, 9Two Sigma Investments
+okhattab@cs.stanford.edu
+ABSTRACT
+The ML community is rapidly exploring techniques for prompting language mod-
+els (LMs) and for stacking them into pipelines that solve complex tasks. Un-
+fortunately, existing LM pipelines are typically implemented using hard-coded
+“prompt templates”, i.e. lengthy strings discovered via trial and error. Toward a
+more systematic approach for developing and optimizing LM pipelines, we intro-
+duce DSPy, a programming model that abstracts LM pipelines astext transforma-
+tion graphs, i.e. imperative computation graphs where LMs are invoked through
+declarative modules. DSPy modules are parameterized, meaning they can learn
+(by creating and collecting demonstrations) how to apply compositions of prompt-
+ing, finetuning, augmentation, and reasoning techniques. We design a compiler
+that will optimize any DSPy pipeline to maximize a given metric. We conduct
+two case studies, showing that succinct DSPy programs can express and optimize
+sophisticated LM pipelines that reason about math word problems, tackle multi-
+hop retrieval, answer complex questions, and control agent loops. Within minutes
+of compiling, a few lines of DSPy allow GPT-3.5 and llama2-13b-chat to self-
+bootstrap pipelines that outperform standard few-shot prompting (generally by
+over 25% and 65%, respectively) and pipelines with expert-created demonstra-
+tions (by up to 5–46% and 16–40%, respectively). On top of that, DSPy pro-
+grams compiled to open and relatively small LMs like 770M-parameter T5 and
+llama2-13b-chat are competitive with approaches that rely on expert-written
+prompt chains for proprietaryGPT-3.5.
+DSPy is available athttps://github.com/stanfordnlp/dspy.
+1 I NTRODUCTION
+Language models (LMs) are enabling researchers to build NLP systems at higher levels of abstrac-
+tion and with lower data requirements than ever before (Bommasani et al., 2021). This is fueling an
+exploding space of “prompting” techniques—and lightweight finetuning techniques—for adapting
+LMs to new tasks (Kojima et al., 2022), eliciting systematic reasoning from them (Wei et al., 2022;
+Wang et al., 2022b), andaugmenting them with retrieved sources (Guu et al., 2020; Lazaridou et al.,
+2022; Khattab et al., 2022) or with tools (Yao et al., 2022; Schick et al., 2023). Most of these tech-
+niques are explored in isolation, but interest has been growing in building multi-stage pipelines and
+agents that decompose complex tasks into more manageable calls to LMs in an effort to improve
+performance (Qi et al., 2019; Khattab et al., 2021a; Karpas et al., 2022; Dohan et al., 2022; Khot
+et al., 2022; Khattab et al., 2022; Chen et al., 2022; Pourreza & Rafiei, 2023; Shinn et al., 2023).
+Unfortunately, LMs are known to be sensitive to how they are prompted for each task, and this is
+exacerbated in pipelines where multiple LM calls have to interact effectively. As a result, the LM
+1
+arXiv:2310.03714v1  [cs.CL]  5 Oct 2023
+
+===== PDF PAGE 2 =====
+Preprint
+calls in existing LM pipelines and in popular developer frameworks are generally implemented using
+hard-coded ‘prompt templates’, that is, long strings of instructions and demonstrations that are hand
+crafted through manual trial and error. We argue that this approach, while pervasive, can be brittle
+and unscalable—conceptually akin to hand-tuning the weights for a classifier. A given string prompt
+might not generalize to different pipelines or across different LMs, data domains, or even inputs.
+Toward a more systematic approach to designing AI pipelines, we introduce theDSPy programming
+model.1 DSPy pushes building new LM pipelines away from manipulating free-form strings and
+closer to programming (composing modular operators to build text transformation graphs) where a
+compiler automatically generates optimized LM invocation strategies and prompts from a program.
+We draw inspiration from the consensus that emerged around neural network abstractions (Bergstra
+et al., 2013), where (1) many general-purpose layers can be modularly composed in any complex
+architecture and (2) the model weights can be trained using optimizers instead of being hand-tuned.
+To this end, we propose the DSPy programming model (Sec 3). We first translate string-based
+prompting techniques, including complex and task-dependent ones like Chain of Thought (Wei et al.,
+2022) and ReAct (Yao et al., 2022), into declarative modules that carrynatural-language typed sig-
+natures. DSPy modules are task-adaptive components—akin to neural network layers—that abstract
+any particular text transformation, like answering a question or summarizing a paper. We then pa-
+rameterize each module so that it can learn its desired behavior by iteratively bootstrapping useful
+demonstrations within the pipeline. Inspired directly by PyTorch abstractions (Paszke et al., 2019),
+DSPy modules are used via expressive define-by-run computational graphs. Pipelines are expressed
+by (1) declaring the modules needed and (2) using these modules in any logical control flow (e.g.,
+if statements,for loops, exceptions, etc.) to logically connect the modules.
+We then develop theDSPy compiler (Sec 4), which optimizes any DSPy program to improve quality
+or cost. The compiler inputs are the program, a few training inputs with optional labels, and a valida-
+tion metric. The compiler simulates versions of the program on the inputs and bootstraps example
+traces of each module for self-improvement, using them to construct effective few-shot prompts
+or finetuning small LMs for steps of the pipeline. Optimization in DSPy is highly modular: it is
+conducted by teleprompters,2 which are general-purpose optimization strategies that determine how
+the modules should learn from data. In this way, the compiler automatically maps the declarative
+modules to high-quality compositions of prompting, finetuning, reasoning, and augmentation.
+Programming models like DSPy could be assessed along many dimensions, but we focus on the role
+of expert-crafted prompts in shaping system performance. We are seeking to reduce or even remove
+their role through DSPy modules (e.g., versions of popular techniques like Chain of Thought) and
+teleprompters. We report on two expansive case studies: math word problems (GMS8K; Cobbe et al.
+2021) and multi-hop question answering (HotPotQA; Yang et al. 2018) with explorations of chain
+of thought, multi-chain reflection, multi-hop retrieval, retrieval-augmented question answering, and
+agent loops. Our evaluations use a number of different compiling strategies effectively and show
+that straightforward DSPy programs outperform systems using hand-crafted prompts, while also
+allowing our programs to use much smaller and hence more efficient LMs effectively.
+Overall, this work proposes the first programming model that translates prompting techniques into
+parameterized declarative modules and introduces an effective compiler with general optimiza-
+tion strategies (teleprompters) to optimize arbitrary pipelines of these modules. Our main contri-
+butions are empirical and algorithmic: with DSPy, we have found that we can implement very
+short programs that can bootstrap self-improving multi-stage NLP systems using LMs as small as
+llama2-13b-chat and T5-Large (770M parameters). Without hand-crafted prompts and within
+minutes to tens of minutes of compiling, compositions of DSPy modules can raise the quality of
+simple programs from 33% to 82% (Sec 6) and from 32% to 46% (Sec 7) for GPT-3.5 and, simi-
+larly, from 9% to 47% (Sec 6) and from 22% to 41% (Sec 7) forllama2-13b-chat.
+1DSPy is pronounced dee-ess-pie. It’s the second iteration of our earlier Demonstrate–Search–Predict
+framework (DSP; Khattab et al. 2022). This paper introduces the key concepts in DSPy. For more extensive and
+up-to-date documentation of the framework, we refer readers tohttps://github.com/stanfordnlp/dspy.
+2We derive the name tele-prompters from the notion of abstracting and automating the task of prompting,
+in particular, such that it happens at a distance, without manual intervention.
+2
+
+===== PDF PAGE 3 =====
+Preprint
+2 R ELATED WORK
+This work is inspired by the role that Torch (Collobert et al., 2002), Theano (Bergstra et al., 2010;
+2011; Al-Rfou et al., 2016), Chainer (Tokui et al., 2015), and others played in the development in
+deep learning by providing powerful abstractions. A similar transformation is emerging with higher-
+level pipelines of LMs, and we are seeking to offer a solid conceptual framework and programming
+abstractions for what we call foundation model programming. We draw on differentiable program-
+ming (Wang et al., 2018) but applied to LM calls rather than neural networks, and borrow syntactic
+elements from PyTorch (Paszke et al., 2019).
+In-context learning (McCann et al. 2018; Radford et al. 2018; Brown et al. 2020) is a key mechanism
+for foundation model programming. A growing body of work has revealed that, especially with
+instruction tuning (Ouyang et al., 2022), we can elicit sophisticated behavior via prompting (Wei
+et al., 2022; Wang et al., 2022b; Press et al., 2022; Yao et al., 2022; Khot et al., 2022; Madaan et al.,
+2023). Similarly, forms of weak supervision that would normally require task-specific (Khattab
+et al., 2021a;b) or hand-built (Ratner et al., 2016; Hancock et al., 2018) heuristics are now done by
+LMs (Wang et al., 2022b; Zelikman et al., 2022; Zhang et al., 2022; Shao et al., 2023).
+In-context learning methods now routinely invoke tools, leading to LM pipelines that use retrieval
+models (Chen et al., 2017; Lewis et al., 2020; Guu et al., 2020; Lazaridou et al., 2022; Izacard et al.,
+2022), multimodal foundation models, and more traditional tools like APIs (Nakano et al., 2021)
+and calculators. A number of toolkits have been developed to facilitate this, including LangChain
+(Chase, 2022), Semantic Kernel (Microsoft, 2023), LlamaIndex (Liu, 2022), and many other re-
+trieval and agent libraries. These toolkits provide pre-packaged chains and agents that connect
+LMs with numerous accessible tools. However, they suffer from the pervasive prompt engineering
+challenges we address in DSPy: they express task-specific behavior through hand-written prompt
+templates (for detailed discussion, see Appendix B).
+Researchers are starting to apply discrete optimization and RL to find effective prompts, generally
+for a single logical LM call (Guo et al., 2023; Pryzant et al., 2023; Huang et al., 2022; Yang et al.,
+2023). DSPy seeks to generalize this space: it offers a rich framework for optimizing arbitrary
+pipelines from high-level declarative signatures, by bootstrapping high-quality multi-stage demon-
+strations with constraints. In this framework, DSPy teleprompters may apply optimization using
+model selection techniques like cross-validation or, in principle, with sophisticated techniques in-
+volving RL and LM feedback (Hu et al., 2023; Zhao et al., 2023a; Shinn et al., 2023) or learned or
+Bayesian hyperparameter optimization methods (Bergstra et al., 2013; Akiba et al., 2019).
+The present paper seeks to motivate DSPy as a programming model and to report new empirical
+findings from applying the DSPy compiler. This is inspired by formative work by Bergstra et al.
+(2010; 2013), Paszke et al. (2019), and Wolf et al. (2020), who support their respective programming
+models with a mix of benchmark numbers and some qualitative measures. For the current paper, we
+focus on showing that DSPy and its compiler allow us to build outstanding LM systems without
+hand-crafted prompt strings, but instead from truly modular units, and that this opens up doors for
+systematically exploring a rich design space at a very high programmatic level of abstraction.
+3 T HE DSP Y PROGRAMMING MODEL
+We present DSPy, which treats LMs as abstract devices for text generation,3 and optimizes their us-
+age in arbitrary computational graphs. DSPy programs are expressed in Python: each program takes
+the task input (e.g., a question to answer or a paper to summarize) and returns the output (e.g., an
+answer or a summary) after a series of steps. DSPy contributes three abstractions toward automatic
+optimization: signatures, modules, and teleprompters. Signatures abstract the input/output behavior
+of a module; modules replace existing hand-prompting techniques and can be composed in arbitrary
+pipelines; and teleprompters optimize all modules in the pipeline to maximize a metric.
+3We assume access to one or more LMs, which consume a prompt string and return text completions. This
+may be a promptable LM capable of in-context learning (e.g., GPT-3.5 or Llama2-7b) or a smaller finetuneable
+LM (e.g., T5-base). An LM may be selected as the default; operations will use it unless configured otherwise.
+3
+
+===== PDF PAGE 4 =====
+Preprint
+3.1 N ATURAL LANGUAGE SIGNATURES CAN ABSTRACT PROMPTING & FINETUNING
+Instead of free-form string prompts, DSPy programs use natural language signatures to assign work
+to the LM. A DSPy signature isnatural-language typed declaration of a function: a short declarative
+spec that tells DSPy what a text transformation needs to do (e.g., “consume questions and return
+answers”), rather than how a specific LM should be prompted to implement that behavior. More
+formally, a DSPy signature is a tuple of input fields and output fields (and an optional instruction).
+A field consists offield name and optional metadata.4 In typical usage, the roles of fields are inferred
+by DSPy as a function of field names. For instance, the DSPy compiler will use in-context learning
+to interpretquestion differently fromanswer and will iteratively refine its usage of these fields.
+Signatures offer two benefits over prompts: they can be compiled into self-improving and pipeline-
+adaptive prompts or finetunes. This is primarily done by bootstrapping (Sec 4) useful demonstrating
+examples for each signature. Additionally, they handle structured formatting and parsing logic to
+reduce (or, ideally, avoid) brittle string manipulation in user programs.
+In practice, DSPy signatures can be expressed with a shorthand notation likequestion -> answer,
+so that line 1 in the following is a complete DSPy program for a basic question-answering system
+(with line 2 illustrating usage and line 3 the response when GPT-3.5 is the LM):
+1 qa = dspy.Predict("question -> answer")
+2 qa(question="Where is Guaran ´ı spoken?")
+3 # Out: Prediction(answer=’Guaran ´ı is spoken mainly in South America.’)
+In the shorthand notation, each field’s name indicates the semantic role that the input (or output)
+field plays in the transformation. DSPy will parse this notation and expand the field names into
+meaningful instructions for the LM, so that english document -> french translation would
+prompt for English to French translation. When needed, DSPy offers more advanced programming
+interfaces for expressing more explicit constraints on signatures (Appendix A).
+3.2 P ARAMETERIZED & TEMPLATED MODULES CAN ABSTRACT PROMPTING TECHNIQUES
+Akin to type signatures in programming languages, DSPy signatures simply define an interface and
+provide type-like hints on the expected behavior. To use a signature, we must declare amodule with
+that signature, like we instantiated a Predict module above. A module declaration like this returns
+a function having that signature.
+The Predict Module The core module for working with signatures in DSPy isPredict (simplified
+pseudocode in Appendix D.1). Internally,Predict stores the supplied signature, an optional LM to
+use (initially None, but otherwise overrides the default LM for this module), and a list of demon-
+strations for prompting (initially empty). Like layers in PyTorch, the instantiated module behaves as
+a callable function: it takes in keyword arguments corresponding to the signature input fields (e.g.,
+question), formats a prompt to implement the signature and includes the appropriate demonstra-
+tions, calls the LM, and parses the output fields. When Predict detects it’s being used in compile
+mode, it will also internally track input/output traces to assist the teleprompter at bootstrapping the
+demonstrations.
+Other Built-in Modules DSPy modules translate prompting techniques into modular functions that
+support any signature, contrasting with the standard approach of prompting LMs with task-specific
+details (e.g., hand-written few-shot examples). To this end, DSPy includes a number of more sophis-
+ticated modules like ChainOfThought, ProgramOfThought, MultiChainComparison, and ReAct.5
+These can all be used interchangeably to implement a DSPy signature. For instance, simply chang-
+4String descriptions of the task and the fields are also optional and usually omitted. Fields can carry optional
+field prefix and description. By default, fields are assumed to hold free-form strings; we are actively exploring
+optional data type as a way to specify constraints on valid values (e.g.,bool orint) and more gracefully handle
+formatting and parsing logic, though this feature is not core to DSPy at the time of writing.
+5These modules generalize prompting techniques from the literature, respectively, by Wei et al. (2022),
+Chen et al. (2022), Yoran et al. (2023), and Yao et al. (2022) and, in doing so, generalize the ideas on zero-shot
+prompting and rationale self-generation from Kojima et al. (2022), Zelikman et al. (2022), Zhang et al. (2022),
+and Huang et al. (2022) to parameterized modules that can bootstrap arbitrary multi-stage pipelines.
+4
+
+===== PDF PAGE 5 =====
+Preprint
+ing Predict to ChainOfThought in the above program leads to a system that thinks step by step
+before committing to its output field.
+Importantly, all of these modules are implemented in a few lines of code by expanding the user-
+defined signature and calling Predict one or more times on new signatures as appropriate. For
+instance, we show a simplified implementation of the built-inChainOfThought below.
+1 class ChainOfThought(dspy.Module):
+2 def __init__(self, signature):
+3 # Modify signature from ‘*inputs -> *outputs‘ to ‘*inputs -> rationale, *outputs‘.
+4 rationale_field = dspy.OutputField(prefix="Reasoning: Let’s think step by step.")
+5 signature = dspy.Signature(signature).prepend_output_field(rationale_field)
+6
+7 # Declare a sub-module with the modified signature.
+8 self.predict = dspy.Predict(signature)
+9
+10 def forward(self, **kwargs):
+11 # Just forward the inputs to the sub-module.
+12 return self.predict(**kwargs)
+This is a fully-fledged module capable of learning effective few-shot prompting for any LM or task.
+We contrast that with Appendix C, which copies long reasoning prompts hand-written by sources
+ranging from recent research to popular prompting libraries.
+Parameterization Uniquely, DSPy parameterizes these prompting techniques. To understand this
+parameterization, observe that any LM call seeking to implement a particular signature needs to
+specify parameters that include: (1) the specific LM to call (Chen et al., 2023), (2) the prompt in-
+structions (Yang et al., 2023) and the string prefix of each signature field and, most importantly, (3)
+the demonstrations used as few-shot prompts (for frozen LMs) or as training data (for finetuning).
+We focus primarily on automatically generating and selecting useful demonstrations. In our case
+studies, we find that bootstrapping good demonstrations gives us a powerful way to teach sophisti-
+cated pipelines of LMs new behaviors systematically.
+Tools DSPy programs may use tools, which are modules that execute computation. We support re-
+trieval models through adspy.Retrieve module. At the time of writing, DSPy has built-in support
+for ColBERTv2, Pyserini, and Pinecone retrievers, and we have explored experimental dspy.SQL
+for executing SQL queries anddspy.PythonInterpreter for executing Python code in a sandbox.
+Programs DSPy modules can be composed in arbitrary pipelines in a define-by-run interface. In-
+spired directly by PyTorch and Chainer, one first declares the modules needed at initialization, allow-
+ing DSPy to keep track of them for optimization, and then one expresses the pipeline with arbitrary
+code that calls the modules in a forward method. As a simple illustration, we offer the following
+simple but complete retrieval-augmented generation (RAG) system.
+1 class RAG(dspy.Module):
+2 def __init__(self, num_passages=3):
+3 # ‘Retrieve‘ will use the user’s default retrieval settings unless overriden.
+4 self.retrieve = dspy.Retrieve(k=num_passages)
+5 # ‘ChainOfThought‘ with signature that generates answers given retrieval & question.
+6 self.generate_answer = dspy.ChainOfThought("context, question -> answer")
+7
+8 def forward(self, question):
+9 context = self.retrieve(question).passages
+10 return self.generate_answer(context=context, question=question)
+To highlight modularity, we use ChainOfThought as a drop-in replacement of the basic Predict.
+One can now simply write RAG()("Where is Guaran ´ı spoken?") to use it. Notice that, if we
+use a signature "context, question -> search query", we get a system that generates search
+queries rather than answers.
+3.3 T ELEPROMPTERS CAN AUTOMATE PROMPTING FOR ARBITRARY PIPELINES
+When compiling a DSPy program, we generally invoke a teleprompter, which is an optimizer that
+takes the program, a training set, and a metric—and returns a new optimized program. Different
+teleprompters (Sec 4) apply different strategies for optimization.
+5
+
+===== PDF PAGE 6 =====
+Preprint
+In DSPy, training sets may be small, potentially a handful of examples, though larger data enables
+more powerful optimization. Training examples may be incomplete, i.e., only input values are nec-
+essary. Labels for the pipeline steps are not required, unless they need to be used in the metric. In
+practice, we typically assume labels only for (at most) the program’s final output, not the intermedi-
+ate steps. This label-efficiency is critical for modularity: building a new pipeline in DSPy requires
+simply recompiling the new pipeline’s code, not annotating data specific to the new pipeline.
+Metrics can be simple notions like exact match (EM) or F1, but they can be entire DSPy programs
+that balance multiple concerns. For example, we may compile the RAG module above against a
+dataset of question–answer pairs qa trainset and the metric EM. The goal of optimization here is
+to effectively bootstrap few-shot demonstrations. The following code achieves this:
+1 # Small training set with only questions and final answers.
+2 qa_trainset = [dspy.Example(question="What is the capital of France?", answer="Paris")]
+3
+4 # The teleprompter will bootstrap missing labels: reasoning chains and retrieval contexts.
+5 teleprompter = dspy.BootstrapFewShot(metric=dspy.evaluate.answer_exact_match)
+6 compiled_rag = teleprompter.compile(RAG(), trainset=qa_trainset)
+In this example, the BootstrapFewShot teleprompter (Sec 4, Appendix E.1) simulates RAG on the
+training example(s). It will collect demonstrations of each module (i.e., examples of its input–output
+behavior) that collectively lead to valid output (i.e., respecting the signatures and the metric).
+If one wanted to push the compiled program to be extractive given its retrieved contexts, one could
+define a custom metric to use in place ofdspy.evaluate.answer exact match:
+1 def answer_and_context_match(example, pred, trace=None):
+2 answer_match = dspy.evaluate.answer_exact_match(example, pred)
+3
+4 # Is the prediction a substring of some passage?
+5 context_match = any((pred.answer.lower() in c) for c in pred.context)
+6
+7 return answer_match and context_match
+Notice that behavior like this might be more accurately checked by another DSPy program that
+checks for faithful grounding of answers. Such metrics are fully supported and encouraged in DSPy.
+Teleprompters can be composed by specifying a teacher program. DSPy will sample demonstra-
+tions from this program for prompt optimization. This composition can enable very rich pipelines,
+where expensive programs (e.g., complex expensive ensembles using large LMs) supervise cheap
+programs (e.g., simple pipelines using smaller LMs). One may start withcompiled rag from above
+(say, compiled to use a large Llama2-13b-chat LM) but now fine-tune Flan-T5-large to create an
+efficient program:
+1 # Larger set of questions with *no labels*. Labels for all steps will be bootstrapped.
+2 unlabeled_questions = [dspy.Example(question="What is the capital of Germany?"), ...]
+3
+4 # As we assumes no answer, we use ‘answer_passage_match‘ to filter ungrounded answers.
+5 finetuning_teleprompter = BootstrapFinetune(metric=dspy.evaluate.answer_passage_match)
+6
+7 # We set ‘teacher=compiled_rag‘ to compose. Bootstrapping will now use ‘compiled_rag ‘.
+8 compiled_rag_via_finetune = finetuning_teleprompter.compile(RAG(), teacher=compiled_rag,
+trainset=unlabeled_questions, target=’google/flan-t5-large’)
+4 T HE DSP Y COMPILER
+A key source of DSPy’s expressive power is its ability to compile—or automatically optimize—any
+program in this programming model. Compiling relies on a teleprompter, which is an optimizer for
+DSPy programs that improves the quality (or cost) of modules via prompting or finetuning, which
+are unified in DSPy. While DSPy does not enforce this when creating new teleprompters, typical
+teleprompters go through three stages.
+Stage 1: Candidate Generation The compiler first (recursively) finds all uniquePredict modules
+(predictors) in a program, including those nested under other modules. For each unique predictor
+p, the teleprompter may generate candidate values for the parameters of p: the instructions, field
+descriptions, or—most importantly—demonstrations (i.e., example input–output pairs). In this iter-
+6
+
+===== PDF PAGE 7 =====
+Preprint
+ation of DSPy, we focus on demonstrations and find that simple rejection-sampling-like approaches
+can help bootstrap highly effective multi-stage systems.
+Consider the simplest non-trivial teleprompter in DSPy,BootstrapFewShot (simplified pseudocode
+in Appendix E.1). This teleprompter will simulate a teacher program (or, if unset, the zero-shot
+version of the program being compiled) on some training inputs, possibly one or more times with
+a high temperature. When running in compile mode, multi-stage traces are tracked transparently
+and in a thread-safe fashion throughout execution. The program’s metric is used to filter for multi-
+stage traces that together help the pipeline pass the metric. We thus obtain potential labels for all
+signatures in the program by throwing away the bad examples and using the good examples as
+potential demonstrations, though these design decisions are under user control.
+While LMs can be highly unreliable, we find they can be rather efficient at searching the space
+of solutions for multi-stage designs. A well-decomposed program can typically find at least a few
+training examples where the LM can pass the constraints enforced by the signatures and metrics,
+allowing us to bootstrap iteratively if needed.
+Stage 2: Parameter Optimization Now each parameter has a discrete set of candidates: demon-
+strations, instructions, etc. Many hyperparameter tuning algorithms (e.g., random search or Tree-
+structured Parzen Estimators as in HyperOpt (Bergstra et al., 2013) and Optuna (Akiba et al., 2019))
+can be applied for selection among candidates. We report simplified implementations of DSPy’s
+BootstrapFewShotWithRandomSearch and BootstrapFewShotWithOptuna in Appendix E.2 and
+Appendix E.3.
+Another type of optimization is finetuning withBootstrapFinetune, where the demonstrations are
+used to update the LM’s weights for each predictor. When this is applied, the LM parameter of each
+module is updated to the new LM weights. Typically, we are optimizing average quality using the
+metric with cross-validation over the training set or a validation set. This is applicable even with no
+labels for any stages, depending on the nature of metric.
+Stage 3: Higher-Order Program Optimization A different type of optimization that the DSPy
+compiler supports is modifying the control flow of the program. One of the simplest forms of
+these is ensembles, which we use in the case studies in this work. An ensemble will bootstrap
+multiple copies of the same program, and then replace the program with a new one that runs them
+all in parallel and reduces their predictions into one with a custom function (e.g., majority voting).
+In future work, this stage can easily accommodate techniques for more dynamic (i.e., test-time)
+bootstrapping as well as automatic backtracking-like logic.
+5 G OALS OF EVALUATION
+Programming frameworks can be evaluated along many dimensions: computational efficiency, de-
+veloper efficiency, intuitiveness of the code and concepts, and so forth. In this paper, we focus on
+perhaps the most pressing issue for current LM pipelines: the role of hand-written, task-specific
+prompts in achieving performant systems. Our evaluations seek to test the following hypotheses:
+H1 With DSPy, we can replace hand-crafted prompt strings with concise and well-defined
+modules, without reducing quality or expressive power.
+H2 Parameterizing the modules and treating prompting as an optimization problem makes
+DSPy better at adapting to different LMs, and it may outperform expert-written prompts.
+H3 The resulting modularity makes it possible to more thoroughly explore complex pipelines
+that have useful performance characteristics or that fit nuanced metrics.
+Our evaluation will explore these hypotheses using diverse task–program pairs. We hope this begins
+a shift from underspecified questions like “how do different LMs compare on GSM8K” toward “how
+they compare on GSM8K with program P when compiled with strategy S”, which is a well-defined
+and reproducible run. Ultimately, our goal is to reduce the role of artful prompt construction in
+modern AI in favor of the development of new modular, composable programs and optimizers.
+7
+
+===== PDF PAGE 8 =====
+Preprint
+Table 1: Results with in-context learning on GSM8K math word problems. Each row represents
+a separate pipeline: the module in the Program column is compiled against the examples in the
+Training set. The programs, compilers, and (small) training sets are defined in Section 6. Rows with
+ensemble build on the immediately preceding row. Notably, all programs in this table are expressed
+by composing two to four DSPy modules and teleprompters. Compiling the correctmodules, instead
+of string prompts, improves different LMs from 4–20% accuracy to 49–88% accuracy.
+GPT-3.5 Llama2-13b-chat
+Program Compilation Training Dev Test Dev Test
+vanilla
+none n/a 24.0 25.2 7.0 9.4
+fewshot trainset 33.1 – 4.3 –
+bootstrap trainset 44.0 – 28.0 –
+bootstrap×2 trainset 64.7 61.7 37.3 36.5
++ensemble trainset 62.7 61.9 39.0 34.6
+CoT
+none n/a 50.0 – 26.7 –
+fewshot trainset 63.0 – 27.3 –
+fewshot +human CoT 78.6 72.4 34.3 33.7
+bootstrap trainset 80.3 72.9 43.3 –
++ensemble trainset 88.3 81.6 43.7 –
+reflection
+none n/a 65.0 – 36.7 –
+fewshot trainset 71.7 – 36.3 –
+bootstrap trainset 83.0 76.0 44.3 40.2
++ensemble trainset 86.7 – 49.0 46.9
+6 C ASE STUDY: M ATH WORD PROBLEMS
+We evaluate on the popular GSM8K dataset with grade school math questions (Cobbe et al., 2021).
+We sample 200 and 300 question–answer pairs from the official training set for training and develop-
+ment, respectively. Our final evaluations use the 1.3k official test set examples. We report extensive
+comparisons on the development set to avoid overfitting on test. Following prior work on GSM8K,
+we evaluate the accuracy of the final numerical value that appears in the LM output.
+Programs Considered For this task, we consider three simple DSPy programs: a one-step Pre-
+dict module (vanilla), a two-step ChainOfThought module (CoT), and finally a multi-stage Com-
+parerOfThoughts module (ThoughtReflection). These are fully defined by the following code:
+1 vanilla = dspy.Predict("question -> answer") # GSM8K Program ‘vanilla‘
+2
+3 CoT = dspy.ChainOfThought("question -> answer") # GSM8K Program ‘CoT‘
+1 class ThoughtReflection(dspy.Module):
+2 def __init__(self, num_attempts):
+3 self.predict = dspy.ChainOfThought("question -> answer", n=num_attempts)
+4 self.compare = dspy.MultiChainComparison(’question -> answer’, M=num_attempts)
+5
+6 def forward(self, question):
+7 completions = self.predict(question=question).completions
+8 return self.compare(question=question, completions=completions)
+9
+10 reflection = ThoughtReflection(num_attempts=5) # GSM8K Program ‘reflection‘
+In reflection, five reasoning chains are sampled from the LM (alongside their answers) and they
+are compared in parallel by a built-in MultiChainComparison module, which generalizes Yoran
+et al. (2023). This generates a new answer taking into account the patterns from the five attempts.
+Critically, the modules used are all generic, none is specific math problems or particular LM.
+Compiling As we discussed in Section 4, DSPy programs can be compiled into new, optimized
+programs. In our experiments, we evaluate the programs zero-shot (no compiling) as well as a
+number of strategies for compiling. Our simplest compiler is LabeledFewShot:
+1 fewshot = dspy.LabeledFewShot(k=8).compile(program, trainset=trainset)
+Here,program can be any DSPy module. This simply samplesk=8 random demonstrations from the
+trainset for the fields common to the training examples and the signature(s), in this case,question
+andanswer, but not the reasoning for instance. We report the average of 3–5 runs (depending on the
+setting) when applying such random sampling.
+8
+
+===== PDF PAGE 9 =====
+Preprint
+Next, we also consider bootstrapping few-shot examples with random search:
+1 tp = BootstrapFewShotWithRandomSearch(metric=gsm8k_accuracy)
+2 bootstrap = tp.compile(program, trainset=trainset, valset=devset)
+This will generate demonstration chains for examples in the training set and optimize the selection
+of demonstrations (from this set) to self-improve the program’s modules. As the name indicates, this
+is done with random search, treating the selection of demonstrations as a parameter to optimize.
+Next, if desired, this bootstrapping process can be nested in DSPy. In particular, we can use the
+optimized bootstrap program itself to further bootstrap another program. This is relevant, for
+example, whenever the original zero-shotprogram performs relatively poorly.
+1 bootstrap2 = tp.compile(program, teacher=bootstrap, trainset=trainset, valset=devset)
+And lastly, we consider ensembling these bootstraps:
+1 # A program that ensembles the top-7 candidate programs from a bootstrapping compiler run
+(in particular ‘bootstrap‘ or, when applicable, ‘bootstrap2‘) with majority voting.
+2 ensemble = Ensemble(reduce_fn=dspy.majority).compile(bootstrap.programs[:7])
+GSM8K includes human reasoning chains. Above, trainset does not include these reasoning
+chains. We also evaluate withtrainset human CoT, which extends the examples intrainset with
+the human reasoning string. These two datasets can be used interchangeably as the value for the
+trainset parameter above. We note here that compiling generally runs on the order of minutes
+(or tens of minutes) as even the more expensive settings only require running the program a few
+thousand times (e.g., 10–20 trials over 150–300 validation examples) and they can occur in parallel.
+Results Our results are summarized in Table 1, which includes dev results as well as our evaluation
+of promising representatives of each approach on the test set. First, the vanilla program results
+show that GPT-3.5 and llama2-13b-chat struggle with math word problems when they have to
+predict the answers directly, that is, without using a reasoning chain first. This is most pronounced
+in the absence of good demonstrations, which can be seen in the none compilation setting (i.e.,
+zero-shot instruction) and the fewshot setting (i.e., sampling random question–answer pairs). In-
+terestingly, however,vanilla is helped substantially by compiling withbootstrap and by iterating
+this process into bootstrap×2. On inspecting the prompts bootstrapped (Appendix F), we see that
+the prompt allows the LM to leverage the answer field for reasoning first, which is permitted as the
+metric extracts the final numerical value for evaluation.
+Next, we consider theCoT program. While the expert human reasoning chains (+human CoT) provide
+a large boost when available, we can match or surpass this using bootstrap, substantiating our
+hypothesis that DSPy can cut the need for hand-crafted prompts. Beyond this, we see that the
+reflection program, while only a few lines longer than the others, is a clear winner, thoughCoT is
+quite effective with ensemble. Overall, the bootstrap compilation procedure leads to large gains
+for every program, across both LMs. Indeed, all programs in this table are expressed by composing
+two to four DSPy modules and teleprompters, and they reveal overall that—in the new paradigm
+prescribed by DSPy—it’s composing the right generic modules, rather than manipulating string
+prompts, that improves different LMs from 4–20% accuracy to 49–88% accuracy.
+We can informally compare with the following. Zhang et al. (2022) reports 48% for
+text-davinci-002, which aligns closely with our llama2-13b-chat results, and reports 59.4%
+with codex when employing a manual CoT approach and 62.8% with an automatic CoT method.
+Wang et al. (2022b) report 57% for CoT prompting with PaLM 540-B, which becomes 74% upon
+adding self-consistency. The Llama2 authors (Touvron et al., 2023) presents 28.7% forllama2-13b,
+42.2% for llama2-34b, and 56.8% for llama2-70b. Intriguingly, our program with the 13b variant
+of the model is competitive with their 34b-based results even though we don’t use human reasoning
+chains in our program. Zhao et al. (2023b) reports 80.8% for CoT with gpt-3.5-turbo from April
+2023. The GPT-4 authors (OpenAI, 2023) reports that GPT-3.5 scores 57.1% and GPT-4 elevates
+this to 92% but they note that GPT-4 was in fact pre-trained on a subset of GSM8K’s training set.
+9
+
+===== PDF PAGE 10 =====
+Preprint
+7 C ASE STUDY: C OMPLEX QUESTION ANSWERING
+In this case study, we explore the multi-hop question answering task with the HotPotQA (Yang et al.,
+2018) dataset in the open-domain “fullwiki” setting. For retrieval, we use a search index of the of-
+ficial Wikipedia 2017 “abstracts” dump of HotPotQA. Search is conducted by a ColBERTv2 (San-
+thanam et al., 2021) retriever. The HotPotQA test set is hidden, so we reserve the official validation
+set for our testing, and sample 1000 examples for that. We sub-divide the training set into 70%/30%
+train/validation splits. In the training (and thus validation) split, we keep only examples marked as
+“hard” in the original dataset, which matches the designation of the official validation and test sets.
+For training and for reporting development results, we sample 200 and 300 examples respectively.
+Programs Considered Our simplest baseline is the vanilla program used in the previous case
+study on GSM8K (Sec 6); the "question -> answer" signature is universal enough that it will
+work for this task (and many others) when compiled appropriately.
+Our baseline RAG program is the one given in Section 3.2 as a simple example of RAG with a
+dspy.ChainOfThought layer. We will see that this program does not excel at HotPotQA, and this
+motivates us to evaluate two multi-hop programs.
+To that end, we first test ReAct (Yao et al., 2022), a multi-step agent for tool use, which is imple-
+mented as a built-in module in DSPy. In the simplest case, a ReAct module for a particular signature
+can be declared as follows in DSPy:
+1 react = dspy.ReAct("question -> answer", tools=[dspy.Retrieve(k=1)], max_iters=5)
+We also test the following custom program, which simulates the information flow in Baleen (Khattab
+et al., 2021a) and IRRR (Qi et al., 2020) and has similarities to IRCoT (Trivedi et al., 2022).
+1 class BasicMultiHop(dspy.Module):
+2 def __init__(self, passages_per_hop):
+3 self.retrieve = dspy.Retrieve(k=passages_per_hop)
+4 self.generate_query = dspy.ChainOfThought("context, question -> search_query")
+5 self.generate_answer = dspy.ChainOfThought("context, question -> answer")
+6
+7 def forward(self, question):
+8 context = []
+9
+10 for hop in range(2):
+11 query = self.generate_query(context=context, question=question).search_query
+12 context += self.retrieve(query).passages
+13
+14 return self.generate_answer(context=context, question=question)
+15
+16 multihop = BasicMultiHop(passages_per_hop=3)
+Compiling For compilers, we continue to use the ones that we used for GSM8K (see Sec 6). We
+also consider two compositions of our teleprompters. For ReAct, we consider bootstrapping with
+BootstrapFewShotWithRandomSearch starting from an earlier bootstrap of the ReAct program.
+For the simple multihop program, we also consider fine-tuning with T5-Large starting from the
+earlier bootstrap of that program.
+1 multihop_t5 = dspy.BootstrapFinetune(metric=answer_exact_match).compile(program,
+teacher=bootstrap, trainset=trainset, target=’t5-large’)
+Results Table 2 summarizes our results. Compared with thevanilla few-shot prompting, a chain-
+of-thought and retrieval-augmented generation ( CoT RAG) program can self-bootstrap in DSPy to
+increase answer EM substantially. However, this relies entirely on the ColBERTv2 retriever to find
+relevant passages directly from the original questions, limiting its passage recall. This is tackled in
+thereact andmultihop programs, which will generate queries for the retriever in multiple iterative
+“hops”. Indeed, overall, a simple multihop program performs the best, and in general bootstrap
+again proves to be very effective at raising its quality relative to itsfewshot variant for both LMs.
+In particular, we can see that bootstrap (and/or bootstrap×2) can outperform both fewshot
+prompting (for multihop) and expert human reasoning (for react; adapted slightly from Yao et al.
+(2022) to our retrieval setting). Perhaps most importantly, we can makellama2-13b-chat compet-
+itive with GPT-3.5 by simply compiling our programs.
+To assess the finetuning capacity of DSPy, we also evaluated the compiler multihop t5 defined
+above which produces a T5-Large (770M parameter) model. This program scores 39.3% answer
+EM and 46.0% passage accuracy on the dev set, using only 200 labeled inputs and 800 unlabeled
+10
+
+===== PDF PAGE 11 =====
+Preprint
+Table 2: Results with in-context learning on HotPotQA multi-hop retrieval question answering. We
+report answer exact match (Ans) and pair-retrieval accuracy (Psg). Each row represents a separate
+pipeline: the module in the Program column is compiled against the examples in the Training set.
+The programs, compilers, and (small) training sets are defined in the main text. For HotPotQA, we
+use the training set (and not dev) directly for cross-validation. ∗The marked result is evaluated on
+50% of our test set due to cost.
+GPT-3.5 Llama2-13b-chat
+Program Compiler Dev Test Dev Test
+Ans Psg Ans Psg Ans Psg Ans Psg
+vanilla fewshot 34.3 n/a 31.5 n/a 27.5 n/a 21.8 n/a
+CoT RAG fewshot 36.4 36.0 29.8 34.4 34.5 36.0 28.0 34.4bootstrap 42.3 36.0 – – 38.3 36.0 32.9 34.4
+react
+none 20.3 – – – 20.0 – – –
++human r 33.0 – – – 28.3 – – –
+bootstrap 31.0 – – – 24.7 – – –
+bootstrap×2 39.0 – – – 40.0 – – –
+multihop
+fewshot 36.9 38.3 31.2 40.8 34.7 32.0 31.3 30.8
+bootstrap 48.7 47.0 39.6 43.8 42.0 48.3 36.4 43.5
+ensemble 54.7 – 45.6∗ – 50.0 – 41.0 –
+questions. For compiling, we use a teacher program consisting of an ensemble (union) of two
+multihop with llama2-13b-chat. Considering its extremely small size and local availability, this
+compiled program withT5-Large would impose orders of magnitude lower costs for inference than
+a proprietary LM like GPT-3.5.
+Our results may be pegged against the evaluation on HotPotQA in a number of recent papers, though
+there is significant variation in evaluation methodology and test set samples across studies in this
+space. Using CoT prompting, Si et al. (2022) achieve 25.2% EM. With a “recite-and-answer” tech-
+nique that uses PaLM-62B (Chowdhery et al., 2022) to recite evidence passages, Sun et al. (2022)
+achieve 26.5% EM. Wang et al. (2022a) achieve 33.8% EM and 44.6% F1 when applying self-
+consistency for PaLM-540B. Yao et al. (2022) achieve 27.4% EM using ReAct with PaLM-540B
+and 30.8 with text-davinci-002, with a tool giving it the ability for search using a Wikipedia
+API. They push their PaLM results to 35.1% EM by applying an additional CoT step with self-
+consistency, which may resemble our ensemble approach in the sense of aggregating multiple an-
+swers. Trivedi et al. (2022) reports 49% using a pipeline with code-davinci-002 LM on a sample
+of 500 HotPotQA questions.
+8 C ONCLUSION
+This paper introduced DSPy, a new programming model for designing AI systems using pipelines
+of pretrained LMs and other tools. We presented three new concepts introduced in this abstraction
+(DSPy signatures, modules, and teleprompters), and showed in two very different case studies that
+it supports rapid development of highly effective systems that use relatively small LMs. We have
+maintained open-source versions of this framework for close to a year. In this period, we have seen

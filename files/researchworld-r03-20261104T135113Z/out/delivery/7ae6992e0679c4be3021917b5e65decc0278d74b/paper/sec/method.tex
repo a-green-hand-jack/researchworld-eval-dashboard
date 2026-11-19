@@ -1,0 +1,32 @@
+\section{Problem and methods}
+\label{sec:method}
+\paragraph{Setting.}
+Let $Y\in\mathbb{R}^{M\times N}$ be the historical score matrix of $M$ models on $N$ benchmarks with observed index set $\Omega$ (other cells are missing). A new model $m^\star$ has not been evaluated; it \emph{can} be evaluated on a set $C\subseteq[N]$ of benchmarks. With budget $k$ the evaluator chooses $S\subseteq C$, $|S|=k$, runs those benchmarks, and must infer the scores on a set of target benchmarks $T\subseteq [N]\setminus S$. The selection may use only $Y$ (never the scores of $m^\star$), and a benchmark has to be one the model can actually run. Scores are standardised per benchmark with the mean and standard deviation of the \emph{training} models, $z_{ij}=(y_{ij}-\mu_j)/s_j$, so that errors are comparable across benchmarks with different scales.
+
+\paragraph{Inference rules (fixed $S$).}
+All rules are fitted on training models only.
+\emph{Factor model (\texttt{fa}).} $z_{i}=\mu+Wf_i+\varepsilon_i$ with $f_i\sim\mathcal N(0,I_r)$, $\varepsilon_{ij}\sim\mathcal N(0,\psi_j)$, fitted by EM on the observed cells. Given $z_S$ of the new model, the posterior mean of the factors is $\hat f=(I+W_S^\top\Psi_S^{-1}W_S)^{-1}W_S^\top\Psi_S^{-1}(z_S-\mu_S)$ and the prediction is $\hat z=\mu+W\hat f$; the rank $r$ is chosen by hold-out error on 10\% of the observed training cells.
+\emph{Ridge (\texttt{ridge}).} Multi-output ridge regression of all benchmarks on the $S$ columns of the factor-completed training matrix, with a GCV-chosen penalty.
+\emph{Kernel ridge (\texttt{krr}).} Ridge plus an RBF kernel-ridge correction on the residuals (bandwidth by the median heuristic, penalty by GCV).
+\emph{Nearest neighbours (\texttt{knn}):} mean of the 10 training models closest on $S$.
+\emph{Average regression (\texttt{avgreg}):} a single aggregate (mean of $z_S$) mapped linearly to every target; this is the ``one general-ability score'' baseline.
+\emph{Column mean (\texttt{mean}):} predict the training mean ($k=0$ baseline).
+(An unregularised PCA projection was kept as a naive baseline on small matrices only.)
+
+\paragraph{Selection rules.}
+Every selector returns an \emph{ordering} of benchmarks, computed from the training matrix; the subset for budget $k$ is the first $k$ entries that the new model can run, so subsets are nested in $k$ and the same code serves any observed set $C$.
+Baselines: \texttt{random}; \texttt{popular} (most-evaluated first); \texttt{rawvar} (largest raw variance); \texttt{central} (largest mean absolute correlation with the others); \texttt{kcenter} (farthest-point on $1-|\mathrm{corr}|$).
+Spectral: \texttt{lev} (rank-$r$ leverage scores) and \texttt{qr} (pivoted QR of the rank-$r$ right singular vectors) \citep{mahoney2009cur}.
+Model-based greedy: \texttt{dopt} maximises $\log\det(I+\sum_{j\in S}w_jw_j^\top/\psi_j)$, the information about the latent factors; \texttt{gv\_fa} greedily minimises the total conditional variance of all benchmarks given the chosen set under the factor covariance $WW^\top+\Psi$ (a pivoted Cholesky with trace-reduction pivoting; \texttt{gv\_emp} uses a shrunk empirical covariance instead). A cost-aware variant divides the variance reduction by the benchmark's evaluation time (Appendix). Because the objective of \texttt{dopt} is monotone submodular, greedy attains $(1-1/e)$ of the optimum of \emph{that} objective \citep{nemhauser1978analysis}; no such guarantee is claimed for \texttt{gv\_fa} on the squared error.
+An \texttt{oracle} selector (greedy on the new model's own target error) uses the targets and is reported only as an upper bound on what selection could give.
+
+\paragraph{Cost and applicability.}
+Fitting the factor model costs $O(n_{\mathrm{iter}}\,(M N r^2 + N r^3))$ on a training matrix; greedy selection costs $O(kN^2)$ from a covariance matrix; inference for a new model costs $O(kr^2+Nr)$ for \texttt{fa}. All of this runs in seconds on a CPU for the matrices here; the cost that matters to the evaluator is running the $k$ benchmarks. The methods need a training matrix with enough models per benchmark (benchmarks with fewer than 8 observed training scores are dropped), a shared latent structure between benchmarks, and a new model drawn from a population the training models represent; Section~\ref{sec:exp} tests the last condition with held-out families and a time split.
+
+\paragraph{Theory: what a rank-$r$ Gaussian model predicts.}
+Under the factor model with known parameters, the Bayes-optimal prediction given $S$ has expected squared error on target $j$ equal to $\psi_j+w_j^\top\Sigma_S w_j$ with posterior factor covariance $\Sigma_S=(I+\sum_{l\in S}w_lw_l^\top/\psi_l)^{-1}$. Consequently, selection only matters through $\Sigma_S$ (it is the choice of well-spread, informative loadings), and for random $S$ with i.i.d.\ loadings the excess error over the noise floor satisfies
+\begin{equation}
+\frac{rc}{1+kc}\;\le\;\frac{\mathbb E[\mathrm{MSE}]-\psi}{\psi}\;\le\;\frac{r}{k-r-1}\qquad(k>r+1),
+\label{eq:bound}
+\end{equation}
+with $c=\lambda/(r\psi)$ the per-factor signal-to-noise ratio (Proposition~\ref{prop:bound}, Appendix~\ref{app:theory}). Hence a random subset reaches a relative excess $\epsilon$ over the noise floor once $k\ge r+1+r/\epsilon$. We check Eq.~(\ref{eq:bound}) and the greedy-versus-optimum gap on synthetic matrices with known truth, and compare model-implied curves with measured ones (Section~\ref{sec:exp}).

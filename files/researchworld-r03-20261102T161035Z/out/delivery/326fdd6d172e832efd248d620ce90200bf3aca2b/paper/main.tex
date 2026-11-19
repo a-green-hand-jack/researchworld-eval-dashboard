@@ -1,0 +1,213 @@
+\documentclass{article}
+\usepackage{iclr2027_conference,times}
+\input{math_commands.tex}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{booktabs}
+
+% Draft helper: include a delivered figure/table if present (figures/ and tables/ belong to the figure owner).
+\providecommand{\gtrsim}{\mathrel{\raisebox{-0.5ex}{$\stackrel{>}{\sim}$}}}
+\providecommand{\lesssim}{\mathrel{\raisebox{-0.5ex}{$\stackrel{<}{\sim}$}}}
+\graphicspath{{../figures/}}
+
+\title{How Many Benchmarks Must Be Run? Selecting Benchmarks and Inferring the Rest of a New Model's Scores}
+
+\author{Anonymous authors\\Paper under double-blind review}
+
+%\iclrfinalcopy
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Evaluating a language model on every benchmark of a large suite is expensive, yet public leaderboards hold many past ``model $\times$ benchmark'' scores. We ask: if a new model can only be run on $k$ of $N$ benchmarks, which $k$ should be run, how should the other scores be inferred, and how large must $k$ be? We study this on three public score matrices (MTEB, Open LLM Leaderboard, HELM Lite) with a held-out-model protocol: selection, imputation and regression are fitted on training models only, all methods are scored on a common set of target benchmarks, and a full-information reference (the model's scores on all other benchmarks are known) gives the floor for any $k$. Scores are predictable but a floor remains: on MTEB the reference has standardised error 0.39 (skill 0.85), and 4 benchmarks chosen by greedy selection already reach 0.56 (random: 0.64) against 1.00 for no information; the reference is approached near $k\approx100$ of about 190 candidates, and 90\% of its skill needs 16--24. On OLB and HELM Lite, 1--5 of 5--9 candidates suffice. Redundancy-aware selection beats random by at most 0.1 and the advantage vanishes for large $k$; cheap heuristics (variance, pivoted QR, farthest-first, coverage) are worse than random, so the choice of inference (ridge or $k$NN, not the average score, not a factor model) matters more. A Gaussian factor model has a closed-form error but needs $k$ well above its rank in simulation and is no better than ridge on real data. Errors grow sharply when new models come from unseen organisations, families or later release dates on MTEB and from unseen families on HELM Lite, where even the full-information reference is poor; they do not grow for unseen organisations on OLB (a temporal split raises them moderately). Conclusions are limited to these three pools.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+Evaluating one language model on a modern suite means running dozens to hundreds of benchmarks, each costing compute, time and people. Meanwhile public leaderboards have accumulated many past ``model $\times$ benchmark'' scores. If scores on different benchmarks are strongly related, an evaluator who can afford only $k$ of $N$ benchmarks for a \emph{new} model could infer the rest. Whether this works, with which $k$ benchmarks, and how large $k$ must be are empirical questions about leaderboard data.
+
+We study exactly this across-benchmark problem. Given a partially observed score matrix of $M$ models and $N$ benchmarks and a new model that may be run on $k\ll N$ benchmarks, (a) which $k$ should be run, (b) how should the other $N-k$ scores be inferred, and (c) how large must $k$ be? Our protocol treats the new model as a held-out row: every learned object, including the benchmark ordering, is fitted on training models only. We state the hypotheses in advance (H1 a predictable structure with a noise floor; H2 redundancy-aware selection beats random and single-criterion heuristics, with a margin that shrinks with $k$; H3 supervised inference beats the average-score predictor; H4 the error of a factor model follows $\bar\psi(1+r/k)$ and needs $k$ above $r$; H5 conclusions weaken under distribution shift, few training models and heterogeneous pools) and report where each holds.
+
+\paragraph{Contributions.} (1) A held-out-model protocol with a no-information baseline, random selection, repeated splits and cluster-bootstrap intervals over test models, run on three public matrices of different size and kind (254 MTEB tasks, 6 Open LLM Leaderboard benchmarks, 10 HELM Lite scenarios). (2) A comparison of eight selection rules and four inference rules, with paired differences on a common target set and a full-information reference that makes ``how large must $k$ be'' measurable. (3) A theory of the Gaussian factor model, checked on synthetic data, with a statement of how far the real data follow it. (4) Negative and conditional results: factor-model inference no better than ridge, selection margins at most 0.1 and vanishing for large $k$, heuristics worse than random, a floor that remains even with all other benchmarks known, and a loss under shift that depends on the matrix. Our first protocol, whose target set depended on the selector, gave misleading selector comparisons; we replace it. \textbf{Scope:} the MTEB models are text-embedding models and the OLB and HELM Lite matrices have only 6 and 10 benchmarks; we make no claim for ``LLM benchmarks'' in general.
+
+\section{Related work}
+\label{sec:related}
+\paragraph{Fewer items per benchmark.} Most work on cheaper evaluation reduces the number of \emph{items} within a benchmark: tinyBenchmarks \citep{polo2024tinybenchmarks}, anchor points \citep{vivek2023anchor}, the sparse benchmark of \citet{kipnis2024metabench}, and the efficient-benchmarking study on HELM \citep{perlitz2023efficient}. These estimate a benchmark's score from a subset of its items; we ask which whole benchmarks to run to infer the others for a new model. We compare with none of them experimentally; we know Anchor Points, the HELM efficiency study, matrix completion and column subset selection only from their abstracts.
+
+\paragraph{Low-dimensional structure of benchmark scores.} Observational scaling laws fit a low-dimensional capability space to the scores of many public models and predict held-out benchmark performance \citep{ruan2024observational}; Sloth fits skill scaling laws across model families \citep{polo2024sloth}. Benchmark-agreement studies examine how methodological choices change the apparent agreement among benchmarks \citep{perlitz2024benchbench}. These support the premise that scores are correlated but do not address selecting $k$ benchmarks for a new model. The closest precedent on our primary data is the task selection of MMTEB \citep{enevoldsen2025mmteb}, which shrinks a benchmark by iteratively dropping the task best predicted by the others (judged by rank correlation of models); we test an approximation of it as a selector for a new model (Appendix~\ref{app:extra}). The leaderboards we use come from \citet{muennighoff2022mteb} (and its successor), \citet{liang2022helm} and the Open LLM Leaderboard.
+
+\paragraph{Matrix completion and feature selection.} Low-rank matrices can be recovered from a sample of entries \citep{candes2009exact}, column subset selection chooses columns whose span approximates the matrix \citep{wang2015css}, and Bayesian experimental design chooses measurements to minimise posterior variance \citep{chaloner1995design}. Our selection rules (pivoted QR, greedy reconstruction, greedy A-optimal design) are instances of these ideas applied to a leaderboard matrix whose new row is observed only at the $k$ chosen columns; the factor model is fitted by EM with missing data \citep{rubin1982em}.
+
+\section{Problem, methods and theory}
+\label{sec:method}
+\paragraph{Setting.}
+Let $X\in\mathbb{R}^{M\times N}$ be a partially observed matrix of scores of $M$ training models on $N$ benchmarks, with observed-cell set $\Omega$. A new model $m^\ast$ arrives; we may run a set $S$ of $k$ benchmarks (restricted to benchmarks the model actually has), observe $x_S$, and must predict $x_j$ for the remaining observed benchmarks $j\notin S$.
+
+\paragraph{Selection rules.} Each rule produces an ordering of benchmarks from the training matrix only; the first $k$ benchmarks the model has are run. \texttt{random}; \texttt{coverage} (most observed); \texttt{variance}; \texttt{corr\_mean} (correlation with the mean score); \texttt{qr} (pivoted QR/CUR); \texttt{farthest} (farthest-first in $1-|\mathrm{corr}|$); \texttt{greedy\_ridge} (forward selection minimising the least-squares reconstruction error of all benchmarks on the imputed training matrix); \texttt{greedy\_bayes} (greedy Bayesian A-optimal design in the latent space of a factor model).
+
+\paragraph{Inference rules.} \texttt{mean} (no-information per-benchmark training mean); \texttt{rank1} (mean $z$-score of the selected benchmarks fed into a per-benchmark regression, the ``average score'' predictor); \texttt{ridge} (multi-output ridge regression with cross-validated penalty on the imputed training matrix); \texttt{knn} ($K{=}10$ nearest training models in the selected coordinates); \texttt{fa} (Gaussian factor model fitted by EM with missing data; rank and noise floor chosen by held-out-cell cross-validation on training models).
+
+\paragraph{Theory.} For $x=Lz+e$, $z\sim\mathcal N(0,I_r)$, $e\sim\mathcal N(0,\Psi)$, the Bayes predictor of benchmark $j$ from set $S$ has mean squared error $\psi_j+\ell_j^\top(I+L_S^\top\Psi_S^{-1}L_S)^{-1}\ell_j$, and for isotropic random loadings and $k\gg r$ the mean over $j$ is about $\bar\psi(1+r/k)$: a noise floor plus an $r/k$ term. Choosing $S$ is the Bayesian A-optimal design problem for the reducible part. (derivation in Appendix~\ref{app:theory}).
+
+\section{Experimental protocol}
+\label{sec:protocol}
+\paragraph{Data.} We use three public matrices at pinned versions: MTEB results (commit \texttt{6dabbcc}, 547 models $\times$ 1256 tasks, 11.1\% observed; main score $\times100$ averaged over subsets of the test split), the Open LLM Leaderboard contents table (OLB; commit \texttt{9c09a7c}; 4496 unflagged unique models $\times$ 6 benchmarks, complete) and HELM Lite v1.13.0 core scenarios (91 models $\times$ 10 scenarios, 99.9\% observed). For MTEB the main experiments use a dense core obtained by repeatedly dropping the least-covered model or task until 95\% of cells are observed (145 models $\times$ 254 tasks); a sparse variant (258 models $\times$ 386 tasks, 54\% observed) and controlled random masking of a fixed core test missingness. The three matrices differ in size and kind (embedding tasks vs.\ LLM benchmarks); we make no claim beyond them (Table~\ref{tab:data}).
+
+\paragraph{New-model split.} A random 25\% of models are test (``new'') models, the rest are training models; splits are repeated (MTEB 12, OLB 5, HELM Lite 20; seeds in \texttt{REPRODUCE.md}). Everything that learns (imputation, factor model, ridge, $k$NN, benchmark ordering) sees training models only. For a test model the first $k$ benchmarks of the ordering that the model has are run. Shifted splits hold out whole organisations (MTEB, OLB), whole families (HELM Lite) or use the latest quarter of OLB submissions as test.
+
+\paragraph{Common target set and the full-information reference (protocol B).} Our first protocol scored every other observed benchmark, so the target set depended on the selector and shrank as $k$ grew; this confounded selector comparisons (for example one selector's error rose with $k$ on OLB because the benchmark left over was harder). All results below that compare selectors or study $k$ use instead a target set fixed per split and shared by all selectors and $k$: on MTEB a random 25\% of the benchmarks per repetition (never selectable), on OLB and HELM Lite leave-one-benchmark-out, pooled over all choices. Selectors choose only among the remaining candidates. The \emph{full-information reference} gives the model all of its observed candidate benchmarks (same inference), so it is the best any $k$ can reach with that inference. All figures and tables use this protocol.
+
+\paragraph{Metrics and uncertainty.} The error is the RMSE of $z$-scores (error divided by the training standard deviation of the benchmark) pooled over target cells; raw-scale errors are in the result files. Skill is $1-(\mathrm{RMSE}/\mathrm{RMSE}_{\mathrm{mean}})^2$ against the no-information per-benchmark training mean. Intervals are 95\% percentile bootstrap intervals that resample \emph{test models} (cluster bootstrap, 1000 resamples), pooled over repeated splits; paired differences use the same resamples. They do not capture variation from the choice of training models or from the choice of target set.
+
+\section{Results}
+\label{sec:results}
+\begin{table}[t]
+\caption{The three score matrices. The evaluated core of MTEB is the dense core described in Section~\ref{sec:protocol}.}
+\label{tab:data}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/tab_data.tex}}
+\end{table}
+
+\paragraph{Structure of the data.} The matrices are dominated by one common direction but are not low-rank: on the evaluated cores the first principal component carries 62\% (MTEB), 73\% (OLB) and 63\% (HELM Lite) of the variance, the participation ratio is 2.5, 1.8 and 2.3, and on MTEB the tail is flat at about 1--2\% per component (Appendix Figure~\ref{fig:data}).
+
+
+
+\paragraph{A few benchmarks give most of the predictable signal, and a floor remains (H1).} Figure~\ref{fig:main} gives the error on the common targets. The no-information mean has $z$-RMSE about 1. The full-information reference, which uses all $\approx$190 other observed MTEB tasks, has $z$-RMSE 0.388 [0.364, 0.414] (skill 0.85); on OLB it is 0.547 [0.525, 0.568] (skill 0.70) and on HELM Lite 0.557 [0.479, 0.646] (skill 0.72). So the matrices are predictable, but a sizeable residual remains even with every other benchmark known. On MTEB, 4 randomly chosen tasks give 0.64, 16 give 0.51, 64 give 0.42 and 128 give 0.386, i.e.\ the reference is reached at $k\approx100$; with greedy-ridge selection the values are 0.56, 0.48, 0.41 and 0.40. Most of the gain comes early: 4 tasks recover skill 0.68 (greedy-ridge) against 0.85 for everything.
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{fig2_main.pdf}
+\caption{Error on the unrun benchmarks of new models vs.\ the number $k$ of benchmarks run (random model split, ridge inference, target set fixed across selectors and $k$). Dashed: no-information mean; dash-dot: full-information reference (all candidate benchmarks given, same method). Bands: 95\% cluster bootstrap over test models. Repeats: MTEB 12, OLB 5, HELM Lite 20.}
+\label{fig:main}
+\end{figure}
+
+\paragraph{How large must $k$ be (C4).} Define $k$ as sufficient when the skill is at least 90\% of the full-information skill (or, more stringently, when the error is within 10\% or 25\% of the reference error). With random selection the skill criterion needs $k=24$ of about 190 candidate tasks on MTEB (greedy-ridge: 16); the 10\% error criterion needs 64 (48) and the 25\% criterion 24 (16). On HELM Lite it needs 5 of 9 candidates (greedy-ridge: 2) and on OLB 3 of 5 (1). On the sparse MTEB matrix (54\% observed, $k\le32$) the skill criterion is met at 24 for both and the 10\% error criterion is not reached by $k=32$. Under held-out organisations the reference itself is poor (0.88 [0.61, 1.16]), the skill criterion is met at $k=24$ (random) and 12 (greedy-ridge), but the intervals are wide, so $k$ is poorly identified there (Table~\ref{tab:kneeded}). The answer to the question depends on the pool: a few benchmarks on OLB, about 10--25\% of the tasks on MTEB; these are statements about these pools, not an absolute rule.
+
+\begin{table}[t]
+\caption{Smallest $k$ reaching a criterion defined relative to the full-information reference of the same data (ref.\ column, $z$-RMSE): skill $\ge0.9$ of the reference skill, or error within 10\% or 25\% of the reference error; random / greedy = random / greedy-ridge selection with ridge inference. n.r.: not reached within $k_{\max}$, the largest $k$ run, so a larger $k$ than shown may suffice. The held-out-organisation row has a poor reference and very wide intervals, so its values are poorly identified.}
+\label{tab:kneeded}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/tab_kneeded.tex}}
+\end{table}
+
+\begin{table}[t]
+\caption{$z$-RMSE [95\% CI] at selected $k$ (ridge inference, random model split, fixed targets); the last row of each block is the full-information reference. Bold: lowest point estimate; the intervals of the three methods overlap at larger $k$, so bold is not a significance claim (Figure~\ref{fig:selection} gives paired differences).}
+\label{tab:main}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/tab_main.tex}}
+\end{table}
+
+\paragraph{Selection (H2).} Figure~\ref{fig:selection} gives paired differences to random selection with the same inference and targets. The redundancy-aware greedy methods beat random at small $k$ with a margin that shrinks: on MTEB greedy-ridge minus random is $-0.100$ [$-0.119$, $-0.083$] at $k=2$, $-0.049$ [$-0.060$, $-0.038$] at $k=8$, $-0.021$ at $k=32$, $-0.005$ [$-0.013$, $0.003$] at $k=64$ and $+0.013$ at $k=128$, where it is slightly worse. Greedy-Bayes behaves similarly up to $k=16$ and equals greedy-ridge from $k=32$. On HELM Lite greedy-ridge is 0.71, 0.59 and 0.58 at $k=1,2,3$ against 0.85, 0.76 and 0.68 for random, and on OLB 0.59 against 0.74 at $k=1$, with all methods meeting by $k=4$. Heuristics that ignore redundancy do not beat random: after $k=3$ on MTEB, pivoted QR, farthest-first, variance and coverage are worse (at $k=8$: $+0.139$, $+0.131$, $+0.054$, $+0.033$) and correlation-with-mean is about equal; they close the gap only by $k\approx64$--$128$. H2's claim that selection helps with a margin shrinking in $k$ is supported, but the margin over random is at most 0.1 in $z$-RMSE (about 15\% of the random error at $k=2$) and it vanishes within the range where the reference is approached. On the sparse matrix the ordering is the same, and greedy methods equal random from $k\approx24$. A check of the ridge penalty used inside the greedy selection (two repeats only) changed $z$-RMSE by at most 0.01--0.02 for $k\le16$. Backward elimination in the style of the MMTEB task selection (drop the benchmark that the others predict best) is worse than random at small $k$ (MTEB: $+0.23$, $+0.19$, $+0.05$ at $k=2,8,32$), and the greedy-minus-random gaps do not change when random orderings are drawn independently per test model, when duplicate task versions are merged, or when the lowest-variance tasks are removed (Appendix~\ref{app:extra}).
+
+\begin{figure}[t]
+\centering\includegraphics[width=\linewidth]{fig3_selection.pdf}
+\caption{Paired difference in $z$-RMSE to random selection (same test models, same targets, ridge inference; negative is better than random) for seven selectors; bands for the two greedy methods only. \textbf{(a)} MTEB dense core, \textbf{(b)} MTEB sparse (the realistic $258\times386$ matrix, 54\% observed), \textbf{(c)} HELM Lite, \textbf{(d)} OLB.}
+\label{fig:selection}
+\end{figure}
+
+\paragraph{Inference (H3).} Inference matters more than selection. On the MTEB greedy-ridge selection (common targets) at $k=16$ the average-score predictor (\texttt{rank1}) has error 0.66, the factor model 0.52, $k$NN 0.48 and ridge 0.476; at $k=64$ ridge is 0.41 and $k$NN 0.48. Even as full-information predictors, ridge gives 0.388, factor model 0.412, $k$NN 0.470 and \texttt{rank1} 0.649 on MTEB, but on OLB $k$NN gives 0.419 against ridge 0.547 (HELM Lite: 0.589 vs 0.557, a tie). So supervised inference beats the average-score predictor by 0.1--0.2, ridge is best on MTEB and $k$NN on OLB, and the factor model, which has the closed-form theory, is not better than ridge on any matrix. \emph{Which} inference rule is best depends on the matrix; the ridge-based curves in this paper should not be read as the best attainable on OLB.
+
+\begin{figure}[t]
+\centering\includegraphics[width=0.85\linewidth]{fig4_inference.pdf}
+\caption{Error vs.\ $k$ for five inference rules on the greedy-ridge selection (tuned for ridge, which favours ridge); stars: the same rule with all candidates (full information). Band for ridge only.}
+\label{fig:inference}
+\end{figure}
+
+\paragraph{Theory and its limits (H4).} Under $x=Lz+e$ with unit-variance columns the Bayes predictor's error is $\psi_j+\ell_j^\top(I+L_S^\top\Psi_S^{-1}L_S)^{-1}\ell_j$ (Appendix~\ref{app:theory}), and for isotropic loadings and $k\gg r$ its mean over benchmarks is about $\bar\psi(1+r/k)$. On synthetic data with known $L,\Psi$ (100 benchmarks, random selection, 10 draws) the exact formula matches simulation and $\bar\psi(1+r/k)$ matches it for $k\gtrsim1.5r$ (Appendix Figure~\ref{fig:theory}). When $L,\Psi$ are \emph{estimated} from $M=150$ or $600$ training rows, the factor-model predictor is worse than the unconditional mean for $k$ close to $r$ and reaches the oracle only for $k\gtrsim2.5r$; $M=600$ does not close the gap. This is simulation, not real-data evidence. On the real matrices the Gaussian low-rank model is a poor description: cross-validation selects the largest rank in the (widened) grid on MTEB (24) and a noise floor at the lower bound or higher, so no floor is identified, and its predicted curve (MTEB $k=24$: 0.67) overshoots the observed factor-model curve (0.51). The \emph{functional form} does describe the real curves: fitting $\mathrm{MSE}_z(k)=a(1+r_{\mathrm{eff}}/k)$ to the random-selection ridge curves for $k\ge4$ gives $R^2=0.94$ and 0.98 for MTEB and HELM Lite, with floors $\sqrt a=0.41$ and 0.51 in $z$-RMSE (the MTEB floor agrees with the measured reference, 0.388) and $r_{\mathrm{eff}}=6.3$ and 2.4 (Figure~\ref{fig:theoryreal}); OLB has only $k=1,\dots,4$, so no fit is reported there (a three-point, two-parameter fit would show nothing). Since $r_{\mathrm{eff}}$ rises to 9.7 on MTEB when only $k\ge8$ is fitted, it is a descriptive, not an identified, rank.
+
+\begin{figure}[t]
+\centering\includegraphics[width=0.85\linewidth]{fig8_theory_real.pdf}
+\caption{Observed MSE (square of $z$-RMSE) of random selection with ridge vs.\ $k$, with fits $a+b/k$ on $k\ge4$ (solid) and $k\ge8$ (dashed) and the squared full-information reference. MTEB: $a=0.17$, $r_{\mathrm{eff}}=6.3$ ($k\ge4$); $a=0.15$, $r_{\mathrm{eff}}=9.7$ ($k\ge8$); HELM Lite: $a=0.26$, $r_{\mathrm{eff}}=2.4$; OLB has only $k=1..4$, so no $k\ge4$ fit. $r_{\mathrm{eff}}=b/a$ is descriptive, not an identified rank.}
+\label{fig:theoryreal}
+\end{figure}
+
+
+
+\paragraph{Conditions (H5).} \emph{Shift.} Holding out whole organisations raises the reference error on MTEB from 0.39 to 0.88 [0.61, 1.16] and on HELM Lite (families) from 0.56 to 0.81, while the no-information mean also worsens (1.30 and 1.26) because new models are out of distribution. On OLB, held-out organisations leave the reference unchanged (0.548 vs 0.547) while the temporal split raises it to 0.614 (mean predictor 1.18). On MTEB, holding out model families or the newest 25\% of models gives reference errors of 0.91 [0.61, 1.19] and 1.05 [0.74, 1.35] (Appendix~\ref{app:extra}). So the loss is not universal: it is large for MTEB organisations, families and time and for HELM Lite families, moderate for OLB over time, absent for OLB organisations. \emph{Missingness.} With extra random masking of a fixed MTEB core, the reference rises from 0.39 to 0.42, 0.46 and 0.51 at about 88\%, 69\% and 49\% observed (skill 0.83, 0.80, 0.77), so the ridge-on-imputed-matrix pipeline degrades gracefully; the sparse realistic matrix has reference 0.394 (skill 0.86); $k$ needed for 90\% of the reference skill stays at 12--24 throughout (Table~\ref{tab:missing}, Figure~\ref{fig:ablation}a). \emph{Training-set size} (common targets, 4 repeats): the reference error is 0.51 [0.46, 0.56], 0.45 [0.40, 0.49] and 0.39 with 30, 60 and about 109 training models, so fewer training models mostly raise the floor; the advantage of greedy-ridge over random closes earlier the fewer training models there are: with 30 models it is $-0.004$ [$-0.020$, $0.013$] at $k=16$ and greedy-ridge is worse than random at $k=64$ ($+0.035$ [0.020, 0.050]); with 60 models the gain lasts to about $k=32$ ($-0.011$ [$-0.024$, $0.002$]) and the sign flips at $k=64$ ($+0.015$); with about 109 models the sign flips only at $k=128$ (Figure~\ref{fig:ablation}b).
+
+\begin{figure}[t]
+\centering\includegraphics[width=0.85\linewidth]{fig5_shift.pdf}
+\caption{Greedy-ridge + ridge under a random split (blue) and a shifted split (orange): held-out organisations (MTEB, OLB), held-out families (HELM Lite), and training on earlier OLB submissions with the latest quarter as test. Dotted: no-information mean (above 1 where the shift is real); dash-dot: full-information reference of that split. Under shift the reference itself worsens, so $k$ cannot compensate; bands are wide because few organisations or families are held out.}
+\label{fig:shift}
+\end{figure}
+
+\begin{figure}[t]
+\centering\includegraphics[width=0.85\linewidth]{fig6_conditions.pdf}
+\caption{\textbf{(a)} MTEB, random selection, ridge: a fixed $126\times238$ core with extra random masking (88\%, 69\%, 49\% observed), the $145\times254$ core (95\%) and the realistic sparse $258\times386$ matrix (54\%, a different benchmark pool, so not a controlled comparison). \textbf{(b)} Training-set size (30, 60 and 109 models; same test models and common targets; 4 repeats for 30 and 60): greedy-ridge (solid), random (dashed) and the full-information reference of each size (dash-dot; 0.507, 0.446, 0.388). Fewer training models raise the floor and the greedy advantage over random closes earlier; bands are omitted for legibility.}
+\label{fig:ablation}
+\end{figure}
+
+\section{Discussion and limitations}
+\label{sec:discussion}
+\paragraph{What we can and cannot conclude.} Scores are predictable from a few benchmarks: a handful gives most of what the full set of other benchmarks gives, and on MTEB the error reaches the full-information reference ($\approx0.39$) near $k=100$ of $\approx190$ candidates. A floor remains: even then skill is 0.85, 0.70 and 0.72 on MTEB, OLB and HELM Lite. How large $k$ must be depends on the pool and on the criterion (3 of 5 candidates on OLB, 24 of $\approx$190 on MTEB for 90\% of the reference skill) and must be re-estimated for a new pool. Inference matters at least as much as selection: ridge or $k$NN beat the average-score predictor by 0.1--0.2, whereas the best selector beats random by at most 0.1 and the advantage disappears for large $k$. The theory explains why the factor model needs $k$ above the rank, but on real data it holds only as a descriptive $a(1+r_{\mathrm{eff}}/k)$ form with an unstable $r_{\mathrm{eff}}$.
+
+\paragraph{Limitations.} (i) MTEB targets are one random 25\% draw of tasks per repetition and OLB/HELM Lite use single-benchmark targets only (no leave-two-out), so the target-set choice is not resampled. (ii) The factor-model cross-validation grid saturates at its edge even after widening (rank 24 on MTEB), so the factor model's hyperparameters are not identified. (iii) \texttt{greedy\_ridge} selects on the in-sample error of an imputed matrix; the penalty check has two repeats. (iv) The MTEB pool is heterogeneous and not stratified by task type; missingness was studied by random masking of one core and one sparse matrix. (v) The cluster bootstrap resamples test models only, not training sets, splits or targets, and repeated splits reuse the same models; reference intervals under held-out organisations are wide (few organisations). (vi) OLB has 6 and HELM Lite 10 benchmarks, so ``small $k$'' there means at most 4 (OLB) or 8 (HELM Lite) benchmarks. (vii) Training-size and family/time runs have 4--5 repeats, so their $k$ needed is noisy. (viii) $z$-RMSE is not comparable across matrices; per-model rank correlations (appendix) are low where few benchmarks exist (OLB). (ix) LiveBench, BigCodeBench and AlpacaEval were not run for lack of budget. (x) Only three matrices were used, two with very few benchmarks, and MTEB models are embedding models; nothing here concerns generative LLM suites in general.
+
+\section*{Reproducibility statement}
+All code, pinned data versions, seeds, commands, run times and the script behind each table and figure are in the repository root (\texttt{REPRODUCE.md}, \texttt{code/}, \texttt{results/}, \texttt{figures/}, \texttt{tables/}); files from the first protocol (\texttt{curves.csv}, \texttt{paired.csv}, \texttt{k\_needed.csv}) are superseded by the \texttt{ct\_} files.
+
+\section*{Ethics statement}
+The study uses only public leaderboard scores of models; there are no human subjects. The MTEB results repository is CC0-1.0; the Open LLM Leaderboard dataset card declares no licence and the HELM Lite data follow the licences of the underlying scenarios, which we did not check individually.
+
+\input{ai_use}
+
+\bibliography{main}
+\bibliographystyle{iclr2027_conference}
+
+\appendix
+\section{Derivation of the Bayes error of the factor model}
+\label{app:theory}
+Let $x=Lz+e$ with $L\in\mathbb R^{N\times r}$, $z\sim\mathcal N(0,I_r)$, $e\sim\mathcal N(0,\Psi)$, $\Psi=\mathrm{diag}(\psi_j)$, and $\|\ell_j\|^2+\psi_j=1$ (unit-variance columns), where $\ell_j^\top$ is row $j$ of $L$. Given the scores $x_S$ of the $k$ run benchmarks, $z\mid x_S$ is Gaussian with covariance $P_S=(I+L_S^\top\Psi_S^{-1}L_S)^{-1}$ and mean $P_SL_S^\top\Psi_S^{-1}x_S$. The Bayes predictor of an unrun benchmark $j$ is $\hat x_j=\ell_j^\top\mathbb E[z\mid x_S]$ and, since $e_j$ is independent of $x_S$,
+\begin{equation}
+\mathrm{MSE}_j(S)=\psi_j+\ell_j^\top P_S\,\ell_j .\label{eq:bayes}
+\end{equation}
+The first term is the noise floor and the second is reducible by the choice of $S$. Averaged over $j\notin S$ it is $\frac1{N-k}\mathrm{tr}(L_{\bar S}^\top L_{\bar S}P_S)$; minimising it over $S$ is a Bayesian A-optimal design problem, which \texttt{greedy\_bayes} solves greedily with parameters estimated on training models.
+
+\emph{Isotropic approximation.} Take all $\psi_j=\psi$ and loadings with $\mathbb E[\ell_j\ell_j^\top]=\frac{1-\psi}{r}I$. For $k\gg r$, $L_S^\top\Psi_S^{-1}L_S\approx k\frac{1-\psi}{\psi r}I$, so $P_S\approx(1+k\frac{1-\psi}{\psi r})^{-1}I$ and
+\[
+\mathrm{MSE}_j\approx\psi+\frac{(1-\psi)\,\psi r}{\psi r+k(1-\psi)}=\psi\Big(1+\frac{r}{k+\psi r/(1-\psi)}\Big)\approx\psi\Big(1+\frac rk\Big).
+\]
+Hence the error is a noise floor $\psi$ plus an $r/k$ term, and $k$ ``needed'' for a tolerance $\epsilon$ above the floor is about $r/\epsilon$ times the floor. The approximation uses concentration of $L_S^\top\Psi_S^{-1}L_S$ around its mean, which fails for $k\lesssim r$; this is why the formula matches the exact value of Eq.~(\ref{eq:bayes}) only for $k\gtrsim1.5r$ in our simulations. The estimated-parameter predictor carries additional error from the fitted $L,\Psi$ and needs $k\gtrsim2.5r$ (Appendix Figure~\ref{fig:theory}); we did not derive that.
+
+
+
+\section{Missing-data table}
+\begin{table}[h]
+\caption{Missing data (MTEB, ridge): reference error and skill for dense cores with extra random masking of a fixed $126\times238$ task set (so only missingness varies) and for the naturally sparse $258\times386$ matrix (a different benchmark pool, not a controlled comparison); last columns: $k$ needed for skill $\ge0.9$ of the reference skill, random / greedy-ridge selection.}
+\label{tab:missing}
+\centering\scriptsize
+\resizebox{\linewidth}{!}{\input{../tables/tab_missing.tex}}
+\end{table}
+
+
+\section{Data and synthetic-theory figures}
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{fig1_data.pdf}
+\caption{\textbf{(a)} Observed cells of the MTEB result matrix (547 models $\times$ 1256 tasks, 11.1\% observed), rows and columns sorted by coverage. \textbf{(b)} Share of variance of each principal component of the correlation matrix of the evaluated cores (MTEB $145\times254$, OLB $4496\times6$, HELM Lite $91\times10$; missing cells at the column mean, at most 5\%). The first component carries 62\% (MTEB), 73\% (OLB) and 63\% (HELM Lite); the MTEB tail is flat at about 1--2\% per component, not zero.}
+\label{fig:data}
+\end{figure}
+
+\begin{figure}[h]
+\centering\includegraphics[width=\linewidth]{fig7_theory.pdf}
+\caption{Synthetic factor-model data $x=Lz+e$ (100 benchmarks; \emph{simulation, not leaderboard data}), random selection, mean over 10 draws. Blue: exact Bayes-optimal MSE with true parameters; pink dotted: $\bar\psi(1+r/k)$; red: Gaussian factor model fitted on $M$ training rows (rank known).}
+\label{fig:theory}
+\end{figure}
+
+
+\section{Additional analyses}
+\label{app:extra}
+All numbers are from \texttt{results/ct\_*.csv}, \texttt{results/rank\_corr.csv} and \texttt{results/lowsd\_check.csv} (REPRODUCE.md, findings B8--B13); $z$-RMSE with ridge inference unless noted.
+
+\paragraph{Duplicate task versions.} Merging task pairs that differ only by a version suffix (254 to 251 tasks) leaves the reference at 0.383 [0.349, 0.420] (0.388 before), the $k$ needed for 90\% of the reference skill at 24 (random) and 16 (greedy-ridge), and greedy-minus-random at $-0.124$, $-0.037$, $-0.026$ for $k=2,8,32$ (5 repeats).
+
+\paragraph{Random-$k$ draws.} The \texttt{random} selector fixes one ordering per split. Drawing an independent ordering for each test model (\texttt{random\_pm}) changes the error by within $\pm0.01$ almost everywhere, with intervals covering zero (MTEB $k=2,8,32$: $-0.002$, $-0.009$, $+0.015$; OLB at most 0.007; HELM Lite at most 0.024), so the random baseline is not an unlucky ordering. These runs cover a subset of the repeats; every selector is compared on the same repeats.
+
+\paragraph{Low-variance tasks.} The 10\% of MTEB tasks with the smallest overall standard deviation hold 11\% of the target cells but carry 14--30\% of the squared $z$-error of random and greedy-ridge selection over $k=1$--128 (32\% for the full-information reference); removing them lowers $z$-RMSE by 0.01--0.04 (0.049 for the reference, 0.391 to 0.342) and leaves the ordering of selectors unchanged (greedy-ridge / random at $k=16$: 0.484 / 0.526 with them, 0.452 / 0.499 without).
+
+\paragraph{Family and time splits (MTEB).} Holding out model families (5 repeats): reference 0.913 [0.610, 1.190], no-information mean 1.45; random 1.13, 1.08, 1.02, 1.00, 0.92 and greedy-ridge 1.07, 1.05, 1.01, 0.98, 0.93 at $k=2,4,8,16,128$. Holding out the newest 25\% of models (one deterministic split of 36 test models): reference 1.047 [0.739, 1.354] against a mean predictor at 1.52. The reference is thus no better than an in-distribution no-information predictor would score, though far better than the mean on the shifted set; $k$ benchmarks recover the \emph{ranking} of new models on each benchmark (per-benchmark Spearman 0.83 with all candidates on the time split) but not their level, and $k$ needed is relative to a poor reference with very wide intervals.
+
+\paragraph{Per-model rank correlation.} Mean over test models of the Spearman correlation between predicted and true $z$-scores over the model's target benchmarks. MTEB random split: reference 0.835 [0.812, 0.847]; greedy-ridge 0.28, 0.51, 0.60, 0.74, 0.81 and random 0.22, 0.28, 0.43, 0.69, 0.81 at $k=1,2,4,16,64$. Across test models, per benchmark, the correlation is higher (reference 0.88; greedy-ridge at $k=4$ 0.79). On OLB (one target benchmark per split) the per-model value is low (reference 0.20; random at $k=1,2$ negative) because ranking a model's own benchmarks is hardly identifiable with a one-factor structure, while the per-benchmark ranking of models is about 0.8; HELM Lite: reference 0.35. So aggregate $z$-RMSE says how well the \emph{level} is predicted; recovering which benchmark a model is relatively good at needs far more benchmarks than ranking models.
+
+\paragraph{MMTEB-style selector.} Backward elimination (our approximation: no clustering, our imputed matrix, no task-type balancing; not MMTEB's released subset) minus random: $+0.23$, $+0.19$, $+0.05$ at $k=2,8,32$ on MTEB (intervals exclude zero up to $k=32$), $+0.31$, $+0.15$, $+0.06$ on sparse MTEB, $+0.11$, $+0.08$ on OLB; on HELM Lite it beats random ($-0.08$ at $k=2$) but not greedy-ridge. A possible reason, not tested, is that eliminating the best-predicted benchmark keeps the least redundant, idiosyncratic tasks.
+
+\end{document}
